@@ -1,8 +1,7 @@
 #!/bin/sh
 # Kaisola installer — curl -fsSL https://kaisola.com/install.sh | sh
-# Downloads the latest release and installs to /Applications. Terminal
-# downloads carry no quarantine flag, so the app opens without any
-# Gatekeeper dialog (the app is ad-hoc signed; notarization comes later).
+# Downloads the latest release (signed & notarized) and installs it
+# to /Applications.
 set -e
 
 [ "$(uname -s)" = "Darwin" ] || { echo "Kaisola runs on macOS only (for now)."; exit 1; }
