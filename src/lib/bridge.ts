@@ -333,6 +333,17 @@ export interface AcpConnectConfig {
   autonomy?: string
 }
 
+export interface UpdateState {
+  /** idle = up to date (or never checked); ready = downloaded, restart to apply. */
+  type: 'idle' | 'checking' | 'downloading' | 'ready' | 'error'
+  /** The version being downloaded / ready to install. */
+  version?: string | null
+  percent?: number
+  message?: string | null
+  /** The running build's version. */
+  appVersion?: string
+}
+
 export interface KaisolaBridge {
   env: 'electron' | 'web'
   smoke?: boolean
@@ -484,6 +495,15 @@ export interface KaisolaBridge {
     detachProject(payload: { tab: unknown; slice: unknown; at?: { x: number; y: number }; popped?: string[] }): Promise<{ ok: boolean }>
     /** The new window receives the torn-off project here after it boots. */
     onAdoptProject(cb: (payload: { tab: unknown; slice: unknown; popped?: string[] }) => void): () => void
+  }
+  /** In-app software updates — the GitHub releases feed via electron-updater. */
+  update?: {
+    /** Snapshot for late subscribers (the pill mounts after events may have fired). */
+    state(): Promise<UpdateState>
+    check(): Promise<{ ok: boolean; message?: string }>
+    /** Quit and relaunch into the downloaded build. */
+    install(): Promise<{ ok: boolean }>
+    onEvent(cb: (s: UpdateState) => void): () => void
   }
   /** Sync the native under-window material to the app theme. */
   setAppTheme?(theme: 'dark' | 'light' | 'system'): void

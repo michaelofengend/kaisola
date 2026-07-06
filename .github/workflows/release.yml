@@ -32,7 +32,10 @@ jobs:
       - run: cp release/Kaisola-*.dmg release/Kaisola.dmg
       - uses: softprops/action-gh-release@v2
         with:
+          # latest-mac.yml is the auto-update manifest — the installed app
+          # (electron-updater) polls it to learn a new version exists
           files: |
             release/*.dmg
             release/*.zip
+            release/latest-mac.yml
           generate_release_notes: true

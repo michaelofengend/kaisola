@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { useKaisola, GROUP_COLORS } from '../../store/store'
 import { bridge } from '../../lib/bridge'
+import { useUpdateState } from '../../lib/updates'
 import { Icon } from '../Icon'
 import { Dropdown, type DropOption } from '../Dropdown'
 import { WindowLights } from './WindowLights'
@@ -131,6 +132,7 @@ export function ProjectTabs() {
       </div>
       <NewProjectButton />
       <div className="tabstrip-fill" onDoubleClick={() => bridge.winCtl('zoom')} />
+      <UpdatePill />
 
       {/* portalled to <body> — rendered in-strip it inherits a stacking context
           that loses to the session cards' glass layers and slides behind them */}
@@ -181,6 +183,26 @@ export function ProjectTabs() {
         document.body,
       )}
     </div>
+  )
+}
+
+/**
+ * Chrome's update pill, in Chrome's spot (strip far-right): appears only once
+ * a new release is DOWNLOADED and ready — one click restarts into it. Silent
+ * while checking/downloading; Settings → General shows the live status.
+ */
+function UpdatePill() {
+  const u = useUpdateState()
+  if (u.type !== 'ready') return null
+  return (
+    <button
+      className="update-pill"
+      onClick={() => void bridge.update?.install()}
+      title={`Kaisola ${u.version} is downloaded — restart the app to apply`}
+    >
+      <Icon name="ArrowDownToLine" size={12} />
+      Restart to update
+    </button>
   )
 }
 

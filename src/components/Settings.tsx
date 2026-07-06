@@ -4,6 +4,7 @@ import { bridge, isDesktop, type AcpAgent } from '../lib/bridge'
 import type { AutonomyLevel } from '../domain/types'
 import { useAgentRegistry, openAgentSession, type RegistryAgent } from '../lib/registry'
 import { openConfigFile } from '../lib/userConfig'
+import { useUpdateState } from '../lib/updates'
 import { Icon } from './Icon'
 import { Dropdown } from './Dropdown'
 
@@ -29,7 +30,7 @@ type SectionId = (typeof SECTIONS)[number]['id']
 
 /** One quiet line under each pane title — sparse panes read as designed, not empty. */
 const SECTION_DESC: Record<SectionId, string> = {
-  general: 'How the shell looks — theme and the native glass material.',
+  general: 'How the shell looks — theme and the native glass material — and software updates.',
   terminal: 'Type in every terminal card — size, weight, and typeface.',
   agents: 'The CLIs in your + menu. Each runs with your existing install and login — Kaisola never proxies a model.',
   guardrails: 'What agents may do without you: autonomy, saved permission rules, and protected files.',
@@ -299,6 +300,7 @@ export function Settings() {
                     </div>
                   </div>
                 )}
+                {isDesktop && <UpdatesRow />}
               </>
             )}
 
@@ -568,5 +570,46 @@ export function Settings() {
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * Software updates — the running version, a manual check, and the live status
+ * of the background flow (checks on launch + every 4h, downloads silently,
+ * the tab-strip pill appears when a restart applies it).
+ */
+function UpdatesRow() {
+  const u = useUpdateState()
+  const status =
+    u.type === 'checking' ? 'Checking…'
+    : u.type === 'downloading' ? `Downloading ${u.version ?? 'update'}… ${u.percent ?? 0}%`
+    : u.type === 'ready' ? `${u.version} downloaded`
+    : u.type === 'error' ? 'Could not check for updates'
+    : 'Up to date'
+  return (
+    <>
+      <div className="settings-row">
+        <span className="settings-row-label">
+          Updates {u.appVersion && <span className="faint" style={{ fontWeight: 400 }}>· v{u.appVersion}</span>}
+        </span>
+        <div className="settings-row-control">
+          <span className="faint" title={u.type === 'error' ? u.message ?? undefined : undefined}>{status}</span>
+          {u.type === 'ready' ? (
+            <button className="btn btn-primary btn-sm" onClick={() => void bridge.update?.install()}>
+              <Icon name="ArrowDownToLine" size={12} /> Restart to update
+            </button>
+          ) : (
+            <button
+              className="btn btn-sm"
+              disabled={u.type === 'checking' || u.type === 'downloading'}
+              onClick={() => void bridge.update?.check()}
+            >
+              <Icon name="RefreshCw" size={12} /> Check for updates
+            </button>
+          )}
+        </div>
+      </div>
+      <p className="settings-note">New releases install from GitHub — Kaisola checks in the background and updates on restart.</p>
+    </>
   )
 }

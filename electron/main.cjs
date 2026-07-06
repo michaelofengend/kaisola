@@ -22,6 +22,7 @@ const { registerWorktreeHandlers } = require('./ipc/worktreeHandler.cjs')
 const { registerGitHandlers } = require('./ipc/gitHandler.cjs')
 const { registerLatexHandlers } = require('./ipc/latexHandler.cjs')
 const { registerClaudeHooksHandlers, disposeClaudeHooks } = require('./ipc/claudeHooksHandler.cjs')
+const { registerUpdateHandlers } = require('./ipc/updateHandler.cjs')
 
 const DEV_URL = process.env.KAISOLA_DEV_URL ?? process.env.PASOLA_DEV_URL // set by `npm run electron:dev`
 const isDev = !!DEV_URL
@@ -538,6 +539,7 @@ app.whenReady().then(() => {
   registerGitHandlers(ipcMain)
   registerLatexHandlers(ipcMain)
   registerClaudeHooksHandlers(ipcMain)
+  registerUpdateHandlers(ipcMain)
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

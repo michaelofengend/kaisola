@@ -298,6 +298,17 @@ const bridge = {
     tabsChanged: (list) => ipcRenderer.send('tabs:changed', list),
     setTitle: (title) => ipcRenderer.send('win:set-title', title),
   },
+  // in-app software updates (electron-updater ↔ the GitHub releases feed)
+  update: {
+    state: () => ipcRenderer.invoke('update:state'),
+    check: () => ipcRenderer.invoke('update:check'),
+    install: () => ipcRenderer.invoke('update:install'),
+    onEvent: (cb) => {
+      const listener = (_e, payload) => cb(payload)
+      ipcRenderer.on('update:event', listener)
+      return () => ipcRenderer.removeListener('update:event', listener)
+    },
+  },
   // keep the native under-window material in the app's theme, not the system's
   setAppTheme: (theme) => ipcRenderer.send('shell:app-theme', theme),
   onThemeChanged: (cb) => {

@@ -23,6 +23,7 @@ const { registerDbHandlers } = require('./ipc/dbHandler.cjs')
 const { registerCodexHandlers } = require('./ipc/codexHandler.cjs')
 const { registerGitHandlers } = require('./ipc/gitHandler.cjs')
 const { registerClaudeHooksHandlers } = require('./ipc/claudeHooksHandler.cjs')
+const { registerUpdateHandlers } = require('./ipc/updateHandler.cjs')
 const worktree = require('./ipc/worktreeHandler.cjs')
 
 process.env.KAISOLA_SMOKE = '1'
@@ -40,7 +41,7 @@ app.whenReady().then(async () => {
   registerTerminalHandlers(ipcMain); registerAcpHandlers(ipcMain); registerAuthHandlers(ipcMain)
   registerFsHandlers(ipcMain); registerGrobidHandlers(ipcMain); registerSandboxHandlers(ipcMain)
   registerDbHandlers(ipcMain); registerCodexHandlers(ipcMain); worktree.registerWorktreeHandlers(ipcMain)
-  registerGitHandlers(ipcMain); registerClaudeHooksHandlers(ipcMain)
+  registerGitHandlers(ipcMain); registerClaudeHooksHandlers(ipcMain); registerUpdateHandlers(ipcMain)
   ipcMain.handle('shell:glass', () => ({ supported: false, active: false, enabled: false }))
 
   const win = new BrowserWindow({

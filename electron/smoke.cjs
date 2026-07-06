@@ -17,6 +17,7 @@ const { registerCodexHandlers } = require('./ipc/codexHandler.cjs')
 const { registerGitHandlers } = require('./ipc/gitHandler.cjs')
 const { registerLatexHandlers } = require('./ipc/latexHandler.cjs')
 const { registerClaudeHooksHandlers } = require('./ipc/claudeHooksHandler.cjs')
+const { registerUpdateHandlers } = require('./ipc/updateHandler.cjs')
 const worktree = require('./ipc/worktreeHandler.cjs')
 
 process.env.KAISOLA_SMOKE = '1' // never auto-open a real browser during the test
@@ -68,6 +69,7 @@ app.whenReady().then(async () => {
   registerGitHandlers(ipcMain)
   registerLatexHandlers(ipcMain)
   registerClaudeHooksHandlers(ipcMain)
+  registerUpdateHandlers(ipcMain)
   // Liquid Glass prefs are cosmetic; the smoke shell answers with "unsupported"
   ipcMain.handle('shell:glass', () => ({ supported: false, active: false, enabled: false }))
   worktree.registerWorktreeHandlers(ipcMain)
