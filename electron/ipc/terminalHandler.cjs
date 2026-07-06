@@ -24,12 +24,20 @@ function execOut(cmd, args) {
   })
 }
 
-async function cwdOfPid(pid) {
+/** cwd per pid for MANY pids in ONE lsof call — lsof enumerates fd tables and
+ *  is the priciest thing this poller does; one process per tick beats one per pty. */
+async function cwdOfPids(pids) {
+  const map = new Map()
+  if (!pids.length) return map
   // macOS has no /proc; lsof's cwd descriptor is the portable answer
-  const out = await execOut('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'])
-  if (!out) return null
-  const line = out.split('\n').find((l) => l.startsWith('n'))
-  return line ? line.slice(1) : null
+  const out = await execOut('lsof', ['-a', '-p', pids.join(','), '-d', 'cwd', '-Fpn'])
+  if (!out) return map
+  let pid = null
+  for (const line of out.split('\n')) {
+    if (line.startsWith('p')) pid = Number(line.slice(1))
+    else if (line.startsWith('n') && pid != null) map.set(pid, line.slice(1))
+  }
+  return map
 }
 
 async function gitInfo(cwd) {
@@ -48,10 +56,18 @@ async function pollMeta() {
   for (const id of Array.from(metaCache.keys())) {
     if (!live.some((t) => t.id === id)) metaCache.delete(id)
   }
+  // only shells sitting at a prompt can `cd` — while a program (an agent, vim,
+  // a build) holds the foreground the cwd is frozen, so skip lsof for it.
+  // Unknown cwd (fresh pty) is always resolved once.
+  const pollable = live.filter((t) => {
+    const prev = metaCache.get(t.id)
+    return !prev?.cwd || SHELLS.has(path.basename(t.process || ''))
+  })
+  const cwds = await cwdOfPids(pollable.map((t) => t.pid))
   for (const t of live) {
     const prev = metaCache.get(t.id) || {}
     const next = { ...prev, process: t.process }
-    const cwd = await cwdOfPid(t.pid)
+    const cwd = cwds.get(t.pid)
     if (cwd) next.cwd = cwd
     if (next.cwd && next.cwd !== prev.cwd) {
       const git = await gitInfo(next.cwd)

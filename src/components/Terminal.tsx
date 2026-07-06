@@ -49,7 +49,16 @@ const LIGHT_THEME: ITheme = {
   white: '#3b3f48',
   brightWhite: '#16181d',
 }
-const xtermTheme = (theme: 'dark' | 'light') => (theme === 'light' ? LIGHT_THEME : DARK_THEME)
+// energy saver trades the glass look for an opaque backbuffer (transparent
+// WebGL surfaces force an extra compose pass per frame) — solid --term-bg hex
+const xtermTheme = (theme: 'dark' | 'light', eco: boolean) => {
+  const t = theme === 'light' ? LIGHT_THEME : DARK_THEME
+  return eco ? { ...t, background: theme === 'light' ? '#e9ebef' : '#0b0d11' } : t
+}
+
+/** Output kept for a HIDDEN terminal until its card is shown again (≫ the
+ * 5000-line scrollback for typical lines — nothing the user could see is lost). */
+const HIDDEN_BUF_CAP = 4_000_000
 
 /** The user's chosen face first, honest fallbacks behind it. 'ui-monospace'
  * is the "SF Mono (system)" choice — the name itself, unquoted. */
@@ -78,12 +87,21 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
   const [, setPromptTick] = useState(0)
   const [railHover, setRailHover] = useState<{ n: number; y: number } | null>(null)
   const theme = useKaisola((s) => s.theme)
+  const ecoMode = useKaisola((s) => s.ecoMode)
   const termFontSize = useKaisola((s) => s.termFontSize)
   const termFontFamily = useKaisola((s) => s.termFontFamily)
   const termFontWeight = useKaisola((s) => s.termFontWeight)
   const setTermFontSize = useKaisola((s) => s.setTermFontSize)
+  // put-away cards keep their pty but must not keep painting: output buffers
+  // here and replays when the card is shown (pop-out windows are always shown)
+  const visible = useKaisola((s) => !!POP_TERMINAL_ID || (s.dockOpen && s.dockViews.includes(id)))
+  const visibleRef = useRef(visible)
+  visibleRef.current = visible
+  const pendingRef = useRef<{ chunks: string[]; bytes: number }>({ chunks: [], bytes: 0 })
   const themeRef = useRef(theme)
   themeRef.current = theme
+  const ecoRef = useRef(ecoMode)
+  ecoRef.current = ecoMode
   const fontSizeRef = useRef(termFontSize)
   fontSizeRef.current = termFontSize
   const fontFamilyRef = useRef(termFontFamily)
@@ -96,10 +114,30 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
   const [ptyReady, setPtyReady] = useState(false)
   const bootSentRef = useRef(false)
 
-  // keep the live terminal's palette in sync with the app theme
+  // keep the live terminal's palette in sync with the app theme + energy saver
   useEffect(() => {
-    if (termRef.current) termRef.current.options.theme = xtermTheme(theme)
-  }, [theme])
+    const term = termRef.current
+    if (!term) return
+    try {
+      term.options.allowTransparency = !ecoMode
+      term.options.theme = xtermTheme(theme, ecoMode)
+    } catch { /* renderer mid-rebuild */ }
+  }, [theme, ecoMode])
+
+  // a card being put away / brought back: replay buffered output, and stop the
+  // cursor-blink render loop while nobody can see it
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    try { term.options.cursorBlink = visible && !attach } catch { /* mid-teardown */ }
+    if (!visible) return
+    const p = pendingRef.current
+    if (!p.chunks.length) return
+    const chunk = p.chunks.join('')
+    p.chunks = []
+    p.bytes = 0
+    term.write(chunk)
+  }, [visible, attach])
 
   // font settings (Settings → Terminal, plus ⌘+/⌘−/⌘0) apply LIVE to every
   // terminal — the renderer rebuilds its glyph atlas and the pty re-fits
@@ -130,11 +168,13 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
       lineHeight: 1.0,
       cursorBlink: !attach,
       allowProposedApi: true,
-      allowTransparency: true, // the glass shell shows through the pane tint
+      // the glass shell shows through the pane tint — unless energy saver
+      // trades the see-through backbuffer for a cheaper opaque one
+      allowTransparency: !ecoRef.current,
       scrollback: 5000,
       // lift low-contrast ANSI colors (dim grays on glass) to a readable floor
       minimumContrastRatio: 3,
-      theme: xtermTheme(themeRef.current),
+      theme: xtermTheme(themeRef.current, ecoRef.current),
     })
     termRef.current = term
     const fit = new FitAddon()
@@ -193,10 +233,18 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
     // the Enter key on a non-empty typed line. ⌘↑/⌘↓ jump between marks;
     // each mark draws a hairline separator (red-tinted when the command failed).
     // programs announce themselves (vim, ssh, claude…) via OSC 0/2 titles —
-    // adopt them as the session's live identity instead of guessing
+    // adopt them as the session's live identity instead of guessing. Agent
+    // TUIs re-title at spinner rate, so writes trail-throttle to ~3/s.
+    let titleTimer: ReturnType<typeof setTimeout> | null = null
+    let latestTitle = ''
     term.onTitleChange((title) => {
-      const t = title.trim()
-      useKaisola.getState().setTerminalMeta(id, { oscTitle: t ? t.slice(0, 60) : null })
+      latestTitle = title.trim()
+      if (titleTimer) return
+      titleTimer = setTimeout(() => {
+        titleTimer = null
+        if (disposed) return
+        useKaisola.getState().setTerminalMeta(id, { oscTitle: latestTitle ? latestTitle.slice(0, 60) : null })
+      }, 300)
     })
 
     // the Claude session's prompt TIMELINE: each hook prompt event pins a
@@ -326,7 +374,19 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
 
     const wire = () => {
       unsubData = bridge.terminal.onData(id, (data) => {
-        term.write(data)
+        // hidden cards don't paint: buffer (capped) and replay on show —
+        // parse + GPU render for a card nobody can see is pure battery drain
+        if (visibleRef.current) {
+          term.write(data)
+        } else {
+          const p = pendingRef.current
+          p.chunks.push(data)
+          p.bytes += data.length
+          while (p.bytes > HIDDEN_BUF_CAP && p.chunks.length > 1) {
+            p.bytes -= p.chunks[0].length
+            p.chunks.shift()
+          }
+        }
         scanPorts(data)
       })
       unsubExit = bridge.terminal.onExit(id, () => {})
@@ -379,6 +439,7 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
 
     return () => {
       disposed = true
+      if (titleTimer) clearTimeout(titleTimer)
       window.removeEventListener('resize', onWinResize)
       host.removeEventListener('click', focus)
       ro.disconnect()
@@ -386,6 +447,7 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
       unsubExit()
       offPrompts()
       promptMarksRef.current = []
+      pendingRef.current = { chunks: [], bytes: 0 }
       dropWebgl() // must go before term.dispose() — see note above
       try {
         term.dispose()

@@ -451,7 +451,7 @@ const GLOBAL_KEYS = [
   'theme', 'themeMode', 'layoutMode', 'agentModels', 'fileTextZoom', 'termFontSize', 'termFontFamily',
   'termFontWeight', 'customAgents', 'enabledAgents', 'sessionTemplates', 'claudeModel', 'reasoningProvider',
   'localBaseUrl', 'localModel', 'openaiBaseUrl', 'openaiModel', 'openAlexMailto', 'grobidEndpoint',
-  'sandboxMode', 'workflows', 'automationsEnabled',
+  'sandboxMode', 'workflows', 'automationsEnabled', 'ecoMode',
   'permissionRules', 'sensitiveGlobs', 'latexMain', 'unsavedBuffers',
 ] as const
 
@@ -599,6 +599,8 @@ interface KaisolaState {
   /** Text zoom inside the Files viewer, driven by pinch gestures. */
   fileTextZoom: number
   /** Terminal font size (⌘+/⌘−/⌘0, persisted; applies to every terminal). */
+  /** Energy saver: solid surfaces, still status dots, opaque terminals. */
+  ecoMode: boolean
   termFontSize: number
   /** Terminal typeface — a curated mono list in Settings (persisted). */
   termFontFamily: string
@@ -775,6 +777,7 @@ interface KaisolaState {
   setFileDirty: (dirty: boolean) => void
   setFileSession: (tabs: FileSessionTab[], activePath: string | null) => void
   setFileTextZoom: (zoom: number) => void
+  setEcoMode: (on: boolean) => void
   setTermFontSize: (size: number | null) => void
   setTermFontFamily: (family: string) => void
   setTermFontWeight: (weight: number) => void
@@ -1488,6 +1491,7 @@ export const useKaisola = create<KaisolaState>()(
   fileDirty: false,
   fileTabs: [],
   fileTextZoom: 1,
+  ecoMode: false,
   termFontSize: 12,
   termFontFamily: 'JetBrains Mono',
   termFontWeight: 500,
@@ -1757,7 +1761,19 @@ export const useKaisola = create<KaisolaState>()(
       }
     }),
   setTerminalMeta: (id, patch) =>
-    set((s) => ({ terminalMeta: { ...s.terminalMeta, [id]: { ...s.terminalMeta[id], ...patch } } })),
+    set((s) => {
+      // bail on no-ops: this fires on every OSC title / meta tick, and a
+      // pointless set() re-renders every session surface (rail, tabs, cards)
+      const cur = s.terminalMeta[id] as Record<string, unknown> | undefined
+      const same =
+        cur &&
+        Object.entries(patch).every(([k, v]) => {
+          const c = cur[k]
+          return Array.isArray(v) ? Array.isArray(c) && v.join() === c.join() : c === v
+        })
+      if (same) return s
+      return { terminalMeta: { ...s.terminalMeta, [id]: { ...s.terminalMeta[id], ...patch } } }
+    }),
   // send a terminal card to its own window; the card leaves this window's grid
   // (one pty stream has ONE renderer at a time) and returns on pop close
   popOutTerminal: (id, title, hue) => {
@@ -2252,6 +2268,10 @@ export const useKaisola = create<KaisolaState>()(
   setFileSession: (tabs, activePath) => set({ fileTabs: tabs, openFilePath: activePath }),
   setFileTextZoom: (zoom) => set({ fileTextZoom: Math.min(2.4, Math.max(0.72, Number(zoom.toFixed(3)))) }),
   // null = reset to the default (⌘0)
+  setEcoMode: (on) => {
+    document.documentElement.dataset.perf = on ? 'eco' : 'glass'
+    set({ ecoMode: on })
+  },
   setTermFontSize: (size) => set({ termFontSize: size == null ? 12 : Math.min(18, Math.max(9, Math.round(size))) }),
   setTermFontFamily: (family) => set({ termFontFamily: family || 'JetBrains Mono' }),
   setTermFontWeight: (weight) => set({ termFontWeight: [400, 500, 700].includes(weight) ? weight : 500 }),
@@ -3774,6 +3794,7 @@ export const useKaisola = create<KaisolaState>()(
           sandboxMode: s.sandboxMode,
           workflows: s.workflows,
           automationsEnabled: s.automationsEnabled,
+          ecoMode: s.ecoMode,
           // TABS
           projectTabs: s.projectTabs,
           activeProjectId: s.activeProjectId,

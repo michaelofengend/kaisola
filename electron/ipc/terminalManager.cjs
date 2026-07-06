@@ -14,6 +14,11 @@ try {
 }
 
 const OUTPUT_CAP = 1_000_000 // keep up to ~1MB of output per terminal
+// Coalesce pty output into ~one IPC frame per FLUSH_MS: agent TUIs emit
+// hundreds of tiny chunks a second (spinner frames, cursor moves), and one
+// renderer wake-up per chunk is what makes an idle-looking app burn CPU.
+const FLUSH_MS = 8
+const FLUSH_CAP = 65_536 // a burst bigger than this flushes immediately
 
 /** id → record */
 const terms = new Map()
@@ -90,20 +95,36 @@ function spawn({ id, command, args, cwd, env, cols, rows, sender }) {
     pty: p,
     sender,
     output: '',
+    pending: '', // coalesced-but-unsent output (already part of `output`)
+    flushTimer: null,
     truncated: false,
     exited: false,
     exitStatus: null, // { exitCode, signal }
     waiters: [],
   }
+  const flushPending = () => {
+    if (rec.flushTimer) {
+      clearTimeout(rec.flushTimer)
+      rec.flushTimer = null
+    }
+    if (!rec.pending) return
+    const chunk = rec.pending
+    rec.pending = ''
+    send(rec.sender, `terminal:data:${id}`, chunk)
+  }
+  rec.flushPending = flushPending
   p.onData((data) => {
     rec.output += data
     if (rec.output.length > OUTPUT_CAP) {
       rec.output = rec.output.slice(-OUTPUT_CAP)
       rec.truncated = true
     }
-    send(rec.sender, `terminal:data:${id}`, data)
+    rec.pending += data
+    if (rec.pending.length >= FLUSH_CAP) flushPending()
+    else if (!rec.flushTimer) rec.flushTimer = setTimeout(flushPending, FLUSH_MS)
   })
   p.onExit(({ exitCode, signal }) => {
+    flushPending() // the tail of the stream must land before the exit signal
     rec.exited = true
     rec.exitStatus = { exitCode: exitCode ?? 0, signal: signal ?? null }
     send(rec.sender, `terminal:exit:${id}`, rec.exitStatus.exitCode)
@@ -143,7 +164,15 @@ function resize(id, cols, rows) {
 /** Re-bind a record's output stream to a (possibly new) renderer webContents. */
 function setSender(id, sender) {
   const r = terms.get(id)
-  if (r) r.sender = sender
+  if (!r) return
+  // drop unflushed bytes: they are already in r.output, and the (re)attaching
+  // renderer replays the snapshot — flushing them too would double-print
+  if (r.flushTimer) {
+    clearTimeout(r.flushTimer)
+    r.flushTimer = null
+  }
+  r.pending = ''
+  r.sender = sender
 }
 
 function snapshot(id) {
@@ -172,12 +201,15 @@ function kill(id) {
 }
 
 function release(id) {
+  const r = terms.get(id)
+  if (r?.flushTimer) clearTimeout(r.flushTimer)
   kill(id)
   terms.delete(id)
 }
 
 function killAll() {
   for (const r of terms.values()) {
+    if (r.flushTimer) clearTimeout(r.flushTimer)
     try {
       r.pty.kill()
     } catch {
