@@ -126,7 +126,8 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
       // glyphs read thin — 500 restores the fullness DOM text gets for free
       fontWeight: fontWeightRef.current as 400 | 500 | 700,
       fontWeightBold: 700,
-      lineHeight: 1.32,
+      // 1.0 = the font's natural cell height, matching Terminal.app/iTerm density
+      lineHeight: 1.0,
       cursorBlink: !attach,
       allowProposedApi: true,
       allowTransparency: true, // the glass shell shows through the pane tint
