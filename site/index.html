@@ -237,6 +237,8 @@
   /* ── download ── */
   .dl { text-align: center; border-top: 1px solid var(--border-faint); }
   .dl .btn { font-size: 16px; padding: 13px 26px; border-radius: 12px; }
+  .dl-or { margin: 22px 0 0; font-size: 14px; color: var(--ink-2); }
+  .dl .term { display: inline-block; text-align: left; margin-top: 10px; user-select: all; -webkit-user-select: all; }
   .fineprint { margin-top: 18px; font-size: 13px; color: var(--ink-3); }
   .fineprint code { font-family: var(--font-mono); background: var(--keycap-bg); border: 1px solid var(--keycap-edge); border-radius: 5px; padding: 1px 6px; }
 
@@ -398,9 +400,11 @@
       <p>Free and open-source. Bring your own agent CLIs — Kaisola never sees your keys.</p>
     </div>
     <a class="btn" href="https://github.com/michaelofengend/kaisola/releases/latest/download/Kaisola.dmg">Download Kaisola.dmg</a>
+    <div class="dl-or">or skip the Gatekeeper dialog — install from the terminal:</div>
+    <div class="term"><span class="p">❯</span> curl -fsSL https://kaisola.com/install.sh | sh</div>
     <p class="fineprint">
-      macOS 13+ · Apple Silicon · not yet notarized — first launch: right-click → Open,
-      or <code>xattr -cr /Applications/Kaisola.app</code> ·
+      macOS 13+ · Apple Silicon · the .dmg isn't notarized yet — first launch:
+      System Settings → Privacy &amp; Security → Open Anyway ·
       <a href="https://github.com/michaelofengend/kaisola/releases" rel="noopener">all releases</a>
     </p>
   </div>

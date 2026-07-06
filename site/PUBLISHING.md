@@ -22,6 +22,9 @@ Keep `assets/hero-*.jpg` under ~250 KB each, and update `og:image` in
 
 ## Later
 
+- Notarize the app (Developer ID + Apple Developer Program) so browser
+  downloads open without the Gatekeeper dialog; then simplify `install.sh`
+  and the download fineprint.
 - Replace the GitHub release link with a versioned `download.kaisola.com` redirect.
 - Add a changelog page fed from GitHub releases.
 - Regenerate screenshots after the project-tabs feature lands (the tab strip is

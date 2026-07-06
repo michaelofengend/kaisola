@@ -33,7 +33,11 @@ Keys: `⌘L` talk to any agent · `⌘K` palette · `⌘J` terminals · `⌘,` s
 
 ## Download
 
-[**Download Kaisola.dmg**](https://github.com/michaelofengend/kaisola/releases/latest/download/Kaisola.dmg) (macOS 13+, Apple Silicon — [all releases](https://github.com/michaelofengend/kaisola/releases)) and drag Kaisola to Applications. Not notarized yet — first launch: right-click → Open, or `xattr -cr /Applications/Kaisola.app`.
+[**Download Kaisola.dmg**](https://github.com/michaelofengend/kaisola/releases/latest/download/Kaisola.dmg) (macOS 13+, Apple Silicon — [all releases](https://github.com/michaelofengend/kaisola/releases)) and drag Kaisola to Applications. Not notarized yet, so first launch needs System Settings → Privacy & Security → **Open Anyway** — or skip the dialog entirely and install from the terminal:
+
+```sh
+curl -fsSL https://kaisola.com/install.sh | sh
+```
 
 ## Run from source
 
