@@ -20,9 +20,14 @@ jobs:
       # electron-builder must not try to publish on its own (it has no token)
       - run: npm run dist -- --publish never
         env:
-          # unsigned build (identity: null in package.json); Gatekeeper
-          # instructions live in the README
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          # Developer ID signing + notarization. If the secrets are unset,
+          # electron-builder falls back to skipping both (adhoc-sign.cjs then
+          # covers the signature) — the build still succeeds.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       # stable-named copy so the site can link releases/latest/download/Kaisola.dmg
       - run: cp release/Kaisola-*.dmg release/Kaisola.dmg
       - uses: softprops/action-gh-release@v2

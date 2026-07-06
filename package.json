@@ -60,7 +60,6 @@
       ],
       "icon": "electron/assets/kaisola-icon.icns",
       "category": "public.app-category.developer-tools",
-      "identity": null,
       "fileAssociations": [
         {
           "ext": [
