@@ -484,14 +484,13 @@ export default function App() {
       // or deleted workspace would spawn the agent in the wrong tree / $HOME)
       const exists = await bridge.fs.list(workspacePath)
       if (!exists.ok) return
-      // resume the workspace's last conversation — only when its transcript
-      // still exists on disk (a pruned session id must never boot into an error)
+      // resume the workspace's last conversation: the tracked session id when
+      // its transcript still exists (exact chat), else --continue when the
+      // folder has ANY transcript (covers chats started outside Kaisola); a
+      // workspace with no history boots plain.
       const sid = useKaisola.getState().claudeSessions[workspacePath]
-      let resume: string | null = null
-      if (sid) {
-        const r = await bridge.claude.sessionExists?.(workspacePath, sid)
-        if (r?.exists) resume = sid
-      }
+      const sessions = await bridge.claude.sessionExists?.(workspacePath, sid ?? '')
+      const resumeArg = sid && sessions?.exists ? `--resume ${shq(sid)}` : sessions?.any ? '--continue' : ''
       // a fast switch may have moved on while we probed the folder
       const before = useKaisola.getState()
       if (before.activeProjectId !== activeProjectId || before.workspacePath !== workspacePath) return
@@ -514,7 +513,7 @@ export default function App() {
       const hooksPath = bridge.claude.settingsPath
       const boot = [
         hooksPath ? `claude --settings ${shq(hooksPath)}` : 'claude',
-        resume ? `--resume ${shq(resume)}` : '',
+        resumeArg,
       ].filter(Boolean).join(' ')
       requestTerminal(boot, {
         cwd: workspacePath,

@@ -153,8 +153,9 @@ app.whenReady().then(async () => {
     // the boot line is prepared asynchronously (hooks tap arms first)
     await new Promise((r) => setTimeout(r, 600))
     const t = window.__kaisola.getState().terminals.find((term) => term.singletonKey === 'agent:claude-code')
-    // boot = plain \`claude\` or \`claude --settings '<hooks file>'\` when the tap armed
-    const bootOk = !!t && typeof t.boot === 'string' && /^claude( --settings .+)?$/.test(t.boot)
+    // boot = \`claude\`, plus \`--settings '<hooks file>'\` when the tap armed,
+    // plus \`--resume <sid>\` / \`--continue\` when the workspace has history
+    const bootOk = !!t && typeof t.boot === 'string' && /^claude( --settings '[^']+')?( --resume '[^']+'| --continue)?$/.test(t.boot)
     return !!(!before && t && bootOk && t.restart === true && t.name === 'Claude' && t.cwd === ${JSON.stringify(claudeRoot)})
   })()`)
   const nativeWindow = {
@@ -548,7 +549,7 @@ app.whenReady().then(async () => {
     st.setTheme('dark')
     st.setAgentPreset('opencode')
     st.updateAssistantRuntime(st.activeThreadId, () => ({ first: false, turns: [{ kind: 'user', text: 'persisted chat turn', at: 1 }] }))
-    await new Promise((r) => setTimeout(r, 150)) // let the async db.set flush
+    await new Promise((r) => setTimeout(r, 1000)) // outlast the write-throttled persist (800ms) + async db.set
     const raw = window.kaisola.db.getSync('kaisola-store')
     const kind = await window.kaisola.db.kind()
     return {
@@ -908,7 +909,7 @@ a^2 + b^2 = c^2
     await window.kaisola.fs.write(${JSON.stringify(path.join(fileUiRoot, 'delta-watch.md'))}, '# delta\\n')
     await new Promise((r) => setTimeout(r, 800))
     const railSawDelta = [...document.querySelectorAll('.wsrail .fx-row')].some((row) => (row.textContent || '').includes('delta-watch.md'))
-    await new Promise((r) => setTimeout(r, 180))
+    await new Promise((r) => setTimeout(r, 1000)) // outlast the write-throttled persist (800ms)
     const finalZoom = window.__kaisola.getState().fileTextZoom
     const raw = window.kaisola.db.getSync('kaisola-store') || ''
     return {

@@ -148,17 +148,23 @@ function registerClaudeHooksHandlers(ipcMain) {
   // Does a Claude Code session transcript still exist for this workspace?
   // Claude stores sessions at ~/.claude/projects/<cwd with non-alnum → '-'>/
   // <session-id>.jsonl — the renderer asks before booting `claude --resume`,
-  // so a pruned/stale id never boots into an error message.
+  // so a pruned/stale id never boots into an error message. `any` reports
+  // whether the workspace has ANY transcript at all: with no tracked id the
+  // boot falls back to `claude --continue` (most recent conversation in that
+  // directory — covers sessions started outside Kaisola too).
   ipcMain.handle('claude:session-exists', (_e, { cwd, sessionId } = {}) => {
-    if (typeof cwd !== 'string' || !cwd || typeof sessionId !== 'string' || !/^[a-zA-Z0-9-]+$/.test(sessionId)) {
-      return { ok: false, exists: false }
-    }
+    if (typeof cwd !== 'string' || !cwd) return { ok: false, exists: false, any: false }
     try {
       const os = require('node:os')
       const dir = path.join(os.homedir(), '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
-      return { ok: true, exists: fs.existsSync(path.join(dir, `${sessionId}.jsonl`)) }
+      const any = fs.existsSync(dir) && fs.readdirSync(dir).some((f) => f.endsWith('.jsonl'))
+      const exists =
+        typeof sessionId === 'string' && /^[a-zA-Z0-9-]+$/.test(sessionId)
+          ? fs.existsSync(path.join(dir, `${sessionId}.jsonl`))
+          : false
+      return { ok: true, exists, any }
     } catch {
-      return { ok: false, exists: false }
+      return { ok: false, exists: false, any: false }
     }
   })
 }

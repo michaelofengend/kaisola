@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { persist, createJSONStorage } from 'zustand/middleware'
+import { persist, type PersistStorage } from 'zustand/middleware'
 import type {
   Project,
   TrajectoryStage,
@@ -1085,35 +1085,71 @@ const pick = <K extends keyof KaisolaState>(s: KaisolaState, keys: readonly K[])
 const systemTheme = (): Theme =>
   typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 
+// Persistence is WRITE-THROTTLED at the serialization step: zustand calls
+// setItem on EVERY set(), and JSON.stringify of the whole store (all project
+// slices + chat runtimes) was a per-update main-thread tax — the largest
+// remaining hitch on tab switches. setItem now parks the latest snapshot
+// REFERENCE (free — state objects are immutable) and stringifies + writes at
+// most once per PERSIST_MS; pagehide flushes synchronously so quitting never
+// loses state. The blob format on disk is unchanged ({ state, version }).
+const PERSIST_MS = 800
 let lastPersist: { name: string; value: string } | null = null
+let pendingPersist: { name: string; value: unknown } | null = null
+let persistTimer: number | null = null
+const flushPersist = () => {
+  if (persistTimer != null) {
+    window.clearTimeout(persistTimer)
+    persistTimer = null
+  }
+  if (!pendingPersist) return
+  const { name, value } = pendingPersist
+  pendingPersist = null
+  const json = JSON.stringify(value)
+  lastPersist = { name, value: json }
+  if (isDesktop) void bridge.db.set(name, json).catch(() => {})
+  else localStorage.setItem(name, json)
+}
 const kaisolaStorage = {
-  getItem: (name: string): string | null => {
+  getItem: (name: string) => {
     if (ADOPT_BOOT) return null // fresh boot for adoption — never rehydrate
     const legacies = LEGACY_STORE_KEYS(name)
-    if (isDesktop) {
-      return bridge.db.getSync(name)
+    const raw = isDesktop
+      ? bridge.db.getSync(name)
         ?? legacies.reduce<string | null>((hit, k) => hit ?? bridge.db.getSync(k), null)
         ?? localStorage.getItem(name)
         ?? legacies.reduce<string | null>((hit, k) => hit ?? localStorage.getItem(k), null)
+      : localStorage.getItem(name) ?? legacies.reduce<string | null>((hit, k) => hit ?? localStorage.getItem(k), null)
+    if (!raw) return null
+    try {
+      return JSON.parse(raw) as { state: unknown; version?: number }
+    } catch {
+      return null
     }
-    return localStorage.getItem(name) ?? legacies.reduce<string | null>((hit, k) => hit ?? localStorage.getItem(k), null)
   },
-  setItem: (name: string, value: string): void => {
+  setItem: (name: string, value: unknown): void => {
     if (POP_TERMINAL_ID) return // pop windows are read-only viewers of the store
-    lastPersist = { name, value }
-    if (isDesktop) void bridge.db.set(name, value).catch(() => {})
-    else localStorage.setItem(name, value)
+    pendingPersist = { name, value }
+    if (persistTimer == null) persistTimer = window.setTimeout(flushPersist, PERSIST_MS)
   },
   removeItem: (name: string): void => {
     if (POP_TERMINAL_ID) return
     lastPersist = null
+    pendingPersist = null
     if (isDesktop) void bridge.db.del(name).catch(() => {})
     else localStorage.removeItem(name)
   },
 }
-if (isDesktop && typeof window !== 'undefined' && !POP_TERMINAL_ID) {
+if (typeof window !== 'undefined' && !POP_TERMINAL_ID) {
   window.addEventListener('pagehide', () => {
-    if (lastPersist) bridge.db.setSync(lastPersist.name, lastPersist.value)
+    if (pendingPersist) {
+      const { name, value } = pendingPersist
+      pendingPersist = null
+      const json = JSON.stringify(value)
+      if (isDesktop) bridge.db.setSync(name, json)
+      else localStorage.setItem(name, json)
+    } else if (isDesktop && lastPersist) {
+      bridge.db.setSync(lastPersist.name, lastPersist.value)
+    }
   })
 }
 
@@ -3790,7 +3826,9 @@ export const useKaisola = create<KaisolaState>()(
       // durable main-process store (SQLite, JSON-file fallback) on desktop;
       // localStorage on the web. getItem stays SYNC so rehydration has no flash,
       // and falls back to any existing localStorage blob (one-time migration).
-      storage: createJSONStorage(() => kaisolaStorage),
+      // RAW PersistStorage (no createJSONStorage): serialization is throttled
+      // inside kaisolaStorage — see the PERSIST_MS note above it.
+      storage: kaisolaStorage as PersistStorage<unknown>,
       // fold every slice (background + the active one, taken from the live flat
       // fields) into a uniform map, alongside the GLOBAL keys and the tabs meta.
       partialize: (s) => {
@@ -3826,6 +3864,8 @@ export const useKaisola = create<KaisolaState>()(
           workflows: s.workflows,
           automationsEnabled: s.automationsEnabled,
           ecoMode: s.ecoMode,
+          railWidth: s.railWidth,
+          claudeSessions: s.claudeSessions,
           // TABS
           projectTabs: s.projectTabs,
           activeProjectId: s.activeProjectId,

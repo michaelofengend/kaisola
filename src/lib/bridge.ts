@@ -376,8 +376,9 @@ export interface KaisolaBridge {
     armHooks(): Promise<{ ok: boolean; settingsPath?: string; message?: string }>
     rebind(): Promise<{ ok: boolean }>
     onEvent(cb: (ev: ClaudeHookEvent) => void): () => void
-    /** Does ~/.claude/projects/<cwd>/<sessionId>.jsonl still exist? Gates --resume. */
-    sessionExists?(cwd: string, sessionId: string): Promise<{ ok: boolean; exists: boolean }>
+    /** Does ~/.claude/projects/<cwd>/<sessionId>.jsonl still exist? Gates
+     * --resume; `any` (any transcript for the cwd) gates the --continue fallback. */
+    sessionExists?(cwd: string, sessionId: string): Promise<{ ok: boolean; exists: boolean; any?: boolean }>
   }
   git: {
     status(cwd: string): Promise<{ ok: boolean; notRepo?: boolean; root?: string; branch?: string | null; entries?: GitStatusEntry[] }>
