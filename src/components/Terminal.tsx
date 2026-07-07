@@ -75,6 +75,15 @@ const fontStack = (family: string) =>
 /** POSIX single-quote escaping, for paths written into the live shell. */
 const shellQuote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`
 
+/** Agent boots wipe the screen + scrollback right before the TUI draws: the
+ * typed `cd … && claude --resume …` launch line is plumbing, and a
+ * (re)started agent should look like the conversation it resumes, not the
+ * command that produced it. Plain terminal boots keep their echo. The STORED
+ * boot stays clean (tab auto-names and dedupe compare it) — the wipe exists
+ * only on the line typed into the pty. */
+const bootLine = (boot: string, singletonKey?: string) =>
+  singletonKey?.startsWith('agent:') ? `printf '\\033[2J\\033[3J\\033[H'; ${boot}` : boot
+
 /** Terminal ids that have mounted an xterm in THIS renderer. SessionCards keeps
  * exactly these alive as hidden ghost cards across project switches — a switch
  * back re-shows a live xterm instead of replaying the whole pty snapshot. Never
@@ -218,6 +227,9 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
       // 1.0 = the font's natural cell height, matching Terminal.app/iTerm density
       lineHeight: 1.0,
       cursorBlink: !attach,
+      // ⌥-click jumps the prompt cursor to the clicked spot (iTerm parity) —
+      // xterm synthesizes the arrow-key presses; plain click stays selection
+      altClickMovesCursor: true,
       allowProposedApi: true,
       // the glass shell shows through the pane tint — unless energy saver
       // trades the see-through backbuffer for a cheaper opaque one
@@ -353,6 +365,13 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
       return false // never consume — other handlers may care
     })
     term.attachCustomKeyEventHandler((ev) => {
+      // Shift+⏎ inserts a newline instead of submitting — ESC+CR, the same
+      // sequence Option+⏎ sends (and what claude's own /terminal-setup binds
+      // in iTerm/VSCode); at a bare shell prompt it just accepts the line
+      if (ev.type === 'keydown' && ev.key === 'Enter' && ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
+        bridge.terminal.write(id, '\x1b\r')
+        return false
+      }
       if (ev.type !== 'keydown' || !ev.metaKey) return true
       // ⌘F — search the scrollback (Terminal.app parity)
       if (ev.key.toLowerCase() === 'f' && !ev.shiftKey) {
@@ -484,10 +503,12 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
               if (disposed) return
               const st = useKaisola.getState()
               st.clearBootPending(id) // an update that landed during the wait is delivered right here
-              const line = st.terminals.find((t) => t.id === id)?.boot ?? boot
+              const rec = st.terminals.find((t) => t.id === id)
+              const line = rec?.boot ?? boot
               if (!line) return
+              // dedupe against the CLEAN boot — the typed line may carry the wipe
               lastBootRef.current = { boot: line, at: Date.now() }
-              bridge.terminal.write(id, line + '\n')
+              bridge.terminal.write(id, bootLine(line, rec?.singletonKey) + '\n')
             }, 700)
           }
         }
@@ -551,7 +572,7 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
     // ptys — new terminals boot via the create path), so a rerun of the SAME
     // command (LaTeX rebuild) must not be swallowed by the sent-once guard
     const line = t?.boot
-      ? t.cwd ? `cd ${shellQuote(t.cwd)} && ${t.boot}` : t.boot
+      ? t.cwd ? `cd ${shellQuote(t.cwd)} && ${bootLine(t.boot, t.singletonKey)}` : bootLine(t.boot, t.singletonKey)
       : t?.cwd ? `cd ${shellQuote(t.cwd)}` : null
     if (!line) return
     // never type into a program holding the foreground — a running TUI would

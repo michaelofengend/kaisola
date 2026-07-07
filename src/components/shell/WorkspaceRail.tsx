@@ -145,7 +145,8 @@ function QuotesSection() {
 /**
  * One quiet line of agent activity (the newest hook/tool event) between the
  * sessions and the tree — legibility without a dashboard. Click to jump to
- * the file the agent touched; the dot pulses while a turn is running.
+ * the file the agent touched. No pulse dot here: the running indicator
+ * lives on the session's tab badge, once, not in two places.
  */
 function AgentPulse() {
   const feed = useKaisola((s) => s.agentFeed)
@@ -160,7 +161,6 @@ function AgentPulse() {
       onClick={() => { if (latest.path) requestFile(latest.path) }}
       title={latest.path ? `${latest.text} — click to open` : latest.text}
     >
-      <span className="agent-pulse-dot" data-running={running} />
       <span className="grow truncate">{latest.text}</span>
     </button>
   )
