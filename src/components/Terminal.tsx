@@ -365,11 +365,12 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
       return false // never consume — other handlers may care
     })
     term.attachCustomKeyEventHandler((ev) => {
-      // Shift+⏎ inserts a newline instead of submitting — ESC+CR, the same
-      // sequence Option+⏎ sends (and what claude's own /terminal-setup binds
-      // in iTerm/VSCode); at a bare shell prompt it just accepts the line
+      // Shift+⏎ inserts a newline instead of submitting — backslash+CR,
+      // claude's universal "\ then Enter" line continuation (ESC+CR was
+      // swallowed by its TUI); a bare shell prompt shows a continuation
+      // line, which is also a newline, not a submit
       if (ev.type === 'keydown' && ev.key === 'Enter' && ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
-        bridge.terminal.write(id, '\x1b\r')
+        bridge.terminal.write(id, '\\\r')
         return false
       }
       if (ev.type !== 'keydown' || !ev.metaKey) return true

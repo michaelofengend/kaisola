@@ -21,6 +21,15 @@ const tabLabel = (t: { title?: string; workspacePath: string | null }) => t.titl
 export function ProjectTabs() {
   const tabs = useKaisola((s) => s.projectTabs)
   const activeId = useKaisola((s) => s.activeProjectId)
+  // the ACTIVE window tab shows a LIVE running dot (any running pty / busy
+  // thread in the current slice) — the parked `tab.activity` badge only ever
+  // marks BACKGROUND tabs (setProjectActivity refuses the active one)
+  const activeRunning = useKaisola(
+    (s) =>
+      s.terminals.some((t) => s.terminalMeta[t.id]?.running) ||
+      s.agentTerminals.some((t) => s.terminalMeta[t.terminalId]?.running) ||
+      s.assistantThreads.some((t) => t.busy),
+  )
   const switchProject = useKaisola((s) => s.switchProject)
   const closeProject = useKaisola((s) => s.closeProject)
   const reorderProjects = useKaisola((s) => s.reorderProjects)
@@ -80,7 +89,7 @@ export function ProjectTabs() {
               role="tab"
               aria-selected={active}
               data-active={active}
-              data-state={tab.activity}
+              data-state={tab.activity ?? (active && activeRunning ? 'running' : undefined)}
               style={{ '--ptab-hue': tab.color ?? tab.hue } as CSSProperties}
               draggable={editing !== tab.id}
               onDragStart={() => (dragRef.current = tab.id)}
