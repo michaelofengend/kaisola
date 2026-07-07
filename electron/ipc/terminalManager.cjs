@@ -105,8 +105,13 @@ function spawn({ id, command, args, cwd, env, cols, rows, sender }) {
     id,
     pty: p,
     sender,
-    output: '',
-    pending: '', // coalesced-but-unsent output (already part of `output`)
+    // snapshot ring as a CHUNK LIST, joined lazily on snapshot(): the old
+    // `output += data; slice(-CAP)` did a ~1MB string copy on every chunk
+    // once the ring was full — a fast-scrolling command turned that into
+    // gigabytes of allocation. Dropping whole stale chunks is O(dropped).
+    chunks: [],
+    chunksLen: 0,
+    pending: '', // coalesced-but-unsent output (already part of the ring)
     flushTimer: null,
     truncated: false,
     exited: false,
@@ -125,10 +130,14 @@ function spawn({ id, command, args, cwd, env, cols, rows, sender }) {
   }
   rec.flushPending = flushPending
   p.onData((data) => {
-    rec.output += data
-    if (rec.output.length > OUTPUT_CAP) {
-      rec.output = rec.output.slice(-OUTPUT_CAP)
+    rec.chunks.push(data)
+    rec.chunksLen += data.length
+    if (rec.chunksLen > OUTPUT_CAP) {
       rec.truncated = true
+      while (rec.chunks.length > 1 && rec.chunksLen - rec.chunks[0].length >= OUTPUT_CAP) {
+        rec.chunksLen -= rec.chunks[0].length
+        rec.chunks.shift()
+      }
     }
     rec.pending += data
     if (rec.pending.length >= FLUSH_CAP) flushPending()
@@ -176,8 +185,9 @@ function resize(id, cols, rows) {
 function setSender(id, sender) {
   const r = terms.get(id)
   if (!r) return
-  // drop unflushed bytes: they are already in r.output, and the (re)attaching
-  // renderer replays the snapshot — flushing them too would double-print
+  // drop unflushed bytes: they are already in the snapshot ring, and the
+  // (re)attaching renderer replays the snapshot — flushing them too would
+  // double-print
   if (r.flushTimer) {
     clearTimeout(r.flushTimer)
     r.flushTimer = null
@@ -189,7 +199,14 @@ function setSender(id, sender) {
 function snapshot(id) {
   const r = terms.get(id)
   if (!r) return { output: '', exited: true, exitStatus: null }
-  return { output: r.output, truncated: r.truncated, exited: r.exited, exitStatus: r.exitStatus }
+  // join once and collapse the ring to a single exact-cap chunk, so repeated
+  // snapshots (and the next joins) stay cheap
+  if (r.chunks.length > 1 || (r.chunks[0]?.length ?? 0) > OUTPUT_CAP) {
+    const joined = r.chunks.join('')
+    r.chunks = [joined.length > OUTPUT_CAP ? joined.slice(-OUTPUT_CAP) : joined]
+    r.chunksLen = r.chunks[0].length
+  }
+  return { output: r.chunks[0] ?? '', truncated: r.truncated, exited: r.exited, exitStatus: r.exitStatus }
 }
 
 function waitForExit(id) {

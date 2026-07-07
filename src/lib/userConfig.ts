@@ -192,13 +192,15 @@ export async function loadUserConfig(opts?: { quiet?: boolean }) {
  * Re-apply the config files when they change. A light 2.5s content-diff POLL
  * of the two files — NOT an fs.watch on userData (which churns on every
  * pasola.db / checkpoint / claude-events write). Handles in-app AND external
- * edits, and clears cleanly (no StrictMode watcher leak).
+ * edits, and clears cleanly (no StrictMode watcher leak). The poll pauses
+ * while the window is hidden (nobody applies settings they can't see) and
+ * catches up the moment it's visible again.
  */
 export function watchUserConfig(): () => void {
   if (!isDesktop) return () => {}
   let disposed = false
   const tick = async () => {
-    if (disposed) return
+    if (disposed || document.hidden) return
     const paths = await configPaths()
     if (!paths || disposed) return
     const [st, km] = await Promise.all([bridge.fs.read(paths.settings), bridge.fs.read(paths.keymap)])
@@ -206,10 +208,13 @@ export function watchUserConfig(): () => void {
     const k = km.ok && typeof km.content === 'string' ? km.content : ''
     if (s !== lastSettings || k !== lastKeymap) void loadUserConfig()
   }
+  const onVisible = () => { if (!document.hidden) void tick() }
+  document.addEventListener('visibilitychange', onVisible)
   const iv = window.setInterval(() => void tick(), 2500)
   return () => {
     disposed = true
     window.clearInterval(iv)
+    document.removeEventListener('visibilitychange', onVisible)
   }
 }
 

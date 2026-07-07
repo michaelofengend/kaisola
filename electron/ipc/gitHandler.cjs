@@ -26,9 +26,22 @@ function git(cwd, args, env) {
   })
 }
 
+// repoRoot is asked on EVERY git IPC call, and the rail / git panel / files
+// view all refresh inside the same debounce window after a change — that was
+// a `git rev-parse` spawn per caller. A short TTL keeps a mid-session
+// `git init` discoverable while collapsing the storm to one spawn.
+const ROOT_TTL_MS = 15_000
+const ROOT_CACHE_LIMIT = 256
+const rootCache = new Map() // cwd → { at, root } (root may be null: not a repo)
 async function repoRoot(cwd) {
+  const hit = rootCache.get(cwd)
+  if (hit && Date.now() - hit.at < ROOT_TTL_MS) return hit.root
   const r = await git(cwd, ['rev-parse', '--show-toplevel'])
-  return r.ok ? r.stdout.trim() : null
+  const root = r.ok ? r.stdout.trim() : null
+  rootCache.delete(cwd)
+  rootCache.set(cwd, { at: Date.now(), root })
+  if (rootCache.size > ROOT_CACHE_LIMIT) rootCache.delete(rootCache.keys().next().value)
+  return root
 }
 
 // ── the shadow repo ──────────────────────────────────────────────────────────

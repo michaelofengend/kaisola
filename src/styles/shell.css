@@ -1118,6 +1118,15 @@
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
+/* the full-window glass field goes SOLID too — it was the one blur that
+   survived eco, and at inset:0 it re-blurs whatever the transparent window
+   samples on every frame a terminal paints (later in the file than the
+   theme rules above, so it wins over the dark-theme backdrop-filter) */
+:root[data-perf='eco'] .app::before {
+  background: var(--bg-0);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 :root[data-perf='eco'] .dock-pane-term {
   background: var(--term-bg);
 }
@@ -1128,7 +1137,10 @@
 :root[data-perf='eco'] .queue-dot,
 :root[data-perf='eco'] .agent-pulse-dot,
 :root[data-perf='eco'] .agent-run-dot,
-:root[data-perf='eco'] .aurora::before {
+:root[data-perf='eco'] .aurora::before,
+/* background-position loops repaint their gradient every frame — still, in eco */
+:root[data-perf='eco'] .skeleton,
+:root[data-perf='eco'] .shimmer-text {
   animation: none;
 }
 

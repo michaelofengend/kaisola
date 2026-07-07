@@ -16,7 +16,12 @@ const INDEX_LIMIT = 8000
 const TEXT_LIMIT = 2_000_000
 const DATA_URL_PREVIEW_LIMIT = 40_000_000
 const PREVIEW_SCHEME = 'kaisola-preview'
-const watchers = new Map()
+const watchers = new Map() // subscriber id → { root, sender, chan, seq, events, timer, … }
+// One OS watcher per ROOT, fanned out to every subscriber of that root — the
+// rail, git panel and files view all watch the same workspace, and recursive
+// fs.watch is an OS-level FSEvents stream over the whole subtree; three
+// identical streams tripled the delivered-event volume for every build.
+const osWatchers = new Map() // root → { watcher, recursive, ids: Set<subscriber id> }
 const previewTokens = new Map()
 const previewPaths = new Map()
 // long sessions preview many files/pages — every map here is bounded (FIFO)
@@ -240,7 +245,61 @@ function closeWatcher(id) {
   try {
     if (state.destroyListener && !state.sender.isDestroyed()) state.sender.removeListener('destroyed', state.destroyListener)
   } catch { /* sender already gone */ }
-  try { state.watcher.close() } catch { /* already closed */ }
+  // release the shared OS watcher; close it with the last subscriber
+  const os = osWatchers.get(state.root)
+  if (os) {
+    os.ids.delete(id)
+    if (!os.ids.size) {
+      osWatchers.delete(state.root)
+      try { os.watcher.close() } catch { /* already closed */ }
+    }
+  }
+}
+
+/** Get (or start) the single OS watcher for a root. Events fan out to every
+ * subscriber's own batch/debounce state, so per-subscriber behavior — its
+ * channel, seq, 90ms coalescing — is exactly what a private watcher gave. */
+function acquireOsWatcher(root) {
+  let os = osWatchers.get(root)
+  if (os) return os
+  const onEvent = (eventType, filename) => {
+    const rel = filename ? String(filename) : ''
+    if (isHiddenRelative(rel)) return
+    const entry = osWatchers.get(root)
+    if (!entry) return
+    for (const id of entry.ids) {
+      const sub = watchers.get(id)
+      if (!sub) continue
+      sub.events.push({
+        eventType: String(eventType || 'change'),
+        name: rel ? path.basename(rel) : '',
+        path: rel ? path.join(root, rel) : root,
+      })
+      if (sub.timer) clearTimeout(sub.timer)
+      sub.timer = setTimeout(() => sendWatchBatch(id), 90)
+    }
+  }
+  let recursive = true
+  let watcher
+  try {
+    watcher = fs.watch(root, { recursive: true, persistent: false }, onEvent)
+  } catch {
+    recursive = false
+    watcher = fs.watch(root, { persistent: false }, onEvent)
+  }
+  watcher.on('error', (err) => {
+    const entry = osWatchers.get(root)
+    if (!entry) return
+    for (const id of Array.from(entry.ids)) {
+      const sub = watchers.get(id)
+      if (sub && !sub.sender.isDestroyed())
+        sub.sender.send(sub.chan, { root, seq: ++sub.seq, events: [], error: String((err && err.message) || err) })
+      closeWatcher(id)
+    }
+  })
+  os = { watcher, recursive, ids: new Set() }
+  osWatchers.set(root, os)
+  return os
 }
 
 function sendWatchBatch(id) {
@@ -520,20 +579,11 @@ function registerFsHandlers(ipcMain) {
       if (!stat.isDirectory()) return { ok: false, message: 'root is not a directory' }
       closeWatcher(id)
 
-      let recursive = true
-      let watcher
-      try {
-        watcher = fs.watch(root, { recursive: true, persistent: false }, onEvent)
-      } catch {
-        recursive = false
-        watcher = fs.watch(root, { persistent: false }, onEvent)
-      }
-
+      const os = acquireOsWatcher(root)
       const destroyListener = () => closeWatcher(id)
       const state = {
         root,
-        recursive,
-        watcher,
+        recursive: os.recursive,
         sender: e.sender,
         chan: `fs:event:${id}`,
         seq: 0,
@@ -542,27 +592,10 @@ function registerFsHandlers(ipcMain) {
         destroyListener,
       }
       watchers.set(id, state)
+      os.ids.add(id)
       e.sender.once('destroyed', destroyListener)
-      watcher.on('error', (err) => {
-        if (!e.sender.isDestroyed()) e.sender.send(state.chan, { root, seq: ++state.seq, events: [], error: String((err && err.message) || err) })
-        closeWatcher(id)
-      })
 
-      function onEvent(eventType, filename) {
-        const current = watchers.get(id)
-        if (!current) return
-        const rel = filename ? String(filename) : ''
-        if (isHiddenRelative(rel)) return
-        current.events.push({
-          eventType: String(eventType || 'change'),
-          name: rel ? path.basename(rel) : '',
-          path: rel ? path.join(root, rel) : root,
-        })
-        if (current.timer) clearTimeout(current.timer)
-        current.timer = setTimeout(() => sendWatchBatch(id), 90)
-      }
-
-      return { ok: true, recursive }
+      return { ok: true, recursive: os.recursive }
     } catch (err) {
       return { ok: false, message: String((err && err.message) || err) }
     }

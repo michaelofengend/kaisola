@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useKaisola, type AssistantRuntime, type AssistantThread, type AssistantTurn } from '../store/store'
 import { bridge, type AcpUpdate, type AcpControls, type AcpPreset, type AcpAgent, type AcpPermissionRequest } from '../lib/bridge'
 import { diffHunks, diffStat } from '../lib/lineDiff'
@@ -141,7 +141,10 @@ function buildContext(): string {
   ].filter(Boolean).join('\n')
 }
 
-export function Assistant({ threadId }: { threadId: string }) {
+// memo'd: every thread's card stays mounted side by side, and SessionCards
+// re-renders often — a card whose threadId hasn't changed must not re-render
+// (its own runtime subscription below wakes it when ITS content changes)
+export const Assistant = memo(function Assistant({ threadId }: { threadId: string }) {
   const autonomy = useKaisola((s) => s.autonomy)
   const openSettings = useKaisola((s) => s.setSettingsOpen)
   const workspacePath = useKaisola((s) => s.workspacePath)
@@ -151,7 +154,12 @@ export function Assistant({ threadId }: { threadId: string }) {
   // one Assistant instance per thread (so threads can sit side by side); the
   // store owns session metadata and durable turns.
   const threads = useKaisola((s) => s.assistantThreads)
-  const assistantRuntimes = useKaisola((s) => s.assistantRuntimes)
+  // THIS thread's runtime only: another thread's stream token replaces the
+  // runtimes map, but this card re-renders only when its own entry changes
+  const liveRuntime = useKaisola((s) => {
+    const t = s.assistantThreads.find((x) => x.id === threadId) ?? s.assistantThreads[0]
+    return t ? s.assistantRuntimes[t.id] : undefined
+  })
   const updateAssistantRuntime = useKaisola((s) => s.updateAssistantRuntime)
   const resetAssistantRuntime = useKaisola((s) => s.resetAssistantRuntime)
   const setThreadBusy = useKaisola((s) => s.setThreadBusy)
@@ -193,8 +201,7 @@ export function Assistant({ threadId }: { threadId: string }) {
   const agentKey = active.agentKey
   const busy = active.busy
   const permsForAgent = pendingPermissions.filter((p) => p.key === agentKey)
-  const rt = (id: string): Runtime => assistantRuntimes[id] ?? { turns: [], first: true }
-  const arun = rt(active.id)
+  const arun: Runtime = liveRuntime ?? { turns: [], first: true }
   const agentPreset = presets.find((p) => p.id === agentKey)
   const agentName = agentPreset?.name ?? agentKey
   const aState = agents.find((a) => a.key === agentKey)
@@ -332,7 +339,7 @@ export function Assistant({ threadId }: { threadId: string }) {
   }
   useEffect(() => {
     if (stickRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [assistantRuntimes, threadId])
+  }, [arun, threadId])
   useEffect(() => { stickRef.current = true }, [threadId])
   // clear the auth prompt once we're connected
   useEffect(() => { if (connected) { setNotice(null); setAuthUrl(null) } }, [connected])
@@ -458,7 +465,7 @@ export function Assistant({ threadId }: { threadId: string }) {
     if (!text || busy) return false
     if (!connected) { const ok = await connect(agentKey); if (!ok) return false }
     const threadId = active.id
-    const first = rt(threadId).first
+    const first = arun.first
     const files = attachments
     const mns = mentions
     setAttachments([])
@@ -811,4 +818,4 @@ export function Assistant({ threadId }: { threadId: string }) {
       </div>
     </div>
   )
-}
+})

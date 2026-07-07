@@ -1089,17 +1089,24 @@ const pick = <K extends keyof KaisolaState>(s: KaisolaState, keys: readonly K[])
 const systemTheme = (): Theme =>
   typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 
-// Persistence is WRITE-THROTTLED at the serialization step: zustand calls
-// setItem on EVERY set(), and JSON.stringify of the whole store (all project
-// slices + chat runtimes) was a per-update main-thread tax — the largest
-// remaining hitch on tab switches. setItem now parks the latest snapshot
-// REFERENCE (free — state objects are immutable) and stringifies + writes at
-// most once per PERSIST_MS; pagehide flushes synchronously so quitting never
-// loses state. The blob format on disk is unchanged ({ state, version }).
+// Persistence is THROTTLED at the shaping + serialization step: zustand calls
+// setItem on EVERY set(), and both the slice walk (partialize) and the
+// JSON.stringify of the whole store were a per-update main-thread tax — at
+// stream time that's per token. partialize is now IDENTITY (free); setItem
+// parks the latest raw-state REFERENCE (free — state objects are immutable)
+// and the slice walk + stringify + write run at most once per PERSIST_MS;
+// pagehide flushes synchronously so quitting never loses state. The blob
+// format on disk is unchanged ({ state, version }).
 const PERSIST_MS = 800
 let lastPersist: { name: string; value: string } | null = null
 let pendingPersist: { name: string; value: unknown } | null = null
 let persistTimer: number | null = null
+/** Shape the parked { state, version } envelope for disk: the raw live state
+ * becomes the pruned/capped persist blob. Runs once per flush, not per set. */
+const shapePersist = (value: unknown) => {
+  const v = value as { state: KaisolaState; version?: number }
+  return { ...v, state: persistSnapshot(v.state) }
+}
 const flushPersist = () => {
   if (persistTimer != null) {
     window.clearTimeout(persistTimer)
@@ -1108,7 +1115,7 @@ const flushPersist = () => {
   if (!pendingPersist) return
   const { name, value } = pendingPersist
   pendingPersist = null
-  const json = JSON.stringify(value)
+  const json = JSON.stringify(shapePersist(value))
   lastPersist = { name, value: json }
   if (isDesktop) void bridge.db.set(name, json).catch(() => {})
   else localStorage.setItem(name, json)
@@ -1148,7 +1155,7 @@ if (typeof window !== 'undefined' && !POP_TERMINAL_ID) {
     if (pendingPersist) {
       const { name, value } = pendingPersist
       pendingPersist = null
-      const json = JSON.stringify(value)
+      const json = JSON.stringify(shapePersist(value))
       if (isDesktop) bridge.db.setSync(name, json)
       else localStorage.setItem(name, json)
     } else if (isDesktop && lastPersist) {
@@ -1341,6 +1348,53 @@ function sanitizeSliceForPersist(slice: ProjectSliceMemory): ProjectSlicePersist
     canvasWidth: slice.canvasWidth,
     canvasOpen: slice.canvasOpen,
     dockOpen: slice.dockOpen,
+  }
+}
+
+/** The durable blob: every slice (background + the active one, taken from the
+ * live flat fields) folded into a uniform map, alongside the GLOBAL keys and
+ * the tabs meta. Extracted from partialize — runs once per persist flush. */
+function persistSnapshot(s: KaisolaState) {
+  const slices: Record<string, ProjectSlicePersist> = {}
+  for (const [id, sl] of Object.entries(s.projectSlices)) slices[id] = sanitizeSliceForPersist(sl)
+  slices[s.activeProjectId] = sanitizeSliceForPersist(pick(s, PROJECT_SLICE_MEMORY_KEYS))
+  return {
+    // GLOBAL (bucket B + C) with the same caps as before
+    theme: s.theme,
+    themeMode: s.themeMode,
+    layoutMode: s.layoutMode,
+    agentModels: s.agentModels,
+    fileTextZoom: s.fileTextZoom,
+    termFontSize: s.termFontSize,
+    termFontFamily: s.termFontFamily,
+    termFontWeight: s.termFontWeight,
+    termCursorColor: s.termCursorColor,
+    permissionRules: s.permissionRules.slice(-200),
+    sensitiveGlobs: s.sensitiveGlobs,
+    customAgents: s.customAgents,
+    enabledAgents: s.enabledAgents,
+    sessionTemplates: s.sessionTemplates.slice(0, 40),
+    latexMain: s.latexMain,
+    unsavedBuffers: s.unsavedBuffers,
+    claudeModel: s.claudeModel,
+    reasoningProvider: s.reasoningProvider,
+    localBaseUrl: s.localBaseUrl,
+    localModel: s.localModel,
+    openaiBaseUrl: s.openaiBaseUrl,
+    openaiModel: s.openaiModel,
+    openAlexMailto: s.openAlexMailto,
+    grobidEndpoint: s.grobidEndpoint,
+    sandboxMode: s.sandboxMode,
+    workflows: s.workflows,
+    automationsEnabled: s.automationsEnabled,
+    ecoMode: s.ecoMode,
+    railWidth: s.railWidth,
+    claudeSessions: s.claudeSessions,
+    // TABS
+    projectTabs: s.projectTabs,
+    activeProjectId: s.activeProjectId,
+    projectSlices: slices,
+    recentProjects: s.recentProjects.slice(0, 12),
   }
 }
 
@@ -3836,51 +3890,11 @@ export const useKaisola = create<KaisolaState>()(
       // RAW PersistStorage (no createJSONStorage): serialization is throttled
       // inside kaisolaStorage — see the PERSIST_MS note above it.
       storage: kaisolaStorage as PersistStorage<unknown>,
-      // fold every slice (background + the active one, taken from the live flat
-      // fields) into a uniform map, alongside the GLOBAL keys and the tabs meta.
-      partialize: (s) => {
-        const slices: Record<string, ProjectSlicePersist> = {}
-        for (const [id, sl] of Object.entries(s.projectSlices)) slices[id] = sanitizeSliceForPersist(sl)
-        slices[s.activeProjectId] = sanitizeSliceForPersist(pick(s, PROJECT_SLICE_MEMORY_KEYS))
-        return {
-          // GLOBAL (bucket B + C) with the same caps as before
-          theme: s.theme,
-          themeMode: s.themeMode,
-          layoutMode: s.layoutMode,
-          agentModels: s.agentModels,
-          fileTextZoom: s.fileTextZoom,
-          termFontSize: s.termFontSize,
-          termFontFamily: s.termFontFamily,
-          termFontWeight: s.termFontWeight,
-          termCursorColor: s.termCursorColor,
-          permissionRules: s.permissionRules.slice(-200),
-          sensitiveGlobs: s.sensitiveGlobs,
-          customAgents: s.customAgents,
-          enabledAgents: s.enabledAgents,
-          sessionTemplates: s.sessionTemplates.slice(0, 40),
-          latexMain: s.latexMain,
-          unsavedBuffers: s.unsavedBuffers,
-          claudeModel: s.claudeModel,
-          reasoningProvider: s.reasoningProvider,
-          localBaseUrl: s.localBaseUrl,
-          localModel: s.localModel,
-          openaiBaseUrl: s.openaiBaseUrl,
-          openaiModel: s.openaiModel,
-          openAlexMailto: s.openAlexMailto,
-          grobidEndpoint: s.grobidEndpoint,
-          sandboxMode: s.sandboxMode,
-          workflows: s.workflows,
-          automationsEnabled: s.automationsEnabled,
-          ecoMode: s.ecoMode,
-          railWidth: s.railWidth,
-          claudeSessions: s.claudeSessions,
-          // TABS
-          projectTabs: s.projectTabs,
-          activeProjectId: s.activeProjectId,
-          projectSlices: slices,
-          recentProjects: s.recentProjects.slice(0, 12),
-        }
-      },
+      // IDENTITY on purpose: zustand runs partialize on every set(), and the
+      // slice walk here was a per-token tax during agent streams. The real
+      // shaping (persistSnapshot) runs inside the throttled flush instead —
+      // see shapePersist above kaisolaStorage.
+      partialize: (s) => s,
     },
   ),
 )

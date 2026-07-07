@@ -166,10 +166,12 @@ function registerTerminalHandlers(ipcMain) {
     return new Promise((resolve) => {
       const shell = process.env.SHELL || '/bin/zsh'
       const child = spawn(shell, ['-lc', command], { cwd: cwd || os.homedir(), env: process.env })
+      // only the first 20k chars survive anyway — cap DURING accumulation so a
+      // huge-output command can't balloon main-process memory first
       let out = ''
       let err = ''
-      child.stdout.on('data', (d) => (out += d.toString()))
-      child.stderr.on('data', (d) => (err += d.toString()))
+      child.stdout.on('data', (d) => { if (out.length < 20000) out += d.toString() })
+      child.stderr.on('data', (d) => { if (err.length < 20000) err += d.toString() })
       child.on('close', (code) => resolve({ ok: code === 0, code, stdout: out.slice(0, 20000), stderr: err.slice(0, 20000) }))
       child.on('error', (e) => resolve({ ok: false, code: -1, stdout: '', stderr: String(e.message) }))
     })

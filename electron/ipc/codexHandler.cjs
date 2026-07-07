@@ -27,7 +27,9 @@ function codexExec({ prompt, cwd } = {}) {
     const timer = setTimeout(() => { try { proc.kill('SIGKILL') } catch { /* */ } finish({ ok: false, message: 'codex exec timed out.' }) }, TIMEOUT_MS)
     proc.on('error', (e) => { clearTimeout(timer); finish({ ok: false, message: `codex not available: ${e.message}` }) })
     proc.stdout.on('data', (d) => { out += d.toString() })
-    proc.stderr.on('data', (d) => { err += d.toString() })
+    // stderr only ever surfaces as a (trimmed) error message — cap it during
+    // accumulation; stdout is the actual answer and stays whole
+    proc.stderr.on('data', (d) => { if (err.length < 20000) err += d.toString() })
     proc.on('close', (code) => {
       clearTimeout(timer)
       if (out.trim()) finish({ ok: true, text: out })
