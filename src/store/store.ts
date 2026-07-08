@@ -56,6 +56,8 @@ export type Theme = 'dark' | 'light'
 /** 'system' follows macOS appearance live (incl. scheduled/sunset switches). */
 export type ThemeMode = Theme | 'system'
 export type LayoutMode = 'focus' | 'studio'
+/** Appearance energy, ranked by GPU cost: live glass > painted glass > eco. */
+export type PerfMode = 'glass' | 'painted' | 'eco'
 export type PaletteMode = 'commands' | 'files'
 
 /** A working-tree checkpoint — a real (hidden-ref) git commit of everything. */
@@ -452,7 +454,7 @@ const GLOBAL_KEYS = [
   'theme', 'themeMode', 'layoutMode', 'agentModels', 'fileTextZoom', 'termFontSize', 'termFontFamily',
   'termFontWeight', 'termCursorColor', 'customAgents', 'enabledAgents', 'sessionTemplates', 'claudeModel', 'reasoningProvider',
   'localBaseUrl', 'localModel', 'openaiBaseUrl', 'openaiModel', 'openAlexMailto', 'grobidEndpoint',
-  'sandboxMode', 'workflows', 'automationsEnabled', 'ecoMode', 'railWidth', 'railOpen', 'claudeSessions',
+  'sandboxMode', 'workflows', 'automationsEnabled', 'perfMode', 'railWidth', 'railOpen', 'claudeSessions',
   'permissionRules', 'sensitiveGlobs', 'latexMain', 'unsavedBuffers',
 ] as const
 
@@ -600,8 +602,9 @@ interface KaisolaState {
   /** Text zoom inside the Files viewer, driven by pinch gestures. */
   fileTextZoom: number
   /** Terminal font size (⌘+/⌘−/⌘0, persisted; applies to every terminal). */
-  /** Energy saver: solid surfaces, still status dots, opaque terminals. */
-  ecoMode: boolean
+  /** Appearance energy: 'glass' live translucency · 'painted' opaque window
+   *  drawing its own pre-blurred wallpaper · 'eco' solid and still. */
+  perfMode: PerfMode
   /** Width of the left workspace rail in px (null = the CSS default). */
   railWidth: number | null
   /** Left workspace rail visibility — the strip button / ⌘B (persisted). */
@@ -791,7 +794,7 @@ interface KaisolaState {
   setFileDirty: (dirty: boolean) => void
   setFileSession: (tabs: FileSessionTab[], activePath: string | null) => void
   setFileTextZoom: (zoom: number) => void
-  setEcoMode: (on: boolean) => void
+  setPerfMode: (mode: PerfMode) => void
   setTermFontSize: (size: number | null) => void
   setTermFontFamily: (family: string) => void
   setTermFontWeight: (weight: number) => void
@@ -1393,7 +1396,7 @@ function persistSnapshot(s: KaisolaState) {
     sandboxMode: s.sandboxMode,
     workflows: s.workflows,
     automationsEnabled: s.automationsEnabled,
-    ecoMode: s.ecoMode,
+    perfMode: s.perfMode,
     railWidth: s.railWidth,
     railOpen: s.railOpen,
     claudeSessions: s.claudeSessions,
@@ -1602,7 +1605,7 @@ export const useKaisola = create<KaisolaState>()(
   fileDirty: false,
   fileTabs: [],
   fileTextZoom: 1,
-  ecoMode: false,
+  perfMode: 'glass' as PerfMode,
   railWidth: null,
   railOpen: true,
   claudeSessions: {},
@@ -2420,9 +2423,9 @@ export const useKaisola = create<KaisolaState>()(
   setFileSession: (tabs, activePath) => set({ fileTabs: tabs, openFilePath: activePath }),
   setFileTextZoom: (zoom) => set({ fileTextZoom: Math.min(2.4, Math.max(0.72, Number(zoom.toFixed(3)))) }),
   // null = reset to the default (⌘0)
-  setEcoMode: (on) => {
-    document.documentElement.dataset.perf = on ? 'eco' : 'glass'
-    set({ ecoMode: on })
+  setPerfMode: (mode) => {
+    document.documentElement.dataset.perf = mode
+    set({ perfMode: mode })
   },
   setTermFontSize: (size) => set({ termFontSize: size == null ? 12 : Math.min(18, Math.max(9, Math.round(size))) }),
   setTermFontFamily: (family) => set({ termFontFamily: family || 'JetBrains Mono' }),
@@ -3874,9 +3877,19 @@ export const useKaisola = create<KaisolaState>()(
       // v6 (2026-07-05): PROJECT TABS. The flat store became tab #1; per-project
       // state now lives in `projectSlices` (the active tab's slice IS the live
       // flat fields). migrate wraps the v5 flat state losslessly into one tab.
-      version: 6,
+      // v7 (2026-07-08): ecoMode boolean → perfMode ('glass'|'painted'|'eco').
+      version: 7,
       migrate: (persisted, version) => {
-        if (version >= 6) return persisted
+        const toV7 = (p: unknown) => {
+          const rec = p as Record<string, unknown>
+          if (rec && typeof rec === 'object' && !('perfMode' in rec)) {
+            rec.perfMode = rec.ecoMode ? 'eco' : 'glass'
+            delete rec.ecoMode
+          }
+          return p
+        }
+        if (version >= 7) return persisted
+        if (version === 6) return toV7(persisted)
         const flat = migrateFlatV5(persisted)
         const pid = uid('proj')
         const ws = flat.workspacePath ?? null
@@ -3889,13 +3902,15 @@ export const useKaisola = create<KaisolaState>()(
           const v = (flat as Record<string, unknown>)[k]
           if (v !== undefined) (base as Record<string, unknown>)[k] = v
         }
-        return {
+        return toV7({
           ...pickGlobals(flat as Record<string, unknown>),
+          // pickGlobals no longer knows ecoMode — hand it to toV7 explicitly
+          ecoMode: (flat as Record<string, unknown>).ecoMode,
           projectTabs: [{ id: pid, workspacePath: ws, title: undefined, hue: folderHue(ws ?? pid), createdAt: Date.now() }],
           activeProjectId: pid,
           projectSlices: { [pid]: sanitizeSliceForPersist(base) },
           recentProjects: ws ? [{ path: ws, name, at: Date.now() }] : [],
-        }
+        })
       },
       // split the persisted blob back apart SYNCHRONOUSLY (getItem is sync → no
       // rehydration flash). Spread `current` FIRST so action fns are never

@@ -55,8 +55,8 @@ export function Settings() {
   const pushToast = useKaisola((s) => s.pushToast)
   const themeMode = useKaisola((s) => s.themeMode)
   const setThemeMode = useKaisola((s) => s.setThemeMode)
-  const ecoMode = useKaisola((s) => s.ecoMode)
-  const setEcoMode = useKaisola((s) => s.setEcoMode)
+  const perfMode = useKaisola((s) => s.perfMode)
+  const setPerfMode = useKaisola((s) => s.setPerfMode)
   const autonomy = useKaisola((s) => s.autonomy)
   const setAutonomy = useKaisola((s) => s.setAutonomy)
   const workspacePath = useKaisola((s) => s.workspacePath)
@@ -311,9 +311,9 @@ export function Settings() {
                   <span className="settings-row-label">Energy saver <span className="faint" style={{ fontWeight: 400 }}>· solid surfaces, still indicators</span></span>
                   <div className="settings-row-control">
                     <Dropdown
-                      value={ecoMode ? 'on' : 'off'}
+                      value={perfMode === 'eco' ? 'on' : 'off'}
                       options={[{ value: 'off', name: 'Off' }, { value: 'on', name: 'On' }]}
-                      onSelect={(v) => setEcoMode(v === 'on')}
+                      onSelect={(v) => setPerfMode(v === 'on' ? 'eco' : 'glass')}
                       align="right"
                       title="Trades the glass look for noticeably lower GPU and battery use"
                     />

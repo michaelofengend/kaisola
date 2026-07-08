@@ -20,7 +20,7 @@ import '@xterm/xterm/css/xterm.css'
 
 // apply persisted/initial theme + energy-saver mode before first paint
 document.documentElement.dataset.theme = useKaisola.getState().theme
-document.documentElement.dataset.perf = useKaisola.getState().ecoMode ? 'eco' : 'glass'
+document.documentElement.dataset.perf = useKaisola.getState().perfMode
 
 // expose the store + pure research libs for debugging / headless smoke tests
 ;(window as unknown as { __kaisola: typeof useKaisola }).__kaisola = useKaisola

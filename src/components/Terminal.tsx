@@ -137,7 +137,7 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
   const [, setPromptTick] = useState(0)
   const [railHover, setRailHover] = useState<{ n: number; y: number } | null>(null)
   const theme = useKaisola((s) => s.theme)
-  const ecoMode = useKaisola((s) => s.ecoMode)
+  const ecoMode = useKaisola((s) => s.perfMode === 'eco')
   const termFontSize = useKaisola((s) => s.termFontSize)
   const termFontFamily = useKaisola((s) => s.termFontFamily)
   const termFontWeight = useKaisola((s) => s.termFontWeight)
