@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useKaisola, type ThemeMode, type CustomAgent } from '../store/store'
+import { useKaisola, type ThemeMode, type PerfMode, type CustomAgent } from '../store/store'
 import { bridge, isDesktop, type AcpAgent } from '../lib/bridge'
 import type { AutonomyLevel } from '../domain/types'
 import { useAgentRegistry, openAgentSession, type RegistryAgent } from '../lib/registry'
@@ -107,6 +107,13 @@ export function Settings() {
   const [newCmd, setNewCmd] = useState('')
   const [newKind, setNewKind] = useState<'terminal' | 'acp'>('terminal')
   const [newGlob, setNewGlob] = useState('')
+  // window transparency is a creation-time option — a want/live mismatch
+  // after a perfMode switch shows the "Restart to finish applying" chip
+  const [windowModeMismatch, setWindowModeMismatch] = useState(false)
+  useEffect(() => {
+    if (!isDesktop) return
+    void bridge.windowMode().then((m) => setWindowModeMismatch(m.wantSolid !== m.liveSolid)).catch(() => {})
+  }, [perfMode])
 
   // Claude API key (folded under Models)
   const [key, setKey] = useState('')
@@ -308,14 +315,27 @@ export function Settings() {
                   </div>
                 )}
                 <div className="settings-row">
-                  <span className="settings-row-label">Energy saver <span className="faint" style={{ fontWeight: 400 }}>· solid surfaces, still indicators</span></span>
+                  <span className="settings-row-label">Appearance energy <span className="faint" style={{ fontWeight: 400 }}>· by GPU cost</span></span>
                   <div className="settings-row-control">
+                    {windowModeMismatch && (
+                      <button
+                        className="settings-chip"
+                        onClick={() => void bridge.relaunch()}
+                        title="The window's transparency is set at launch — restart Kaisola to finish switching"
+                      >
+                        Restart to finish applying
+                      </button>
+                    )}
                     <Dropdown
-                      value={perfMode === 'eco' ? 'on' : 'off'}
-                      options={[{ value: 'off', name: 'Off' }, { value: 'on', name: 'On' }]}
-                      onSelect={(v) => setPerfMode(v === 'on' ? 'eco' : 'glass')}
+                      value={perfMode}
+                      options={[
+                        { value: 'glass', name: 'Glass · live ●●●' },
+                        { value: 'painted', name: 'Glass · painted ●●' },
+                        { value: 'eco', name: 'Energy saver ●' },
+                      ]}
+                      onSelect={(v) => setPerfMode(v as PerfMode)}
                       align="right"
-                      title="Trades the glass look for noticeably lower GPU and battery use"
+                      title="Live: real translucency. Painted: the same look drawn as a static painting — far cheaper. Energy saver: solid and still — cheapest."
                     />
                   </div>
                 </div>

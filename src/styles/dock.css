@@ -1071,6 +1071,23 @@
   align-items: center;
   gap: var(--sp-2);
 }
+/* quiet action chip inside a settings row (e.g. "Restart to finish applying"
+   when a perf-mode switch needs the window recreated) */
+.settings-chip {
+  height: 24px;
+  padding: 0 var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-0);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.settings-chip:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
 .settings-panel-v2 .settings-note {
   font-size: var(--fs-12);
   line-height: var(--lh-snug);
