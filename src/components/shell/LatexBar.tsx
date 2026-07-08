@@ -43,6 +43,10 @@ export function LatexBar({ inline = false }: { inline?: boolean } = {}) {
       if (cancelled) return
       const found = (r.entries ?? []).filter((e: FsEntry) => !e.dir && e.path.endsWith('.tex')).map((e) => e.path)
       setTexFiles(found)
+      // a persisted main that no longer exists (renamed/moved since) must not
+      // shadow the real files — Build against it fails with "Pick a .tex"
+      const stored = useKaisola.getState().latexMain[workspacePath]
+      if (stored && !found.includes(stored)) useKaisola.getState().setLatexMain(workspacePath, null)
       // no main chosen yet → find the real document (shallowest \documentclass,
       // main.tex first) instead of whichever file sorted first
       if (!useKaisola.getState().latexMain[workspacePath] && found.length) {
@@ -114,16 +118,32 @@ export function LatexBar({ inline = false }: { inline?: boolean } = {}) {
   const main = latexMain[workspacePath] ?? texFiles.find((p) => p.endsWith('/main.tex')) ?? texFiles[0]
   const activePdfTex = openFilePath?.endsWith('.pdf') ? openFilePath.replace(/\.pdf$/i, '.tex') : undefined
   const activePdfMain = activePdfTex && texFiles.includes(activePdfTex) ? activePdfTex : undefined
-  const buildTarget = activePdfMain ?? main
+  // the OPEN .tex is a target too — the workspace scan runs once, so a file
+  // created after it (an agent writing paper.tex) is invisible to texFiles
+  // and Build said "no .tex here" while the file sat in the active tab. The
+  // resolved main still wins when one exists (multi-file \include projects
+  // must build their root, not the open chapter).
+  const activeTex = openFilePath?.endsWith('.tex') ? openFilePath : undefined
+  const buildTarget = activePdfMain ?? main ?? activeTex
+  // the picker shows the open .tex even when the stale scan missed it
+  const texChoices = activeTex && !texFiles.includes(activeTex) ? [...texFiles, activeTex] : texFiles
 
   const build = async () => {
     if (!buildTarget) { pushToast('info', 'No .tex file in this folder yet.'); return }
     if (activePdfMain && activePdfMain !== latexMain[workspacePath]) setLatexMain(workspacePath, activePdfMain)
+    // first build via the open-file fallback adopts it as the main
+    else if (buildTarget === activeTex && activeTex !== latexMain[workspacePath]) setLatexMain(workspacePath, activeTex)
     const seq = ++buildSeq.current
     setBuilding(true)
     setResult(null)
     setSummary(null)
-    const r = await bridge.latex.build(buildTarget)
+    let r = await bridge.latex.build(buildTarget)
+    // the main went stale mid-session (agent renamed the file): fall back to
+    // the OPEN .tex once instead of failing at the user with "Pick a .tex"
+    if (!r.ok && /Pick a \.tex/i.test(r.message ?? '') && activeTex && buildTarget !== activeTex && seq === buildSeq.current) {
+      setLatexMain(workspacePath, activeTex)
+      r = await bridge.latex.build(activeTex)
+    }
     if (seq !== buildSeq.current) return
     setBuilding(false)
     setResult(r)
@@ -206,10 +226,10 @@ export function LatexBar({ inline = false }: { inline?: boolean } = {}) {
         {/* the main-file picker must exist in BOTH variants — the inline bar is
             the only one ever mounted, and Build retargets latexMain (line below)
             so the user needs a way to point it back */}
-        {texFiles.length > 0 ? (
+        {texChoices.length > 0 ? (
           <Dropdown
-            value={main ?? ''}
-            options={texFiles.map((p) => ({ value: p, name: relTo(workspacePath, p) }))}
+            value={buildTarget ?? ''}
+            options={texChoices.map((p) => ({ value: p, name: relTo(workspacePath, p) }))}
             onSelect={(v) => setLatexMain(workspacePath, v)}
             title="Main .tex file (what Build compiles)"
           />
