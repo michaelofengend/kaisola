@@ -452,7 +452,7 @@ const GLOBAL_KEYS = [
   'theme', 'themeMode', 'layoutMode', 'agentModels', 'fileTextZoom', 'termFontSize', 'termFontFamily',
   'termFontWeight', 'termCursorColor', 'customAgents', 'enabledAgents', 'sessionTemplates', 'claudeModel', 'reasoningProvider',
   'localBaseUrl', 'localModel', 'openaiBaseUrl', 'openaiModel', 'openAlexMailto', 'grobidEndpoint',
-  'sandboxMode', 'workflows', 'automationsEnabled', 'ecoMode', 'railWidth', 'claudeSessions',
+  'sandboxMode', 'workflows', 'automationsEnabled', 'ecoMode', 'railWidth', 'railOpen', 'claudeSessions',
   'permissionRules', 'sensitiveGlobs', 'latexMain', 'unsavedBuffers',
 ] as const
 
@@ -604,6 +604,8 @@ interface KaisolaState {
   ecoMode: boolean
   /** Width of the left workspace rail in px (null = the CSS default). */
   railWidth: number | null
+  /** Left workspace rail visibility — the strip button / ⌘B (persisted). */
+  railOpen: boolean
   /** Last Claude Code session id per workspace (from the hooks tap) — the
    * auto-launch resumes it (`claude --resume`) so a restart lands you back
    * in the same conversation. Persisted; capped. */
@@ -794,6 +796,7 @@ interface KaisolaState {
   setTermFontFamily: (family: string) => void
   setTermFontWeight: (weight: number) => void
   setTermCursorColor: (color: string) => void
+  toggleRail: () => void
   snapshotWorkspace: (label: string) => Promise<RepoCheckpoint | null>
   restoreRepoCheckpoint: (id: string) => Promise<void>
   pushAgentFeed: (item: Omit<AgentFeedItem, 'id'>) => void
@@ -1392,6 +1395,7 @@ function persistSnapshot(s: KaisolaState) {
     automationsEnabled: s.automationsEnabled,
     ecoMode: s.ecoMode,
     railWidth: s.railWidth,
+    railOpen: s.railOpen,
     claudeSessions: s.claudeSessions,
     // TABS
     projectTabs: s.projectTabs,
@@ -1600,6 +1604,7 @@ export const useKaisola = create<KaisolaState>()(
   fileTextZoom: 1,
   ecoMode: false,
   railWidth: null,
+  railOpen: true,
   claudeSessions: {},
   termFontSize: 12,
   termFontFamily: 'JetBrains Mono',
@@ -2424,6 +2429,7 @@ export const useKaisola = create<KaisolaState>()(
   setTermFontWeight: (weight) => set({ termFontWeight: [400, 500, 700].includes(weight) ? weight : 500 }),
   setTermCursorColor: (color) =>
     set({ termCursorColor: color === 'auto' || /^#[0-9a-fA-F]{6}$/.test(color) ? color : 'auto' }),
+  toggleRail: () => set((s) => ({ railOpen: !s.railOpen })),
 
   // ── working-tree checkpoints (Zed-style restore points, via hidden git refs) ──
   snapshotWorkspace: async (label) => {

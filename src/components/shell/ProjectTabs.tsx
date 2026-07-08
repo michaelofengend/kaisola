@@ -76,6 +76,7 @@ export function ProjectTabs() {
   return (
     <div className="tabstrip">
       <WindowLights />
+      <RailToggle />
       <div className="tabstrip-track" role="tablist" ref={trackRef} onScroll={syncFade}>
         {tabs.map((tab) => {
           const active = tab.id === activeId
@@ -199,6 +200,25 @@ export function ProjectTabs() {
         document.body,
       )}
     </div>
+  )
+}
+
+/**
+ * Sidebar toggle in the Claude-app spot — right of the traffic lights.
+ * Hides/shows the left workspace rail (files + outline); ⌘B does the same.
+ */
+function RailToggle() {
+  const railOpen = useKaisola((s) => s.railOpen)
+  const toggleRail = useKaisola((s) => s.toggleRail)
+  return (
+    <button
+      className="rail-toggle"
+      onClick={toggleRail}
+      aria-label={railOpen ? 'Hide sidebar' : 'Show sidebar'}
+      title={railOpen ? 'Hide sidebar  ⌘B' : 'Show sidebar  ⌘B'}
+    >
+      <Icon name={railOpen ? 'PanelLeftClose' : 'PanelLeftOpen'} size={14} />
+    </button>
   )
 }
 

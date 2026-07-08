@@ -52,6 +52,7 @@ const KEY_ACTIONS: Record<string, () => void> = {
   'git.panel': () => useKaisola.getState().openGitPanel(),
   'browser.new': () => useKaisola.getState().openBrowserPanel(),
   'latex.toggle': () => useKaisola.getState().setLatexMode(!useKaisola.getState().latexMode),
+  'rail.toggle': () => useKaisola.getState().toggleRail(),
   // project tabs (mirrors the native File/Window menu, which owns these chords
   // as accelerators on desktop; this keymap is the path on web / rebinds)
   'project.new': () => { useKaisola.getState().newProject({ path: null, focus: true }) },
@@ -78,6 +79,7 @@ const DEFAULT_KEYMAP: Record<string, string> = {
   'cmd-,': 'settings.open',
   'cmd-shift-n': 'window.new',
   'cmd-l': 'omni.toggle',
+  'cmd-b': 'rail.toggle',
   'ctrl-tab': 'session.next',
   'ctrl-shift-tab': 'session.prev',
   'cmd-shift-t': 'session.reopen',
@@ -204,6 +206,7 @@ export default function App() {
   const canvasWidth = useKaisola((s) => s.canvasWidth)
   const setCanvasWidth = useKaisola((s) => s.setCanvasWidth)
   const railWidth = useKaisola((s) => s.railWidth)
+  const railOpen = useKaisola((s) => s.railOpen)
   const requestTerminal = useKaisola((s) => s.requestTerminal)
   const workspacePath = useKaisola((s) => s.workspacePath)
   const activeProjectId = useKaisola((s) => s.activeProjectId)
@@ -576,9 +579,10 @@ export default function App() {
       <div
         className="app-body"
         data-layout={layoutMode}
+        data-rail={studio && !railOpen ? 'closed' : undefined}
         style={railWidth ? ({ '--wsrail-w': `${railWidth}px` } as CSSProperties) : undefined}
       >
-        {studio && <WorkspaceRail />}
+        {studio && railOpen && <WorkspaceRail />}
         {/* session cards on the left, the files/canvas card on the right
             (minimizable — when hidden the cards take the whole work row) */}
         <div className="work-row">

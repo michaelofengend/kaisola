@@ -338,6 +338,24 @@
   margin-top: 0;
   padding: 0 var(--sp-3) 0 var(--sp-2);
 }
+/* sidebar toggle, in the Claude-app spot right of the lights — a quiet
+   ghost button that only speaks on hover */
+.tabstrip .rail-toggle {
+  -webkit-app-region: no-drag;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-right: var(--sp-2);
+  border-radius: var(--r-2);
+  color: var(--text-3);
+}
+.tabstrip .rail-toggle:hover {
+  color: var(--text-1);
+  background: var(--hover-overlay);
+}
 
 /* the strip pushes the two absolutely-positioned overlays down by its height.
    .top-progress lives in components.css (imported before this file), so this
@@ -547,6 +565,18 @@
 }
 .app[data-sidebar='false'] .app-body {
   grid-template-columns: var(--wsrail-w) 1fr;
+}
+/* rail hidden (the strip's panel button / ⌘B): the first track leaves the
+   grid entirely — the element isn't rendered, so a 0px track would pull the
+   remaining children one column left onto nothing */
+.app-body[data-rail='closed'] {
+  grid-template-columns: var(--sidebar-w) 1fr;
+}
+.app-body[data-rail='closed'][data-sidebar-side='right'] {
+  grid-template-columns: 1fr var(--sidebar-w);
+}
+.app[data-sidebar='false'] .app-body[data-rail='closed'] {
+  grid-template-columns: 1fr;
 }
 .app-body[data-layout='focus'] {
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);

@@ -30,7 +30,7 @@ export const KEYMAP_TEMPLATE = `// Kaisola keymap — chord → action (null dis
 // Chords: cmd- ctrl- alt- shift- + a key, e.g. "cmd-shift-t".
 // Actions: dock.toggle canvas.toggle layout.toggle settings.open window.new
 //   omni.toggle session.next session.prev session.reopen session.1 … session.9
-//   terminal.new git.panel browser.new latex.toggle
+//   terminal.new git.panel browser.new latex.toggle rail.toggle
 // (⌘K / ⌘P for the palettes are fixed.)
 [
   { "bindings": {
@@ -129,7 +129,7 @@ function applySettings(raw: unknown) {
 const KEYMAP_ACTIONS = new Set([
   'dock.toggle', 'canvas.toggle', 'layout.toggle', 'settings.open', 'window.new',
   'omni.toggle', 'session.next', 'session.prev', 'session.reopen',
-  'terminal.new', 'git.panel', 'browser.new', 'latex.toggle',
+  'terminal.new', 'git.panel', 'browser.new', 'latex.toggle', 'rail.toggle',
   ...Array.from({ length: 9 }, (_, i) => `session.${i + 1}`),
 ])
 // the palettes own these — a rebind here would DOUBLE-FIRE against their own
