@@ -1555,3 +1555,15 @@ details.assistant-tool.tool-artifacts > summary::-webkit-details-marker { displa
 .mcp-install-row code { font-family: var(--font-mono); font-size: var(--fs-11); color: var(--text-1); min-width: 0; }
 .mcp-install-msg { font-size: var(--fs-12); color: var(--warning, #d8a44a); }
 .mcp-install-actions { display: flex; gap: var(--sp-2); padding: 0 var(--sp-5) var(--sp-4); }
+
+/* turn-rail restore (per-prompt checkpoints — the /rewind grammar) */
+.turn-pop-restore {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  font-size: var(--fs-11);
+  color: var(--accent);
+  cursor: pointer;
+}
+.turn-pop-restore:hover { text-decoration: underline; }

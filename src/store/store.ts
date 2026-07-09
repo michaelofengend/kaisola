@@ -144,6 +144,8 @@ export interface AssistantTurn {
   thinkMs?: number
   /** Tool-call artifacts (diffs, embedded terminals) for the disclosure card. */
   artifacts?: ToolArtifact[]
+  /** User turns: the pre-turn working-tree checkpoint (turn-rail Restore). */
+  checkpointId?: string
 }
 
 /** One ACP plan entry — the agent's own todo list (whole-array replace). */

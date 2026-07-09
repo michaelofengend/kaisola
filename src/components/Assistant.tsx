@@ -789,6 +789,20 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     const userTurn: Turn = { kind: 'user', text: shownText, at: Date.now() }
     updateRuntime(threadId, (r) => ({ ...r, turns: [...r.turns, userTurn], first: false }))
     setThreadBusy(threadId, true)
+    // per-prompt checkpoint (Claude Code's /rewind grammar): snap the working
+    // tree BEFORE the agent acts, attach the id to this turn — the turn rail
+    // grows a "Restore files" affordance. Non-blocking: the snapshot races the
+    // prompt harmlessly (it captures pre-turn state either way, git is fast).
+    {
+      const turnAt = userTurn.at
+      void useKaisola.getState().snapshotWorkspace(`Before “${prompt.text.slice(0, 40)}”`).then((ckpt) => {
+        if (!ckpt) return
+        updateRuntime(threadId, (r) => ({
+          ...r,
+          turns: r.turns.map((x) => (x.kind === 'user' && x.at === turnAt ? { ...x, checkpointId: ckpt.id } : x)),
+        }))
+      })
+    }
     if (opts.clearDraft) {
       clearAssistantDraft(threadId, { keepSpeed: true })
       resetComposerHeight()
@@ -973,6 +987,21 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
                   {reply.tools > 0 && <span>{reply.tools} tool call{reply.tools === 1 ? '' : 's'}</span>}
                   {p.turn.at != null && <span>{clockTime(new Date(p.turn.at).toISOString())}</span>}
                 </div>
+                {p.turn.checkpointId && (
+                  <button
+                    className="turn-pop-restore"
+                    onClick={() => {
+                      const st = useKaisola.getState()
+                      void st.restoreRepoCheckpoint(p.turn.checkpointId!).then(() => {
+                        st.pushToast('success', 'Files restored to before this prompt. The agent doesn’t know — mention it in your next message.')
+                      })
+                      setRailHover(null)
+                    }}
+                    title="Reset the working tree to how it was before this prompt ran (conversation stays)"
+                  >
+                    <Icon name="History" size={11} /> Restore files to here
+                  </button>
+                )}
               </div>
             )
           })()}
