@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useKaisola } from '../store/store'
 import { ProposalCard } from './ProposalCard'
 import { Icon } from './Icon'
@@ -28,29 +28,65 @@ export function ReviewFocus() {
   const close = useKaisola((s) => s.focusProposal)
   const pickWinner = useKaisola((s) => s.pickWinner)
   const synthesizeProposals = useKaisola((s) => s.synthesizeProposals)
-
-  useEffect(() => {
-    if (!id) return
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close(null)
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [id, close])
+  const panelRef = useRef<HTMLDivElement>(null)
+  // j/k hunk cursor — DOM-walked ([data-hunknav]) so it needs no state coupling
+  const navRef = useRef(-1)
 
   const proposal = proposals.find((p) => p.id === id)
-  if (!id || !proposal) return null
-
   // best-of-N: if this proposal belongs to a group with >1 pending sibling,
   // show a side-by-side compare and let the human pick the winner (the gate).
   const competing =
-    proposal.groupId != null
+    proposal?.groupId != null
       ? proposals.filter((p) => p.groupId === proposal.groupId && p.status === 'pending')
       : []
   const isCompare = competing.length > 1
   const canSynthesize = isCompare && !competing.some((p) => p.agentId === 'human')
+  const pending = proposal?.status === 'pending'
+  const isFilePatch = !!proposal?.changes.some((c) => c.entityType === 'file')
+
+  useEffect(() => { navRef.current = -1 }, [id])
+  useEffect(() => {
+    if (!id) return
+    // Hunk-style single-keystroke review: j/k walk the hunks, a approves
+    // (merge for file patches), r rejects, Esc dismisses without deciding.
+    // Compare mode keeps a/r off — picking a winner must stay deliberate.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { close(null); return }
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target as HTMLElement | null
+      if (t?.closest('input, textarea, select, [contenteditable="true"]')) return
+      if (e.key === 'j' || e.key === 'k') {
+        const nodes = [...(panelRef.current?.querySelectorAll('[data-hunknav]') ?? [])] as HTMLElement[]
+        if (!nodes.length) return
+        e.preventDefault()
+        navRef.current = Math.min(nodes.length - 1, Math.max(0, navRef.current + (e.key === 'j' ? 1 : -1)))
+        nodes.forEach((n, i) => n.toggleAttribute('data-navactive', i === navRef.current))
+        const active = nodes[navRef.current]
+        // a hunk inside a collapsed file must open before it can be seen
+        active.closest('details')?.setAttribute('open', '')
+        active.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        return
+      }
+      if (isCompare || !pending || !proposal) return
+      const st = useKaisola.getState()
+      if (e.key === 'a') {
+        e.preventDefault()
+        if (isFilePatch) void st.mergeWorktreeProposal(proposal.id)
+        else st.approveProposal(proposal.id)
+      } else if (e.key === 'r') {
+        e.preventDefault()
+        st.rejectProposal(proposal.id)
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [id, close, isCompare, pending, isFilePatch, proposal])
+
+  if (!id || !proposal) return null
 
   return (
     <div className="focus-scrim" onMouseDown={() => close(null)}>
-      <div className={`focus-panel${isCompare ? ' focus-panel-wide' : ''}`} onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={panelRef} className={`focus-panel${isCompare ? ' focus-panel-wide' : ''}`} onMouseDown={(e) => e.stopPropagation()}>
         <header className="focus-head">
           <Icon name={isCompare ? 'Columns3' : 'GitPullRequestArrow'} size={14} className="muted" />
           <span className="grow">{isCompare ? `Best-of-${competing.length}: pick the winner — the rest are rejected` : 'Review decision'}</span>
@@ -90,6 +126,14 @@ export function ReviewFocus() {
             <ProposalCard proposal={proposal} />
           )}
         </div>
+        {!isCompare && pending && (
+          <footer className="focus-keys">
+            <span><kbd>j</kbd><kbd>k</kbd> hunks</span>
+            <span><kbd>a</kbd> {isFilePatch ? 'merge' : 'approve'}</span>
+            <span><kbd>r</kbd> reject</span>
+            <span><kbd>esc</kbd> close</span>
+          </footer>
+        )}
       </div>
     </div>
   )

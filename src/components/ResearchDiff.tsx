@@ -42,47 +42,100 @@ function pairPatchLines(lines: string[]): Map<number, { other: string; side: 'a'
   return pairs
 }
 
+/** One `@@` block of a unified diff, with its own +/− counts. */
+interface PatchHunk {
+  header: string
+  lines: string[]
+  add: number
+  del: number
+}
+
+/** Split a per-file unified diff into hunks (the ---/+++ preamble is implied
+ * by the change label and dropped from display). */
+function splitHunks(lines: string[]): PatchHunk[] {
+  const hunks: PatchHunk[] = []
+  let cur: PatchHunk | null = null
+  for (const line of lines) {
+    if (line.startsWith('@@')) {
+      cur = { header: line, lines: [], add: 0, del: 0 }
+      hunks.push(cur)
+    } else if (cur) {
+      cur.lines.push(line)
+      if (line.startsWith('+') && !line.startsWith('+++')) cur.add++
+      else if (line.startsWith('-') && !line.startsWith('---')) cur.del++
+    }
+  }
+  return hunks
+}
+
+function PatchLines({ lines, wordDiffs }: { lines: string[]; wordDiffs: boolean }) {
+  const pairs = wordDiffs ? pairPatchLines(lines) : new Map<number, { other: string; side: 'a' | 'b' }>()
+  return (
+    <pre className="rdiff-patch">
+      {lines.map((line, i) => {
+        const cls =
+          line.startsWith('+') && !line.startsWith('+++') ? 'pl-add'
+            : line.startsWith('-') && !line.startsWith('---') ? 'pl-del'
+              : ''
+        const pair = pairs.get(i)
+        if (pair) {
+          // word-mark this line against its counterpart across the -/+ run
+          const self = line.slice(1)
+          const ch = changedWords(pair.side === 'a' ? self : pair.other, pair.side === 'a' ? pair.other : self)
+          return (
+            <div key={i} className={cls}>
+              {line[0]}
+              <WordMarked text={self} changed={pair.side === 'a' ? ch.a : ch.b} />
+            </div>
+          )
+        }
+        return <div key={i} className={cls}>{line || ' '}</div>
+      })}
+    </pre>
+  )
+}
+
 export function ResearchDiff({ change }: { change: ProposalChange }) {
   const wordDiffs = useKaisola((s) => s.wordDiffs)
   const verb =
     change.kind === 'create' ? 'add' : change.kind === 'delete' ? 'remove' : 'change'
 
-  // a file-patch change (from a coding agent's worktree) renders as a code diff
+  // A file-patch change (from a coding agent's worktree) renders as a code
+  // diff, HUNK-STRUCTURED (the Zed/Hunk review ergonomic): every @@ block is
+  // its own bordered section with a header + its own +/− stat, and carries
+  // data-hunknav so the review overlay's j/k keys can walk change-by-change.
+  // Big diffs arrive collapsed — the summary line is the file's overview.
   if (change.entityType === 'file') {
     const patch = (change.payload as { patch?: string } | undefined)?.patch ?? change.after ?? ''
     const lines = patch.split('\n')
-    const pairs = wordDiffs ? pairPatchLines(lines) : new Map<number, { other: string; side: 'a' | 'b' }>()
+    const hunks = splitHunks(lines)
+    const big = lines.length > 400
     return (
-      <div className="rdiff rdiff-file">
-        <div className="rdiff-head">
+      <details className="rdiff rdiff-file" open={!big}>
+        <summary className="rdiff-head rdiff-file-head">
+          <Icon name="FileDiff" size={12} />
           <span className={`rdiff-kind rdiff-${change.kind}`}>{verb}</span>
-          <span className="rdiff-entity">file</span>
           <span className="rdiff-label grow truncate">{change.label}</span>
           {change.reason && <span className="rdiff-stat faint">{change.reason}</span>}
-        </div>
-        <pre className="rdiff-patch">
-          {lines.map((line, i) => {
-            const cls =
-              line.startsWith('@@') ? 'pl-hunk'
-                : line.startsWith('+') && !line.startsWith('+++') ? 'pl-add'
-                  : line.startsWith('-') && !line.startsWith('---') ? 'pl-del'
-                    : ''
-            const pair = pairs.get(i)
-            if (pair) {
-              // word-mark this line against its counterpart across the -/+ run
-              const self = line.slice(1)
-              const ch = changedWords(pair.side === 'a' ? self : pair.other, pair.side === 'a' ? pair.other : self)
-              return (
-                <div key={i} className={cls}>
-                  {line[0]}
-                  <WordMarked text={self} changed={pair.side === 'a' ? ch.a : ch.b} />
-                </div>
-              )
-            }
-            return <div key={i} className={cls}>{line || ' '}</div>
-          })}
-        </pre>
-      </div>
+          {hunks.length > 1 && <span className="rdiff-stat faint">{hunks.length} hunks</span>}
+        </summary>
+        {hunks.map((h, hi) => (
+          <div key={hi} className="rdiff-hunk" data-hunknav>
+            <div className="rdiff-hunk-head">
+              <code className="truncate">{h.header}</code>
+              <span className="grow" />
+              <span className="rdiff-stat">
+                {h.add > 0 && <em className="add">+{h.add}</em>}
+                {h.add > 0 && h.del > 0 && ' '}
+                {h.del > 0 && <em className="del">−{h.del}</em>}
+              </span>
+            </div>
+            <PatchLines lines={h.lines} wordDiffs={wordDiffs} />
+          </div>
+        ))}
+        {/* a patch without @@ headers (rare: mode-only, binary note) shows whole */}
+        {!hunks.length && <PatchLines lines={lines} wordDiffs={wordDiffs} />}
+      </details>
     )
   }
 

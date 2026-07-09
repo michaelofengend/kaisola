@@ -287,6 +287,52 @@
 .rdiff-patch .pl-del { color: var(--danger); background: var(--danger-soft); }
 .rdiff-patch .pl-hunk { color: var(--accent); }
 
+/* ── Hunk-structured file diffs (agent patch review) ─────────────────────── */
+/* the file head doubles as a <summary> — collapse big diffs to their overview */
+.rdiff-file-head {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.rdiff-file-head::-webkit-details-marker { display: none; }
+.rdiff-file[open] > .rdiff-file-head { border-bottom: 1px solid var(--border-faint); }
+.rdiff-hunk {
+  border-bottom: 1px solid var(--border-faint);
+  scroll-margin: 48px; /* j/k scrollIntoView clears the sticky overlay head */
+}
+.rdiff-hunk:last-child { border-bottom: none; }
+.rdiff-hunk-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-3));
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  color: var(--accent);
+}
+.rdiff-hunk-head .rdiff-stat .add { color: var(--success); font-style: normal; }
+.rdiff-hunk-head .rdiff-stat .del { color: var(--danger); font-style: normal; }
+.rdiff-hunk .rdiff-patch { max-height: 260px; }
+/* the j/k cursor — one quiet accent ring on the hunk under review */
+.rdiff-hunk[data-navactive] {
+  box-shadow: inset 2px 0 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+
+/* single-keystroke review hints — the focus overlay's quiet footer */
+.focus-keys {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding: var(--sp-2) var(--sp-5);
+  border-top: 1px solid var(--border-faint);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.focus-keys kbd { margin-right: var(--sp-1); }
+
 /* ── Proposal card ───────────────────────────────────────────────────────── */
 .proposal {
   display: flex;
