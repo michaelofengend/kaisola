@@ -2411,7 +2411,34 @@ a^2 + b^2 = c^2
   }
   console.log('WTSESS=' + JSON.stringify(wtsess))
 
+  // A MANUAL claude (plain terminal, user typed `claude`) upgrades to a
+  // restart-surviving agent: singleton on the fg-process signal, and downgrades
+  // back when claude exits to the shell — the "second claude + its draft
+  // vanished on restart" fix (setTerminalMeta, store.ts).
+  const manualClaude = await win.webContents.executeJavaScript(`(async () => {
+    const g = () => window.__kaisola.getState()
+    g().requestTerminal()
+    const t = g().terminals[g().terminals.length - 1]
+    g().setTerminalMeta(t.id, { fgProcess: 'claude' })
+    const up = g().terminals.find((x) => x.id === t.id)
+    const upgraded = !!up && up.singletonKey === 'agent:claude-cli-' + t.id && up.restart === true && up.boot === 'claude --continue'
+    // drafts must track from this moment (the trackDraft gate keys off agent:*)
+    g().setTermDraft(t.id, 'half-typed thought')
+    const draftKept = g().termDrafts[t.id] === 'half-typed thought'
+    // a mid-session tool run (fg flips to a non-shell) must NOT downgrade…
+    g().setTerminalMeta(t.id, { fgProcess: 'git' })
+    const toolKept = g().terminals.find((x) => x.id === t.id).singletonKey === 'agent:claude-cli-' + t.id
+    // …but exiting claude back to the shell must
+    g().setTerminalMeta(t.id, { fgProcess: 'zsh' })
+    const down = g().terminals.find((x) => x.id === t.id)
+    const downgraded = !!down && !down.singletonKey && !down.boot && !down.restart
+    g().closeTerminal(t.id)
+    return { upgraded, draftKept, toolKept, downgraded }
+  })()`)
+  console.log('MANUAL_CLAUDE=' + JSON.stringify(manualClaude))
+
   const failed =
+    !manualClaude.upgraded || !manualClaude.draftKept || !manualClaude.toolKept || !manualClaude.downgraded ||
     !rootChildren || !minimalShell.noWorkflowSidebar || !minimalShell.railHiddenByDefault || !minimalShell.hasSessions || !minimalShell.railFilesOnly || !minimalShell.hasEmptyLauncher || !minimalShell.stageFiles || !minimalShell.studioDefault || !minimalShell.floatingTools || !claudePrepared || !nativeWindow.rendererClippedMaterial || !icon.exists || !icon.usable || !icon.square || !icon.large || !glass.appSamplingLayer || !glass.chromeGlass || !glass.activeTintWhite || !glass.railLayerFlattened || !glass.contentGlassy || !glass.sessionGlassy || !glass.termGlassTint || !glass.blurKeepsGlass || !glass.lightsGray || !glass.nativeWindowRounding ||
     !emptyOk || !demoOk ||
     !review.opened || !review.closed || !review.decided ||

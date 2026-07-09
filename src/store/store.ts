@@ -2095,7 +2095,37 @@ export const useKaisola = create<KaisolaState>()(
           return Array.isArray(v) ? Array.isArray(c) && v.join() === c.join() : c === v
         })
       if (same) return s
-      return { terminalMeta: { ...s.terminalMeta, [id]: { ...s.terminalMeta[id], ...patch } } }
+      // A MANUALLY-started claude (plain terminal, user typed `claude`) used to
+      // vanish on restart: only `restart: true` rows persist their boot, and
+      // only `agent:`/`wt:` singletons track drafts. The fg-process signal
+      // already tells us claude is running here — upgrade the row on the spot
+      // (persisted `--continue` boot + an agent: key, so the existing restart
+      // re-boot AND draft retype machinery take over with zero extra wiring).
+      // When claude exits back to the shell the upgrade is undone, so a
+      // terminal that merely visited claude doesn't resurrect it at next boot.
+      // NB `--continue` is cwd-scoped "most recent conversation" — without
+      // hooks armed a manual claude emits no session ids, so exact --resume
+      // isn't reachable for it; recovering the latest chat is the honest best.
+      let terminals = s.terminals
+      if ('fgProcess' in patch) {
+        const t = s.terminals.find((x) => x.id === id)
+        const fg = String(patch.fgProcess || '')
+        if (t && !t.singletonKey && /^claude\b/.test(fg)) {
+          terminals = s.terminals.map((x) =>
+            x.id === id
+              ? { ...x, singletonKey: `agent:claude-cli-${id}`, restart: true, boot: 'claude --continue', name: x.name ?? 'Claude' }
+              : x,
+          )
+        } else if (t && t.singletonKey?.startsWith('agent:claude-cli-') && /^-?(zsh|bash|fish|sh)$/.test(fg)) {
+          terminals = s.terminals.map((x) =>
+            x.id === id ? { ...x, singletonKey: undefined, restart: undefined, boot: undefined } : x,
+          )
+        }
+      }
+      return {
+        terminalMeta: { ...s.terminalMeta, [id]: { ...s.terminalMeta[id], ...patch } },
+        ...(terminals !== s.terminals ? { terminals } : {}),
+      }
     }),
   // send a terminal card to its own window; the card leaves this window's grid
   // (one pty stream has ONE renderer at a time) and returns on pop close

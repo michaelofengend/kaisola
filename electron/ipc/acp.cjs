@@ -256,8 +256,21 @@ class AcpConnection {
     return this.request('authenticate', { methodId })
   }
 
+  /** session/new|load with the mcpServers param — and a bare retry when the
+   * agent advertises http MCP but zod-rejects our entry (-32602): a broken
+   * tool hookup must degrade to a working, tool-less chat, never a dead thread. */
+  async _session(method, params) {
+    const servers = this.sessionMcpServers()
+    try {
+      return await this.request(method, { ...params, mcpServers: servers })
+    } catch (err) {
+      if (!servers.length || !/invalid params/i.test(String(err && err.message))) throw err
+      return await this.request(method, { ...params, mcpServers: [] })
+    }
+  }
+
   async newSession() {
-    const res = await this.request('session/new', { cwd: this.cwd, mcpServers: this.sessionMcpServers() })
+    const res = await this._session('session/new', { cwd: this.cwd })
     this.sessionId = res.sessionId
     this.modes = res.modes || null
     this.models = res.models || null
@@ -271,7 +284,7 @@ class AcpConnection {
    * flight those route nowhere, which is right: the renderer already shows the
    * persisted transcript; what we want back is the AGENT's internal state. */
   async loadSession(sessionId) {
-    const res = await this.request('session/load', { sessionId, cwd: this.cwd, mcpServers: this.sessionMcpServers() })
+    const res = await this._session('session/load', { sessionId, cwd: this.cwd })
     this.sessionId = sessionId
     this.modes = (res && res.modes) || this.modes || null
     this.models = (res && res.models) || this.models || null

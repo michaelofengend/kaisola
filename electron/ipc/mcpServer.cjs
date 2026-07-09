@@ -302,10 +302,16 @@ function configPath() {
   return path.join(app.getPath('userData'), 'kaisola-mcp.json')
 }
 
-/** The ACP `session/new` mcpServers entry (agents advertising http support). */
+/** The ACP `session/new` mcpServers entry (agents advertising http support).
+ * ACP-wire shape: headers is an ARRAY of {name,value} pairs (the spec's
+ * HttpHeader[]) — claude-code-acp zod-rejects an object map and codex-acp
+ * serde-rejects it, both as a bare -32602 at session/new (the "Invalid
+ * params" Connect bug; proven by electron/acpwireprobe.mjs against both
+ * agents). The claude TERMINAL's --mcp-config file above is the opposite:
+ * .mcp.json wants an object map. Two consumers, two shapes. */
 function mcpHttpEntry() {
   if (!port) return null
-  return { type: 'http', name: 'kaisola', url: `http://127.0.0.1:${port}/`, headers: { Authorization: `Bearer ${token}` } }
+  return { type: 'http', name: 'kaisola', url: `http://127.0.0.1:${port}/`, headers: [{ name: 'Authorization', value: `Bearer ${token}` }] }
 }
 
 function registerMcpHandlers(ipcMain) {
