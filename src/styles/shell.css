@@ -434,6 +434,55 @@
 .tabstrip-tools * {
   -webkit-app-region: no-drag;
 }
+/* the cross-project inbox (Settings → Interface): hidden at zero, a quiet
+   bell + count otherwise; the menu is a right-anchored dropdown */
+.inbox-wrap { position: relative; }
+.inbox-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 26px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-full);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text-1);
+  cursor: pointer;
+}
+.inbox-btn:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.inbox-count { font-size: 10px; font-weight: var(--fw-bold); font-family: var(--font-mono); }
+.inbox-overlay { position: fixed; inset: 0; z-index: 90; }
+.inbox-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 91;
+  min-width: 260px;
+  max-width: 340px;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-1);
+}
+.inbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-2);
+  color: var(--text-1);
+  font-size: var(--fs-12);
+  text-align: left;
+  cursor: pointer;
+}
+.inbox-row:hover { background: var(--hover-overlay); }
+.inbox-row-label { min-width: 0; flex: 1; }
+.inbox-row-detail { flex-shrink: 0; color: var(--text-3); font-size: var(--fs-11); }
+.inbox-empty { padding: var(--sp-3); color: var(--text-3); font-size: var(--fs-12); }
 
 /* traffic lights ride at the strip's left — reuse the shared .lights/.light
    rules (below), just re-centered for the shorter strip. Visible in

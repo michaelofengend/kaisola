@@ -6,6 +6,7 @@ import { useUpdateState } from '../../lib/updates'
 import { Icon } from '../Icon'
 import { Dropdown, type DropOption } from '../Dropdown'
 import { WindowLights } from './WindowLights'
+import { InboxButton } from './InboxButton'
 import { ShellTools } from './AgentSidebar'
 
 const basename = (p: string | null | undefined) => (p ? p.split('/').filter(Boolean).pop() : undefined)
@@ -148,6 +149,7 @@ export function ProjectTabs() {
           never overlapping the session tabs below (App renders the floating
           fallback only where this strip doesn't exist: web + pop windows) */}
       <div className="tabstrip-tools">
+        <InboxButton />
         <ShellTools />
       </div>
 
