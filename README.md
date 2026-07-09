@@ -5,7 +5,7 @@
 <h1 align="center">Kaisola</h1>
 
 <p align="center">
-  <b>The research IDE that's a browser for AI agents.</b><br />
+  <b>An IDE browser for AI agents.</b><br />
   Every agent is a tab — <code>claude</code>, <code>codex</code>, <code>gemini</code>, any CLI — side by side on glass,<br />
   with you reviewing every change before it lands.
 </p>
