@@ -51,17 +51,22 @@ function Row({ tone, pulse, name, sub, state, title, action }: {
   tone: string; pulse?: boolean; name: string; sub?: string; state: string; title?: string
   action?: { label: string; onClick: () => void }
 }) {
+  // state reads inline after the name — the old right-aligned grow-spacer
+  // left half of every row as dead gutter (measured)
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }} title={title}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }} title={title}>
       <StatusDot tone={tone} pulse={pulse} />
       <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>{name}</span>
-      {sub && <span className="faint truncate">{sub}</span>}
-      <span className="grow" />
-      <span className="faint" style={{ whiteSpace: 'nowrap' }}>{state}</span>
+      <span className="faint truncate" style={{ minWidth: 0 }}>
+        {[sub, state].filter(Boolean).join(' · ')}
+      </span>
       {action && (
-        <button className="btn btn-ghost btn-sm" style={{ height: 20, padding: '0 6px' }} onClick={action.onClick}>
-          {action.label}
-        </button>
+        <>
+          <span className="grow" />
+          <button className="btn btn-ghost btn-sm" style={{ height: 20, padding: '0 6px', flexShrink: 0 }} onClick={action.onClick}>
+            {action.label}
+          </button>
+        </>
       )}
     </div>
   )
@@ -153,6 +158,20 @@ export function AgentStatusButton() {
 
   const busy = new Set(busyKeys.split(',').filter(Boolean))
   const connectedCount = agents.filter((a) => a.connected).length + (claudeRunning ? 1 : 0)
+  // quiet = nothing running, nothing asking for sign-in — the itemized rows
+  // would all read the same, so a summary line carries them instead
+  const anyWorking = agents.some((a) => busy.has(a.key) || a.busy) || !!claudeRunning
+  const anyAttention = anyWorking || agents.some((a) => !a.connected && a.authMethods?.length)
+  const allQuiet = !anyAttention
+  const offMenu = menu.filter((m) => m.kind === 'acp' && !agents.some((a) => (a.presetId ?? a.key) === m.id))
+  const quietConnected = agents.filter((a) => a.connected).length
+  const quietOff = agents.length - quietConnected + offMenu.length
+  // hover keeps the full roster reachable while the panel stays one line
+  const quietTitle = [
+    ...(claudeRunning !== undefined ? ['Claude Code (terminal)'] : []),
+    ...agents.map((a) => `${a.name ?? agentName(all, a.presetId ?? a.key) ?? a.key} (${a.connected ? 'connected' : 'off'})`),
+    ...offMenu.map((m) => `${m.name} (off)`),
+  ].join('\n')
   const anyPresent = agents.length > 0 || claudeRunning !== undefined
   const needsApproval = servers.some((r) => r.scope === 'project' && !r.approved)
   const probeFailed = servers.some((r) => r.enabled && r.kind !== 'stdio' && probes[r.name] && !probes[r.name].ok)
@@ -224,7 +243,7 @@ export function AgentStatusButton() {
         <div className="tree-menu-overlay" onMouseDown={() => setOpen(false)}>
           <div
             style={{
-              position: 'fixed', right: pos.right, top: pos.top, width: 300, zIndex: 'var(--z-menu, 900)' as never,
+              position: 'fixed', right: pos.right, top: pos.top, width: 252, zIndex: 'var(--z-menu, 900)' as never,
               background: 'var(--bg-3)', border: '1px solid var(--border)', borderRadius: 'var(--r-3, 10px)',
               boxShadow: 'var(--shadow-3, 0 12px 40px rgba(0,0,0,.4))', padding: '10px 12px',
               display: 'flex', flexDirection: 'column', gap: 8, fontSize: 'var(--fs-12)',
@@ -241,7 +260,18 @@ export function AgentStatusButton() {
               </button>
             </div>
 
-            {claudeRunning !== undefined && (
+            {/* everything quiet → one summary line (roster rides the tooltip);
+                itemize only when a row differentiates (working / sign-in / running) */}
+            {allQuiet && (anyPresent || offMenu.length > 0) && (
+              <span className="faint" title={quietTitle || undefined}>
+                {[
+                  quietConnected ? `${quietConnected} connected` : null,
+                  claudeRunning !== undefined ? 'terminal ready' : null,
+                  quietOff ? `${quietOff} off` : null,
+                ].filter(Boolean).join(' · ')} — all idle
+              </span>
+            )}
+            {!allQuiet && claudeRunning !== undefined && (
               <Row
                 tone={claudeRunning ? DOT.on : DOT.off}
                 pulse={claudeRunning}
@@ -250,7 +280,7 @@ export function AgentStatusButton() {
                 state={claudeRunning ? 'running' : 'idle'}
               />
             )}
-            {agents.map((a) => {
+            {!allQuiet && agents.map((a) => {
               // busy: renderer thread state OR main's per-connection truth
               const working = busy.has(a.key) || !!a.busy
               const tone = a.connected ? DOT.on : a.authMethods?.length ? DOT.warn : DOT.off
@@ -279,11 +309,9 @@ export function AgentStatusButton() {
             })}
             {/* enabled agents that AREN'T connected still get a quiet row —
                 rows must never vanish between sessions ("doesn't stay") */}
-            {menu
-              .filter((m) => m.kind === 'acp' && !agents.some((a) => (a.presetId ?? a.key) === m.id))
-              .map((m) => (
-                <Row key={`off:${m.id}`} tone={DOT.off} name={m.name} sub="acp" state="off" title="Not connected — open a session from the + menu" />
-              ))}
+            {!allQuiet && offMenu.map((m) => (
+              <Row key={`off:${m.id}`} tone={DOT.off} name={m.name} sub="acp" state="off" title="Not connected — open a session from the + menu" />
+            ))}
             {claudeRunning === undefined && agents.length === 0 && menu.filter((m) => m.kind === 'acp').length === 0 && (
               <span className="faint">No agents connected — open a session from the + menu.</span>
             )}

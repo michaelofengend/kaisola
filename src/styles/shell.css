@@ -89,13 +89,34 @@
   inset: 0;
   z-index: -2;
   pointer-events: none;
+  overflow: hidden;
+}
+/* the painting rides its own filtered child — a filter on the parent would
+   also blur the grain pseudo below into nothing */
+.app-wallpaper::before {
+  content: '';
+  position: absolute;
+  inset: 0;
   background-image: var(--wallpaper-img, radial-gradient(120% 90% at 30% 0%,
     color-mix(in srgb, var(--accent) 14%, var(--bg-0)), var(--bg-0)));
   background-size: var(--wallpaper-size, cover);
   background-position: var(--wallpaper-x, 0) var(--wallpaper-y, 0);
   background-repeat: no-repeat;
-  filter: blur(24px) saturate(1.25);
+  /* blur 14 (was 24): 24 erased ALL organic variation into flat blobs; 14
+     keeps soft color-drift flowing while still burying the source JPEG's
+     block artifacts (verified against the real pipeline at both values) */
+  filter: blur(14px) saturate(1.25);
   transform: scale(1.04); /* hide the blur's edge vignette */
+}
+/* the same frost grain the veils wear, on the painting itself — texture is
+   what reads as "glass" up close, not just blur */
+.app-wallpaper::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: var(--frost-grain);
+  background-repeat: repeat;
+  opacity: 0.5;
 }
 /* Dark theme: the glass field must DARKEN what it samples, never lift it —
    the light-tuned white tint + brightness() left the transparent rail nearly
@@ -305,6 +326,13 @@
   --ptab-bg: color-mix(in srgb, var(--bg-3) 94%, transparent);
   border-color: var(--border-strong);
 }
+/* light needs the SAME border strength (it silently fell through to
+   border-faint — the measured reason light tabs read washed-out) plus a
+   touch more shadow than the 6%-alpha shared token gives */
+:root[data-theme='light'] .ptab[data-active='true'] {
+  border-color: var(--border-strong);
+  box-shadow: 0 1px 3px rgba(16, 18, 22, 0.1), 0 1px 1px rgba(16, 18, 22, 0.06);
+}
 /* identity lives in the ICON's hue (below) — the old 2px top line read as a
    stray colored streak on the pill and is gone */
 .ptab-icon {
@@ -384,6 +412,21 @@
 }
 .tabstrip-tools * {
   -webkit-app-region: no-drag;
+}
+/* the tool cluster breathes in three groups — a hairline between intents
+   reads faster than nine equal icons in a row */
+.tools-sep {
+  width: 1px;
+  height: 14px;
+  margin: 0 var(--sp-1);
+  background: var(--border-faint);
+  flex-shrink: 0;
+}
+/* strip-resident icon buttons run a notch smaller than the app default —
+   the 15px glyphs keep their size, the hit area stays comfortable */
+.tabstrip-tools .btn-icon {
+  width: 28px;
+  height: 28px;
 }
 /* the cross-project inbox (Settings → Interface): hidden at zero, a quiet
    bell + count otherwise; the menu is a right-anchored dropdown */

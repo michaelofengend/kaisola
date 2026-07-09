@@ -105,7 +105,9 @@ function sampleForWindow(win, img) {
   const avg = { r: px[2], g: px[1], b: px[0] }
   // pre-blurred copy for the painted layer: a heavy downscale IS the blur
   // (the renderer re-scales it to screen size under a static CSS blur)
-  const blurDataUrl = 'data:image/jpeg;base64,' + img.resize({ width: 120 }).toJPEG(70).toString('base64')
+  // 200w/q82 (was 120/70): headroom for the softer blur(14px) painted layer —
+  // still only a few KB, rasters once
+  const blurDataUrl = 'data:image/jpeg;base64,' + img.resize({ width: 200 }).toJPEG(82).toString('base64')
   return { ok: true, avg, blurDataUrl, screen: { x: db.x, y: db.y, w: db.width, h: db.height } }
 }
 

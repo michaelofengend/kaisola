@@ -8,8 +8,6 @@ import { AgentStatusButton } from './AgentStatusButton'
  * Lives in the sidebar card's top strip; floats top-right when it's hidden.
  */
 export function ShellTools() {
-  const theme = useKaisola((s) => s.theme)
-  const toggleTheme = useKaisola((s) => s.toggleTheme)
   const layoutMode = useKaisola((s) => s.layoutMode)
   const toggleLayoutMode = useKaisola((s) => s.toggleLayoutMode)
   const setLayoutMode = useKaisola((s) => s.setLayoutMode)
@@ -22,6 +20,10 @@ export function ShellTools() {
   const openSettings = useKaisola((s) => s.setSettingsOpen)
   const followAgent = useKaisola((s) => s.followAgent)
   const toggleFollowAgent = useKaisola((s) => s.toggleFollowAgent)
+  // Three quiet clusters instead of nine equal-weight icons (the measured
+  // crowding): find things · shape the stage · watch the agents. The theme
+  // toggle retired — it duplicated Settings → General → Theme and charged a
+  // permanent icon for a twice-a-day action.
   return (
     <>
       <button className="btn-icon" onClick={() => openPalette()} title="Command palette  ⌘K">
@@ -35,6 +37,7 @@ export function ShellTools() {
       >
         <Icon name="Crosshair" size={15} />
       </button>
+      <span className="tools-sep" aria-hidden />
       <button className="btn-icon" data-active={layoutMode === 'studio'} onClick={toggleLayoutMode} title={layoutMode === 'focus' ? 'Show Studio layout  ⌘⇧F' : 'Show Focus layout  ⌘⇧F'}>
         <Icon name={layoutMode === 'focus' ? 'PanelsTopLeft' : 'Focus'} size={15} />
       </button>
@@ -52,13 +55,11 @@ export function ShellTools() {
       <button className="btn-icon" data-active={canvasOpen} onClick={toggleCanvas} title="Toggle main view  ⌘.">
         <Icon name={canvasOpen ? 'PanelRightClose' : 'PanelRightOpen'} size={15} />
       </button>
+      <span className="tools-sep" aria-hidden />
       <LimitsButton />
       <AgentStatusButton />
       <button className="btn-icon" onClick={() => openSettings(true)} title="Settings  ⌘,">
         <Icon name="Settings" size={15} />
-      </button>
-      <button className="btn-icon" onClick={toggleTheme} title="Toggle theme">
-        <Icon name={theme === 'dark' ? 'Sun' : 'Moon'} size={15} />
       </button>
     </>
   )
