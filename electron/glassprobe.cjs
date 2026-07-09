@@ -54,6 +54,7 @@ app.whenReady().then(async () => {
   registerGitHandlers(ipcMain); registerClaudeHooksHandlers(ipcMain); registerUpdateHandlers(ipcMain)
   registerGlassHandlers(ipcMain)
   ipcMain.handle('shell:glass', () => ({ supported: false, active: false, enabled: false }))
+  ipcMain.handle('shell:window-mode', () => ({ wantSolid: false, liveSolid: false }))
 
   const win = new BrowserWindow({
     show: true, width: 1280, height: 800, frame: false,
@@ -71,9 +72,14 @@ app.whenReady().then(async () => {
   await win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   await wait(1600)
   await js(`window.__kaisola.getState().setLayoutMode('studio')`)
-  await wait(500)
-  const rects = await js(`(() => {
+  // the rail defaults CLOSED since the "quieter start" work — open it, then poll
+  await js(`window.__kaisola.setState({ railOpen: true })`)
+  const rects = await js(`(async () => {
     const r = (el) => { if (!el) return null; const b = el.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height } }
+    for (let i = 0; i < 20; i++) {
+      if (document.querySelector('.wsrail')) break
+      await new Promise((rr) => setTimeout(rr, 250))
+    }
     return { tabstrip: r(document.querySelector('.tabstrip')), rail: r(document.querySelector('.wsrail')) }
   })()`)
   if (!rects.tabstrip || !rects.rail) { console.log('GLASSPROBE=FAIL missing chrome elements ' + JSON.stringify(rects)); app.exit(1); return }
@@ -104,25 +110,25 @@ app.whenReady().then(async () => {
   }
   console.log(`CHROME_MEAN_${tag.toUpperCase()}=` + JSON.stringify(out))
 
-  // WASH: the wallpaper sampler must have retinted the veils (inline vars set
-  // by glassWash.ts) and cached the pre-blurred painting. Poll — sampling is
-  // async behind plutil/sips.
+  // WASH: the wallpaper sampler must have retinted the RAIL veil (inline var
+  // set by glassWash.ts) and cached the pre-blurred painting. The strip veil
+  // retired in the bare-glass strip redesign (595043e) — no strip assertion.
+  // Poll — sampling is async behind plutil/sips.
   let wash = null
   for (let i = 0; i < 10; i++) {
     wash = await js(`(() => {
       const st = document.documentElement.style
       return {
-        strip: st.getPropertyValue('--wash-strip-color').trim(),
         rail: st.getPropertyValue('--wash-rail-color').trim(),
         img: st.getPropertyValue('--wallpaper-img').slice(0, 30),
         size: st.getPropertyValue('--wallpaper-size').trim(),
       }
     })()`)
-    if (wash.strip) break
+    if (wash.rail) break
     await wait(400)
   }
   const triplet = (s) => /^\d{1,3} \d{1,3} \d{1,3}$/.test(s)
-  const washOk = wash && triplet(wash.strip) && triplet(wash.rail)
+  const washOk = wash && triplet(wash.rail)
     && wash.img.startsWith('url("data:image/jpeg') && /^\d+px \d+px$/.test(wash.size)
   console.log(`WASH=${washOk ? 'PASS' : 'FAIL'} ` + JSON.stringify(wash))
   app.exit(washOk ? 0 : 1)

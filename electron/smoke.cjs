@@ -342,7 +342,6 @@ app.whenReady().then(async () => {
       railRadius,
       canvasRadius,
     }
-    store.setThemeMode(previousThemeMode)
     store.setLayoutMode(previousLayout)
     store.setThemeMode(previousThemeMode)
     if (previousWinFocus == null) delete document.documentElement.dataset.winfocus
