@@ -3881,7 +3881,17 @@ export const useKaisola = create<KaisolaState>()(
     const focus = opts?.focus !== false
     set((s) => {
       const slice = freshSlice(pid, path)
-      const tab: ProjectTab = { id: pid, workspacePath: path, hue: folderHue(path ?? pid), createdAt: Date.now() }
+      // blank tabs learn to count: a second concurrent workspace-less tab gets
+      // "New Project 2" (persisted like any title; rename wins) — several
+      // identical "New Project" labels were indistinguishable
+      const blanks = s.projectTabs.filter((t) => !t.workspacePath).length
+      const tab: ProjectTab = {
+        id: pid,
+        workspacePath: path,
+        ...(path == null && blanks > 0 ? { title: `New Project ${blanks + 1}` } : {}),
+        hue: folderHue(path ?? pid),
+        createdAt: Date.now(),
+      }
       // focus:false creates the tab in the background (its slice is parked).
       if (!focus) return { projectTabs: [...s.projectTabs, tab], projectSlices: { ...s.projectSlices, [pid]: slice } }
       // park the outgoing slice; hoist the fresh one → live flat fields.

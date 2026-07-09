@@ -16,7 +16,10 @@ export function ProposalCard({ proposal, hideActions }: { proposal: Proposal; hi
   const approve = useKaisola((s) => s.approveProposal)
   const reject = useKaisola((s) => s.rejectProposal)
   const mergeWorktree = useKaisola((s) => s.mergeWorktreeProposal)
-  const agent = AGENT_META[proposal.agentId]
+  // proposals can arrive from outside the research roster (a CLI agent via the
+  // ledger, a probe) — an unknown id must degrade to a generic tag, never
+  // crash the tree (there's no error boundary above this card)
+  const agent = AGENT_META[proposal.agentId] ?? { name: proposal.agentId, icon: 'Bot' }
   const resolved = proposal.status !== 'pending'
   // a file-patch proposal is merged (git) on approve, not applied to entities
   const isFilePatch = proposal.changes.some((c) => c.entityType === 'file')

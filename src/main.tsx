@@ -10,6 +10,7 @@ import { verifyCitation, fuzzyContains, offlineEntailment } from './lib/verify'
 import { lintProvenanced, lintSeverity } from './lib/lint'
 import { extractDoi, reconstructAbstract, normalizeOaId, resolveReferences } from './lib/openalex'
 import { parseTei, parseCoords, locateQuote } from './lib/grobid'
+import { words, changedWords, lineHunks, applyHunks } from './lib/wordDiff'
 import './styles/global.css'
 import './styles/shell.css'
 import './styles/signature.css'
@@ -35,6 +36,7 @@ if (new URLSearchParams(location.search).get('solidwin') === '1') {
   extractDoi, reconstructAbstract, normalizeOaId, resolveReferences,
   parseTei, parseCoords, locateQuote,
   sessionOrderIds, loadUserConfig,
+  words, changedWords, lineHunks, applyHunks,
 }
 
 createRoot(document.getElementById('root')!).render(

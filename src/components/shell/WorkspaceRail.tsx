@@ -3,6 +3,7 @@ import { useKaisola } from '../../store/store'
 import { bridge, isDesktop, type FsEntry } from '../../lib/bridge'
 import { Icon } from '../Icon'
 import { fileIcon } from '../../lib/fileIcon'
+import { AGENTS_TEMPLATE } from '../../lib/agentsTemplate'
 import { shellDrag } from './SessionCards'
 
 /**
@@ -374,6 +375,21 @@ function FilesTree() {
     }
     closeMenu()
   }
+  // AGENTS.md scaffold: the cross-tool context file every hosted agent reads.
+  // Existing file opens (never clobbered); missing file gets the human-edited
+  // template (deliberately never auto-generated — see agentsTemplate.ts).
+  const scaffoldAgentsMd = async (dir: string) => {
+    const target = `${dir}/AGENTS.md`
+    const existing = await bridge.fs.read(target)
+    if (!existing.ok || !String(existing.content ?? '').trim()) {
+      const w = await bridge.fs.write(target, AGENTS_TEMPLATE)
+      if (!w.ok) { pushToast('error', w.message ?? 'Could not create AGENTS.md.'); closeMenu(); return }
+      void loadDir(dir)
+      setExpanded((ex) => new Set(ex).add(dir))
+    }
+    requestFile(target, 'edit', { pinned: true })
+    closeMenu()
+  }
   const trashEntry = async (p: string) => {
     const r = await bridge.fs.trash(p)
     if (r.ok) pushToast('success', `Moved ${p.split('/').pop()} to Trash`)
@@ -523,6 +539,11 @@ function FilesTree() {
                 <button className="tree-menu-item" onClick={() => { setNaming({ mode: 'newfolder', target: menu.path, isDir: menu.isDir }); setNameValue('') }}>
                   <Icon name="FolderPlus" size={13} /> New folder…
                 </button>
+                {menu.isDir && (
+                  <button className="tree-menu-item" onClick={() => void scaffoldAgentsMd(menu.path)}>
+                    <Icon name="Bot" size={13} /> AGENTS.md
+                  </button>
+                )}
                 {!menu.isRoot && (
                   <>
                     <div className="tree-menu-sep" />

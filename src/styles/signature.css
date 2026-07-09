@@ -237,6 +237,18 @@
 }
 .rdiff-line-del .rdiff-gutter { color: var(--danger); }
 .rdiff-line-add .rdiff-gutter { color: var(--success); }
+/* word-level marks (Settings → Interface): the exact words that changed get a
+   deeper tint of their line's color — no padding, no layout shift */
+.rdiff-word {
+  border-radius: 2px;
+  padding: 0;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  color: inherit;
+}
+.rdiff-line-del .rdiff-word { background: color-mix(in srgb, var(--danger) 22%, transparent); }
+.rdiff-line-add .rdiff-word { background: color-mix(in srgb, var(--success) 22%, transparent); }
+.pl-del .rdiff-word { background: color-mix(in srgb, var(--danger) 26%, transparent); }
+.pl-add .rdiff-word { background: color-mix(in srgb, var(--success) 26%, transparent); }
 .rdiff-line-del .rdiff-text {
   color: var(--text-2);
   text-decoration: line-through;
