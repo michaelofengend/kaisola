@@ -1708,9 +1708,10 @@ a^2 + b^2 = c^2
     if (nav) nav.click()
     await new Promise((r) => setTimeout(r, 80))
     const body = (document.querySelector('.settings-pane') || {}).textContent || ''
-    // Zed-style settings: 6 nav categories, exactly one active, no folds left
+    // Zed-style settings: 7 nav categories (Interface joined in v0.1.23),
+    // exactly one active, no folds left
     const tabsOk = document.querySelectorAll('.settings-fold').length === 0 &&
-      document.querySelectorAll('.settings-nav-item').length === 6 &&
+      document.querySelectorAll('.settings-nav-item').length === 7 &&
       document.querySelectorAll('.settings-nav-item[data-active="true"]').length === 1
     g().setSettingsOpen(false)
     g().setReasoningProvider('openai')
