@@ -125,6 +125,7 @@ function ClaudeAccountsBlock() {
 /** The Zed-style settings nav — one entry per pane. */
 const SECTIONS = [
   { id: 'general', name: 'General', icon: 'SlidersHorizontal' },
+  { id: 'interface', name: 'Interface', icon: 'PanelsTopLeft' },
   { id: 'terminal', name: 'Terminal', icon: 'SquareTerminal' },
   { id: 'agents', name: 'Agents', icon: 'Bot' },
   { id: 'guardrails', name: 'Guardrails', icon: 'ShieldCheck' },
@@ -136,6 +137,7 @@ type SectionId = (typeof SECTIONS)[number]['id']
 /** One quiet line under each pane title — sparse panes read as designed, not empty. */
 const SECTION_DESC: Record<SectionId, string> = {
   general: 'How the shell looks — theme and the native glass material — and software updates.',
+  interface: 'The little conveniences — every one of them yours to switch off.',
   terminal: 'Every terminal card — font size, weight, typeface, and cursor color.',
   agents: 'The CLIs in your + menu. Each runs with your existing install and login — Kaisola never proxies a model.',
   guardrails: 'What agents may do without you: autonomy, saved permission rules, and protected files.',
@@ -161,6 +163,16 @@ export function Settings() {
   const themeMode = useKaisola((s) => s.themeMode)
   const setThemeMode = useKaisola((s) => s.setThemeMode)
   const perfMode = useKaisola((s) => s.perfMode)
+  const wordDiffs = useKaisola((s) => s.wordDiffs)
+  const setWordDiffs = useKaisola((s) => s.setWordDiffs)
+  const showCosts = useKaisola((s) => s.showCosts)
+  const setShowCosts = useKaisola((s) => s.setShowCosts)
+  const inbox = useKaisola((s) => s.inbox)
+  const setInbox = useKaisola((s) => s.setInbox)
+  const draftRestore = useKaisola((s) => s.draftRestore)
+  const setDraftRestore = useKaisola((s) => s.setDraftRestore)
+  const wallpaperTint = useKaisola((s) => s.wallpaperTint)
+  const setWallpaperTint = useKaisola((s) => s.setWallpaperTint)
   const setPerfMode = useKaisola((s) => s.setPerfMode)
   const autonomy = useKaisola((s) => s.autonomy)
   const setAutonomy = useKaisola((s) => s.setAutonomy)
@@ -447,6 +459,32 @@ export function Settings() {
                   </div>
                 </div>
                 {isDesktop && <UpdatesRow />}
+              </>
+            )}
+
+            {section === 'interface' && (
+              <>
+                {([
+                  { label: 'Session cost chips', hint: 'what each Claude session cost', value: showCosts, set: setShowCosts, title: 'A quiet $ chip on Claude session cards — token totals on hover' },
+                  { label: 'Cross-project inbox', hint: 'everything that needs you', value: inbox, set: setInbox, title: 'One bell in the tab strip rolling up waiting sessions and gates across every project tab' },
+                  { label: 'Word-level diff highlights', hint: 'changed words light up', value: wordDiffs, set: setWordDiffs, title: 'Research diffs mark the exact words that changed, not just the lines' },
+                  { label: 'Restore CLI drafts', hint: 'unsent text survives restarts', value: draftRestore, set: setDraftRestore, title: 'A draft typed into a CLI agent is retyped into the resumed session after a restart' },
+                  { label: 'Wallpaper-tinted chrome', hint: 'glass follows your desktop', value: wallpaperTint, set: setWallpaperTint, title: 'The tab strip and rail veils adopt the average color of your wallpaper' },
+                ] as const).map((row) => (
+                  <div className="settings-row" key={row.label}>
+                    <span className="settings-row-label">{row.label} <span className="faint" style={{ fontWeight: 400 }}>· {row.hint}</span></span>
+                    <div className="settings-row-control">
+                      <Dropdown
+                        value={row.value ? 'on' : 'off'}
+                        options={[{ value: 'on', name: 'On' }, { value: 'off', name: 'Off' }]}
+                        onSelect={(v) => row.set(v === 'on')}
+                        align="right"
+                        title={row.title}
+                      />
+                    </div>
+                  </div>
+                ))}
+                <p className="settings-note">Each switch also lives in settings.json — automate them like everything else.</p>
               </>
             )}
 

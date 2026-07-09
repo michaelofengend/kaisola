@@ -522,6 +522,7 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
     // settles (quiet pty ≥2s). Abort if the user starts typing first, and
     // give up after 30s — the draft stays persisted for the next launch.
     armDraftRetypeRef.current = (bootStr: string) => {
+      if (!useKaisola.getState().draftRestore) return // Settings → Interface switch
       if (!/--resume|--continue/.test(bootStr)) return
       const saved = useKaisola.getState().termDrafts[id]
       if (!saved || saved.trim().length < 3 || !isAgentTerm()) return

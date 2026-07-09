@@ -481,7 +481,8 @@ const GLOBAL_KEYS = [
   'theme', 'themeMode', 'layoutMode', 'agentModels', 'fileTextZoom', 'termFontSize', 'termFontFamily',
   'termFontWeight', 'termCursorColor', 'termBackground', 'customAgents', 'enabledAgents', 'sessionTemplates', 'claudeModel', 'reasoningProvider',
   'localBaseUrl', 'localModel', 'openaiBaseUrl', 'openaiModel', 'openAlexMailto', 'grobidEndpoint',
-  'sandboxMode', 'workflows', 'automationsEnabled', 'perfMode', 'railWidth', 'railOpen', 'claudeSessions', 'claudeAccounts',
+  'sandboxMode', 'workflows', 'automationsEnabled', 'perfMode', 'railWidth', 'railOpen', 'claudeSessions',
+  'wordDiffs', 'showCosts', 'inbox', 'draftRestore', 'wallpaperTint', 'claudeAccounts',
   'permissionRules', 'sensitiveGlobs', 'latexMain', 'unsavedBuffers', 'termDrafts',
 ] as const
 
@@ -933,6 +934,23 @@ interface KaisolaState {
   /** Master switch for on-stage auto-run. OFF by default (no surprise spend). */
   automationsEnabled: boolean
   setAutomationsEnabled: (on: boolean) => void
+
+  // ── Interface switches (Settings → Interface; all persisted, default ON) ──
+  /** Word-level highlights inside ResearchDiff rows. */
+  wordDiffs: boolean
+  setWordDiffs: (on: boolean) => void
+  /** $-cost chips on Claude session cards. */
+  showCosts: boolean
+  setShowCosts: (on: boolean) => void
+  /** The cross-project needs-you inbox in the tab strip. */
+  inbox: boolean
+  setInbox: (on: boolean) => void
+  /** Auto-retype saved CLI drafts after a resumed restart. */
+  draftRestore: boolean
+  setDraftRestore: (on: boolean) => void
+  /** Wallpaper-sampled retinting of the chrome veils. */
+  wallpaperTint: boolean
+  setWallpaperTint: (on: boolean) => void
   addWorkflow: (name?: string) => void
   deleteWorkflow: (id: string) => void
   setWorkflowTrigger: (id: string, trigger: 'manual' | 'on-stage', stage?: TrajectoryStage) => void
@@ -1457,6 +1475,11 @@ function persistSnapshot(s: KaisolaState) {
     sandboxMode: s.sandboxMode,
     workflows: s.workflows,
     automationsEnabled: s.automationsEnabled,
+    wordDiffs: s.wordDiffs,
+    showCosts: s.showCosts,
+    inbox: s.inbox,
+    draftRestore: s.draftRestore,
+    wallpaperTint: s.wallpaperTint,
     perfMode: s.perfMode,
     railWidth: s.railWidth,
     railOpen: s.railOpen,
@@ -1671,6 +1694,11 @@ export const useKaisola = create<KaisolaState>()(
     ] },
   ],
   automationsEnabled: false,
+  wordDiffs: true,
+  showCosts: true,
+  inbox: true,
+  draftRestore: true,
+  wallpaperTint: true,
   agentModels: {},
   workspacePath: null,
   fileRequest: null,
@@ -3389,6 +3417,11 @@ export const useKaisola = create<KaisolaState>()(
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
   setAutomationsEnabled: (on) => set({ automationsEnabled: on }),
+  setWordDiffs: (on) => set({ wordDiffs: on }),
+  setShowCosts: (on) => set({ showCosts: on }),
+  setInbox: (on) => set({ inbox: on }),
+  setDraftRestore: (on) => set({ draftRestore: on }),
+  setWallpaperTint: (on) => set({ wallpaperTint: on }),
 
   addWorkflow: (name) =>
     set((s) => ({

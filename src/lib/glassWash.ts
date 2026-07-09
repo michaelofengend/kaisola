@@ -48,13 +48,19 @@ async function apply() {
   }
   if (!s.ok || !s.avg) return
   const root = document.documentElement
-  const mix = (base: readonly number[]) =>
-    base
-      .map((c, i) => Math.round(c + ([s.avg!.r, s.avg!.g, s.avg!.b][i] - c) * WALLPAPER_TINT))
-      .join(' ')
-  const base = VEIL_BASE[useKaisola.getState().theme]
-  root.style.setProperty('--wash-strip-color', mix(base.strip))
-  root.style.setProperty('--wash-rail-color', mix(base.rail))
+  if (useKaisola.getState().wallpaperTint) {
+    const mix = (base: readonly number[]) =>
+      base
+        .map((c, i) => Math.round(c + ([s.avg!.r, s.avg!.g, s.avg!.b][i] - c) * WALLPAPER_TINT))
+        .join(' ')
+    const base = VEIL_BASE[useKaisola.getState().theme]
+    root.style.setProperty('--wash-strip-color', mix(base.strip))
+    root.style.setProperty('--wash-rail-color', mix(base.rail))
+  } else {
+    // Settings → Interface switch OFF: veils stay the theme constants
+    root.style.removeProperty('--wash-strip-color')
+    root.style.removeProperty('--wash-rail-color')
+  }
   if (s.blurDataUrl && s.screen) {
     screenRect = s.screen
     root.style.setProperty('--wallpaper-img', `url("${s.blurDataUrl}")`)
@@ -78,7 +84,7 @@ export function initGlassWash(): () => void {
   }
   const offRefresh = bridge.glassWash.onRefresh(() => void apply())
   const unsub = useKaisola.subscribe((s, prev) => {
-    if (s.perfMode !== prev.perfMode || s.theme !== prev.theme) void apply()
+    if (s.perfMode !== prev.perfMode || s.theme !== prev.theme || s.wallpaperTint !== prev.wallpaperTint) void apply()
     // a theme flip while a solid mode is persisted must refresh the opaque
     // window's boot color, or the next launch flashes the old theme's bg
     if (s.theme !== prev.theme && s.perfMode !== 'glass') {
