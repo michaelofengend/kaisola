@@ -21,6 +21,7 @@ const { registerUpdateHandlers } = require('./ipc/updateHandler.cjs')
 const { registerUsageHandlers } = require('./ipc/usageHandler.cjs')
 const { registerLedgerHandlers } = require('./ipc/ledgerHandler.cjs')
 const { registerMcpHandlers } = require('./ipc/mcpServer.cjs')
+const { registerGlassHandlers } = require('./ipc/glassHandler.cjs')
 const worktree = require('./ipc/worktreeHandler.cjs')
 
 process.env.KAISOLA_SMOKE = '1' // never auto-open a real browser during the test
@@ -76,8 +77,10 @@ app.whenReady().then(async () => {
   registerUsageHandlers(ipcMain)
   registerLedgerHandlers(ipcMain)
   registerMcpHandlers(ipcMain)
+  registerGlassHandlers(ipcMain)
   // Liquid Glass prefs are cosmetic; the smoke shell answers with "unsupported"
   ipcMain.handle('shell:glass', () => ({ supported: false, active: false, enabled: false }))
+  ipcMain.handle('shell:window-mode', () => ({ wantSolid: false, liveSolid: false }))
   worktree.registerWorktreeHandlers(ipcMain)
 
   // tear-off support: a minimal replica of main.cjs's window:detach-project —
@@ -215,13 +218,19 @@ app.whenReady().then(async () => {
     const store = window.__kaisola.getState()
     const previousLayout = store.layoutMode
     const previousWinFocus = document.documentElement.dataset.winfocus
+    // this check asserts LIGHT-theme token values — force the theme, or the
+    // suite goes red every night when macOS's scheduled dark mode flips the
+    // default 'system' theme under it (found 2026-07-09, 1am)
+    const previousThemeMode = store.themeMode
+    store.setThemeMode('light')
     store.setLayoutMode('studio')
     document.documentElement.dataset.winfocus = 'true'
-    await new Promise((r) => setTimeout(r, 120))
+    await new Promise((r) => setTimeout(r, 160))
     const app = document.querySelector('.app')
     const rail = document.querySelector('.wsrail')
     const canvas = document.querySelector('.canvas-wrap > .canvas')
     if (!app || !rail || !canvas) {
+      store.setThemeMode(previousThemeMode)
       store.setLayoutMode(previousLayout)
       if (previousWinFocus == null) delete document.documentElement.dataset.winfocus
       else document.documentElement.dataset.winfocus = previousWinFocus
@@ -333,7 +342,9 @@ app.whenReady().then(async () => {
       railRadius,
       canvasRadius,
     }
+    store.setThemeMode(previousThemeMode)
     store.setLayoutMode(previousLayout)
+    store.setThemeMode(previousThemeMode)
     if (previousWinFocus == null) delete document.documentElement.dataset.winfocus
     else document.documentElement.dataset.winfocus = previousWinFocus
     await new Promise((r) => setTimeout(r, 80))
