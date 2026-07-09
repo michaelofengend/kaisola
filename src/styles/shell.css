@@ -110,6 +110,19 @@
   --wash-rail-color: 11 12 17;
   --wash-rail-alpha: 83%;
 }
+/* PAINTED-MODE LEGIBILITY: the wallpaper painting is livelier than the OS
+   material it replaces, so the chrome veils carry more ink — text on the
+   strip and rail keeps its contrast. Live glass is untouched (its veils are
+   parity-locked to the measured blur constants). */
+:root[data-perf='painted'] .app {
+  --wash-strip-alpha: 62%;
+  --wash-rail-alpha: 55%;
+}
+:root[data-theme='dark'][data-perf='painted'] .app {
+  --wash-strip-alpha: 95%;
+  --wash-rail-alpha: 91%;
+}
+
 /* Deliberately NO data-winfocus overrides on any surface: the shell looks
    identical when the window is inactive (main keeps the native material
    sampling via visualEffectState 'active'); only the traffic lights gray. */
@@ -130,9 +143,20 @@
   gap: 2px;
   padding: 0 var(--sp-3);
   -webkit-app-region: drag;
-  border-bottom: 1px solid var(--border-faint);
   background: color-mix(in srgb, var(--bg-2) 22%, transparent);
   position: relative;
+}
+/* the strip's bottom hairline lives INSIDE the strip (not border-bottom) so
+   the active Chrome-style tab can merge through it — the tab and its hills
+   paint over the line where they meet it */
+.tabstrip::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--border-faint);
+  pointer-events: none;
 }
 /* chrome glass: the blur wash lives HERE (and on the rail), not on the whole
    window — these surfaces repaint rarely, so the blur recomputes rarely,
@@ -170,6 +194,8 @@
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+  position: relative;
+  z-index: 1; /* tabs (and their hills) paint above the strip's ::after hairline */
 }
 /* scroll-cue fades — applied per edge ONLY while tabs hide past it (the JS
    sync sets data-fade-l/r); a static mask would eat the outermost tab border */
@@ -279,11 +305,33 @@
   color: var(--text-1);
   border-color: var(--border-faint);
 }
+/* the ACTIVE tab is Chrome-shaped: it drops to the strip's bottom edge,
+   rounds only its top corners, and flares into concave "hills" where it
+   meets the hairline — the tab reads as attached to the page below, not a
+   floating pill. Inactive tabs keep the quiet pill hover. */
 .ptab[data-active='true'] {
-  background: color-mix(in srgb, var(--bg-1) 94%, transparent);
+  --ptab-bg: color-mix(in srgb, var(--bg-1) 96%, transparent);
+  margin: 4px 0 0;
+  height: calc(var(--tabstrip-h) - 4px);
+  border-radius: 10px 10px 0 0;
+  background: var(--ptab-bg);
   color: var(--text-0);
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-1);
+  border-color: transparent;
+  z-index: 1; /* hills flare past the tab box — stay above later siblings */
+}
+/* the hills: a 10px square hugging each bottom corner from OUTSIDE, filled
+   with the tab color except a quarter-circle cut facing away from the tab */
+.ptab[data-active='true']::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: -10px;
+  right: -10px;
+  height: 10px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle 10px at 0 0, transparent 9.5px, var(--ptab-bg) 10px) left bottom / 10px 10px no-repeat,
+    radial-gradient(circle 10px at 10px 0, transparent 9.5px, var(--ptab-bg) 10px) right bottom / 10px 10px no-repeat;
 }
 /* the 2px identity line at the top of the active tab — its folder hue */
 .ptab[data-active='true']::before {
