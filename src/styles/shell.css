@@ -305,16 +305,8 @@
   --ptab-bg: color-mix(in srgb, var(--bg-3) 94%, transparent);
   border-color: var(--border-strong);
 }
-/* the 2px identity line at the top of the active tab — its folder hue */
-.ptab[data-active='true']::before {
-  content: '';
-  position: absolute;
-  inset-inline: var(--sp-4);
-  top: 0;
-  height: 2px;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--ptab-hue, var(--accent)) 70%, transparent);
-}
+/* identity lives in the ICON's hue (below) — the old 2px top line read as a
+   stray colored streak on the pill and is gone */
 .ptab-icon {
   flex-shrink: 0;
   color: color-mix(in srgb, var(--ptab-hue, var(--accent)) 62%, var(--text-2));
@@ -1074,17 +1066,9 @@
 :root[data-theme='dark'] .stab[data-active='true'] {
   background: color-mix(in srgb, var(--bg-3) 94%, transparent);
 }
-/* the 2px identity line at the top of an open tab — the session's ONE colored
-   edge (the card below stays clean; pop-outs keep a hairline, having no tab) */
-.stab[data-active='true']::before {
-  content: '';
-  position: absolute;
-  inset-inline: var(--sp-3);
-  top: 0;
-  height: 2px;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--sid, var(--accent)) 70%, transparent);
-}
+/* identity lives in the ICON's hue (below), matching the project tabs — the
+   2px colored top edge read as a stray streak on the pill and is gone.
+   Pop-out windows keep their gradient hairline (no tab, no icon there). */
 .stab-icon {
   flex-shrink: 0;
   color: color-mix(in srgb, var(--sid, var(--accent)) 62%, var(--text-2));
