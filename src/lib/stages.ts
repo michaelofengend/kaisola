@@ -28,34 +28,7 @@ export function stageMeta(id: TrajectoryStage): StageMeta {
   return STAGES.find((s) => s.id === id) ?? STAGES[0]
 }
 
-/**
- * The sidebar nav groups. Ideas + Experiments + Runs collapse into one
- * "Workbench" — the researcher's home base between ideas and execution. A group
- * is active when the current stage is one of its `matches`.
- */
-export interface NavGroup {
-  id: TrajectoryStage // the stage to navigate to when clicked
-  label: string
-  icon: string
-  blurb: string
-  matches: TrajectoryStage[]
-}
-
-export const NAV_GROUPS: NavGroup[] = [
-  { id: 'files', label: 'Files', icon: 'FolderTree', blurb: 'Browse the agent workspace repo', matches: ['files'] },
-  { id: 'corpus', label: 'Corpus', icon: 'Library', blurb: 'Papers, repos, datasets & notes', matches: ['corpus'] },
-  { id: 'claims', label: 'Claim Graph', icon: 'Network', blurb: 'Claims, methods & contradictions', matches: ['claims'] },
-  { id: 'questions', label: 'Questions', icon: 'HelpCircle', blurb: 'Open research questions', matches: ['questions'] },
-  { id: 'campaign', label: 'Workbench', icon: 'FlaskConical', blurb: 'Campaign, ideas, experiments & runs — the home base', matches: ['campaign', 'ideas', 'experiments', 'runs'] },
-  { id: 'analysis', label: 'Analysis', icon: 'BarChart3', blurb: 'Results, figures — real or noise?', matches: ['analysis'] },
-  { id: 'manuscript', label: 'Manuscript', icon: 'FileText', blurb: 'Artifact-grounded writing & trust', matches: ['manuscript'] },
-  { id: 'review', label: 'Review', icon: 'Gavel', blurb: 'Simulated peer review', matches: ['review'] },
-]
-
-/** The Workbench sub-tabs. */
-export const WORKBENCH_TABS: { id: TrajectoryStage; label: string; icon: string }[] = [
-  { id: 'campaign', label: 'Campaign', icon: 'Target' },
-  { id: 'ideas', label: 'Ideas', icon: 'Lightbulb' },
-  { id: 'experiments', label: 'Experiments', icon: 'ListChecks' },
-  { id: 'runs', label: 'Runs', icon: 'Terminal' },
-]
+// The stage-navigation UI (NAV_GROUPS, WORKBENCH_TABS and the 11 trajectory
+// views) was deleted 2026-07 — the shell is IDE-first. STAGES survives because
+// the AGENT layer still runs on the trajectory: proposals carry a stage, the
+// supervisor maps stages to agents, and the chat context names the stage.
