@@ -150,6 +150,18 @@ const bridge = {
       ipcRenderer.on('mcp:proposal', listener)
       return () => ipcRenderer.removeListener('mcp:proposal', listener)
     },
+    // ── external MCP servers (project .mcp.json + the user catalog) ──
+    servers: (workspace) => ipcRenderer.invoke('mcp:servers', { workspace }),
+    serverSet: (args) => ipcRenderer.invoke('mcp:server-set', args),
+    serverProbe: (args) => ipcRenderer.invoke('mcp:server-probe', args),
+    userConfig: () => ipcRenderer.invoke('mcp:user-config'),
+    discover: () => ipcRenderer.invoke('mcp:discover'),
+    importDiscovered: () => ipcRenderer.invoke('mcp:import-discovered'),
+    onServersChanged: (cb) => {
+      const listener = () => cb()
+      ipcRenderer.on('mcp:servers-changed', listener)
+      return () => ipcRenderer.removeListener('mcp:servers-changed', listener)
+    },
   },
 
   // ── git checkpoints + status (tree tinting, diff review) + commit panel ──

@@ -237,18 +237,23 @@ class AcpConnection {
     // agents advertising loadSession can resume a prior session after an app
     // restart (session/load) instead of starting blank
     this.canLoadSession = !!(res && res.agentCapabilities && res.agentCapabilities.loadSession)
-    // agents that accept HTTP MCP servers get the Kaisola server at session/new
+    // agents that accept HTTP/SSE MCP servers get remote entries at session/new
     this.mcpHttpOk = !!(res && res.agentCapabilities && res.agentCapabilities.mcpCapabilities && res.agentCapabilities.mcpCapabilities.http)
+    this.mcpSseOk = !!(res && res.agentCapabilities && res.agentCapabilities.mcpCapabilities && res.agentCapabilities.mcpCapabilities.sse)
     // agents that accept image content blocks in session/prompt (claude does;
     // an image dropped on the chat rides as real pixels, not just a path)
     this.promptImageOk = !!(res && res.agentCapabilities && res.agentCapabilities.promptCapabilities && res.agentCapabilities.promptCapabilities.image)
     return res
   }
 
-  /** The mcpServers param for session/new|load — the shared Kaisola server
-   * (project state + agent-task ledger), only for agents that can dial HTTP. */
+  /** The mcpServers param for session/new|load, filtered PER ENTRY by the
+   * agent's declared mcp capabilities: stdio servers are baseline ACP (every
+   * agent spawns them itself), remote http/sse entries only ride when the
+   * agent said it can dial them. The old all-or-nothing http gate silently
+   * dropped stdio servers from agents without http support. */
   sessionMcpServers() {
-    return this.mcpHttpOk && Array.isArray(this.mcpServers) ? this.mcpServers : []
+    const list = Array.isArray(this.mcpServers) ? this.mcpServers : []
+    return list.filter((s) => s && (s.type === 'http' ? this.mcpHttpOk : s.type === 'sse' ? this.mcpSseOk : true))
   }
 
   /** Trigger an auth method (the agent runs its own OAuth / opens a browser). */

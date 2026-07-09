@@ -7,6 +7,7 @@ const os = require('node:os')
 const { shell } = require('electron')
 const { AcpConnection } = require('./acp.cjs')
 const { mcpHttpEntry } = require('./mcpServer.cjs')
+const { acpEntries } = require('./mcpCatalog.cjs')
 const mgr = require('./terminalManager.cjs')
 
 const URL_RE = /https?:\/\/[^\s"'<>)]+/
@@ -180,6 +181,14 @@ function agentSummary(sender) {
       key: (e.meta && (e.meta.key || e.meta.presetId)), name: e.meta && e.meta.name, presetId: e.meta && e.meta.presetId,
       connected: !!(e.conn && e.conn.alive), controls: e.controls,
       authMethods: (e.conn && e.conn.authMethods) || [],
+      sessionId: e.meta && e.meta.sessionId,
+      scope: e.meta && e.meta.scope,
+      cwd: e.conn && e.conn.cwd,
+      mcpHttp: !!(e.conn && e.conn.mcpHttpOk && e.conn.sessionMcpServers && e.conn.sessionMcpServers().length),
+      canLoadSession: !!(e.conn && e.conn.canLoadSession),
+      promptImages: !!(e.conn && e.conn.promptImageOk),
+      busy: !!(e.current && e.current.channel),
+      autonomy: e.autonomy,
     }))
 }
 
@@ -238,8 +247,10 @@ function registerAcpHandlers(ipcMain) {
       : resolved.env
     const conn = new AcpConnection(
       // every ACP agent gets the shared Kaisola MCP server (project state +
-      // agent-task ledger) when it can dial HTTP — one tool surface, all vendors
-      { command: resolved.command, args: resolved.args, env, cwd: sessionCwd, mcpServers: [mcpHttpEntry()].filter(Boolean) },
+      // agent-task ledger) plus the workspace's armed external servers
+      // (.mcp.json approved + user catalog). The connection filters remote
+      // entries per the agent's declared mcp capabilities at session time.
+      { command: resolved.command, args: resolved.args, env, cwd: sessionCwd, mcpServers: [mcpHttpEntry(), ...acpEntries(sessionCwd, { http: true, sse: true })].filter(Boolean) },
       {
         onUpdate: (params) => {
           try { const m = JSON.stringify(params).match(URL_RE); if (m) surfaceAuthUrl(entry, resolved.name, key, m[0]) } catch { /* noop */ }

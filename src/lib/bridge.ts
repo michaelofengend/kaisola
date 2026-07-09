@@ -192,6 +192,13 @@ export interface AcpAgent {
   authMethods?: AcpAuthMethod[]
   /** Project id the connection is scoped to ('' = unscoped/legacy). */
   scope?: string
+  sessionId?: string
+  cwd?: string
+  mcpHttp?: boolean
+  canLoadSession?: boolean
+  promptImages?: boolean
+  busy?: boolean
+  autonomy?: string
 }
 /** A session/update payload (loose — agents vary). */
 export interface AcpUpdate {
@@ -337,6 +344,28 @@ export interface McpProposalEvent {
   at: number
 }
 
+/** One external MCP server row (project .mcp.json or the user catalog). */
+export interface McpServerRow {
+  name: string
+  scope: 'user' | 'project'
+  kind: 'stdio' | 'http' | 'sse'
+  /** Armed: rides ACP sessions + the claude boot config. */
+  enabled: boolean
+  /** Project scope only: the human approved this exact config (hash-keyed). */
+  approved: boolean
+  /** Display line: the command or the url (header values never leave main). */
+  detail: string
+}
+/** On-demand health probe result (remote servers; stdio just acknowledges). */
+export interface McpProbeResult {
+  ok: boolean
+  kind?: 'stdio' | 'http' | 'sse'
+  serverName?: string
+  version?: string
+  toolCount?: number
+  message?: string
+}
+
 /** A row in the shared agent-task ledger (coordination state, never research state). */
 export interface LedgerTask {
   id: string
@@ -396,7 +425,7 @@ export interface AcpConnectConfig {
 
 export interface UpdateState {
   /** idle = up to date (or never checked); ready = downloaded, restart to apply. */
-  type: 'idle' | 'checking' | 'downloading' | 'ready' | 'error'
+  type: 'idle' | 'checking' | 'downloading' | 'ready' | 'installing' | 'error'
   /** The version being downloaded / ready to install. */
   version?: string | null
   percent?: number
@@ -466,9 +495,22 @@ export interface KaisolaBridge {
   }
   /** The in-app MCP server every connected agent shares. */
   mcp?: {
-    info(): Promise<{ ok: boolean; url?: string | null; configPath?: string | null }>
+    info(): Promise<{ ok: boolean; url?: string | null; configPath?: string | null; protocol?: string; transport?: string; toolCount?: number; humanGatedTools?: string[]; configReady?: boolean; auth?: string | null; host?: string | null }>
     /** An agent called a human-gated write tool → a pending Proposal. */
     onProposal?(cb: (ev: McpProposalEvent) => void): () => void
+    /** External MCP servers: the workspace's .mcp.json (approval-gated) + the
+     * user catalog. Armed servers ride every ACP session and the claude boot. */
+    servers?(workspace: string | null): Promise<{ ok: boolean; servers: McpServerRow[]; userError?: string | null; projectError?: string | null; userConfigPath?: string; message?: string }>
+    serverSet?(args: { workspace: string | null; scope: 'user' | 'project'; name: string; enabled: boolean }): Promise<{ ok: boolean; message?: string }>
+    serverProbe?(args: { workspace: string | null; name: string }): Promise<McpProbeResult>
+    /** Ensure the user config file exists (with a template) and return its path. */
+    userConfig?(): Promise<{ ok: boolean; path?: string; message?: string }>
+    /** Servers configured in sibling apps (Cursor / Claude Desktop / Claude CLI)
+     * that the user catalog doesn't have yet — offered as a one-click import. */
+    discover?(): Promise<{ ok: boolean; found: Array<{ name: string; origin: string }>; message?: string }>
+    /** Import every discovered server into the user catalog, DISABLED. */
+    importDiscovered?(): Promise<{ ok: boolean; imported: number; message?: string }>
+    onServersChanged?(cb: () => void): () => void
   }
   git: {
     status(cwd: string): Promise<{ ok: boolean; notRepo?: boolean; root?: string; branch?: string | null; entries?: GitStatusEntry[] }>

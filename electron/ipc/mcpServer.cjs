@@ -21,6 +21,7 @@ const fs = require('node:fs')
 const { app, BrowserWindow } = require('electron')
 const { dbGet } = require('./dbHandler.cjs')
 const ledger = require('./ledgerHandler.cjs')
+const catalog = require('./mcpCatalog.cjs')
 
 /** Hand a write request to the renderer as a PENDING proposal — the human
  * approves it in the review gate before it touches project state. */
@@ -288,15 +289,28 @@ function startMcpServer() {
   })
   server.listen(0, '127.0.0.1', () => {
     port = server.address().port
-    // the Claude terminal picks the server up via `claude --mcp-config <this file>`
-    try {
-      fs.writeFileSync(configPath(), JSON.stringify({
-        mcpServers: { kaisola: { type: 'http', url: `http://127.0.0.1:${port}/`, headers: { Authorization: `Bearer ${token}` } } },
-      }, null, 2))
-    } catch { /* claude just boots without the kaisola tools */ }
+    writeClaudeConfig()
   })
   server.unref?.()
 }
+
+/** The `claude --mcp-config` file: the kaisola server + the user-scope
+ * catalog servers (object-map .mcp.json shape). Project .mcp.json is NOT
+ * merged — the claude CLI reads that natively with its own approval prompt.
+ * Rewritten whenever the catalog changes so toggles apply to the next launch. */
+function writeClaudeConfig() {
+  if (!port) return
+  try {
+    fs.writeFileSync(configPath(), JSON.stringify({
+      mcpServers: {
+        ...catalog.claudeUserEntries(),
+        // last so a user entry can never shadow the built-in server
+        kaisola: { type: 'http', url: `http://127.0.0.1:${port}/`, headers: { Authorization: `Bearer ${token}` } },
+      },
+    }, null, 2))
+  } catch { /* claude just boots without the kaisola tools */ }
+}
+catalog.onChange(writeClaudeConfig)
 
 function configPath() {
   return path.join(app.getPath('userData'), 'kaisola-mcp.json')
@@ -316,12 +330,21 @@ function mcpHttpEntry() {
 
 function registerMcpHandlers(ipcMain) {
   startMcpServer()
+  // the external-server catalog rides the same registration (main calls once)
+  catalog.registerMcpCatalogHandlers(ipcMain)
   ipcMain.handle('mcp:info', () => ({
     ok: !!port,
     url: port ? `http://127.0.0.1:${port}/` : null,
+    protocol: PROTOCOL,
+    transport: 'streamable-http',
+    toolCount: TOOLS.length,
+    humanGatedTools: TOOLS.filter((t) => t._meta && t._meta['anthropic/requiresUserInteraction']).map((t) => t.name),
     // only offer the config file once it's actually on disk — a boot line
     // pointing at a missing file would make claude error at launch
     configPath: fs.existsSync(configPath()) ? configPath() : null,
+    configReady: fs.existsSync(configPath()),
+    auth: port ? 'bearer' : null,
+    host: port ? '127.0.0.1' : null,
   }))
 }
 
