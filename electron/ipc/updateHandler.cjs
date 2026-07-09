@@ -44,12 +44,15 @@ function registerUpdateHandlers(ipcMain) {
   // even if the user never clicks "Restart to update", the next quit applies it
   autoUpdater.autoInstallOnAppQuit = true
 
-  autoUpdater.on('checking-for-update', () => setState({ type: 'checking', message: null }))
-  autoUpdater.on('update-available', (info) => setState({ type: 'downloading', version: info.version, percent: 0 }))
-  autoUpdater.on('update-not-available', () => setState({ type: 'idle', version: null, percent: 0 }))
-  autoUpdater.on('download-progress', (p) => setState({ type: 'downloading', percent: Math.round(p.percent) }))
+  // while probe() quietly re-reads the feed behind a ready build, the
+  // checking/available events must not flicker the renderer's "Restart" pill
+  let probing = false
+  autoUpdater.on('checking-for-update', () => { if (!probing) setState({ type: 'checking', message: null }) })
+  autoUpdater.on('update-available', (info) => { if (!probing) setState({ type: 'downloading', version: info.version, percent: 0 }) })
+  autoUpdater.on('update-not-available', () => { if (!probing) setState({ type: 'idle', version: null, percent: 0 }) })
+  autoUpdater.on('download-progress', (p) => { if (!probing) setState({ type: 'downloading', percent: Math.round(p.percent) }) })
   autoUpdater.on('update-downloaded', (info) => setState({ type: 'ready', version: info.version, percent: 100 }))
-  autoUpdater.on('error', (err) => setState({ type: 'error', message: err?.message ?? String(err) }))
+  autoUpdater.on('error', (err) => { if (!probing) setState({ type: 'error', message: err?.message ?? String(err) }) })
 
   let lastCheckAt = 0
   const check = async () => {
@@ -63,10 +66,51 @@ function registerUpdateHandlers(ipcMain) {
       return { ok: false, message: err?.message ?? String(err) }
     }
   }
-  // a check already in flight, downloading, or sitting ready needs no re-check
-  const busy = () => state.type === 'checking' || state.type === 'downloading' || state.type === 'ready'
+  // a check already in flight or downloading needs no re-check. 'ready' is NOT
+  // busy anymore: a downloaded build waiting for a restart used to block all
+  // further checks, so a user who didn't restart for a few releases installed
+  // a stale build and had to download+restart AGAIN for each hop. While ready,
+  // probe() keeps watching the feed and swaps the pending download for the
+  // newest release, so one restart always lands on latest.
+  const busy = () => state.type === 'checking' || state.type === 'downloading'
 
-  ipcMain.handle('update:check', () => (busy() ? { ok: true } : check()))
+  const newer = (a, b) => {
+    // semver-ish compare, enough for x.y.z tags
+    const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0)
+    const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0)
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0)
+    }
+    return false
+  }
+  const probe = async () => {
+    // feed-only look while a build sits ready: autoDownload off so the same
+    // pending version isn't re-fetched every hour; state is restored unless a
+    // strictly newer release shows up (then the normal download path runs and
+    // 'ready' re-broadcasts with the new version).
+    lastCheckAt = Date.now()
+    const pendingVersion = state.version ?? state.appVersion
+    probing = true
+    autoUpdater.autoDownload = false
+    try {
+      const r = await autoUpdater.checkForUpdates()
+      const v = r?.updateInfo?.version
+      if (v && newer(v, pendingVersion)) {
+        probing = false
+        autoUpdater.autoDownload = true
+        setState({ type: 'downloading', version: v, percent: 0 })
+        await autoUpdater.downloadUpdate() // replaces the pending build; 'update-downloaded' re-arms 'ready'
+      }
+    } catch { /* offline etc. — the pending build is still fine */ }
+    finally {
+      probing = false
+      autoUpdater.autoDownload = true
+    }
+    return { ok: true }
+  }
+  const recheck = () => (state.type === 'ready' ? probe() : busy() ? Promise.resolve({ ok: true }) : check())
+
+  ipcMain.handle('update:check', () => recheck())
   ipcMain.handle('update:install', () => {
     // before-quit (pty teardown etc.) still runs — quitAndInstall goes
     // through the normal quit path, then relaunches into the new build
@@ -75,10 +119,10 @@ function registerUpdateHandlers(ipcMain) {
   })
 
   setTimeout(() => void check(), FIRST_CHECK_DELAY_MS)
-  setInterval(() => { if (!busy()) void check() }, CHECK_EVERY_MS)
+  setInterval(() => { if (!busy()) void recheck() }, CHECK_EVERY_MS)
   app.on('browser-window-focus', () => {
     if (busy() || Date.now() - lastCheckAt < FOCUS_CHECK_MIN_MS) return
-    void check()
+    void recheck()
   })
 }
 
