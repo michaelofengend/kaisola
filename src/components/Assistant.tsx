@@ -4,6 +4,8 @@ import {
   type AssistantDraft,
   type AssistantMention,
   type AssistantRuntime,
+  type PlanEntry,
+  type ToolArtifact,
   type AssistantSpeed,
   type AssistantThread,
   type AssistantTurn,
@@ -82,16 +84,56 @@ const TurnRow = memo(function TurnRow({ t, i, agentName, showCaret, liveThinkSta
   t: Turn; i: number; agentName: string; showCaret: boolean; liveThinkStart?: number
 }) {
   if (t.kind === 'tool') {
-    return (
-      <div data-turn={i} className={`assistant-tool tool-${t.status}`}>
+    const arts = t.artifacts ?? []
+    const head = (
+      <>
         <Icon name={t.status === 'completed' ? 'CheckCircle2' : t.status === 'failed' ? 'XCircle' : 'Wrench'} size={11} />
         {t.text}{t.status && t.status !== 'completed' && <span className="tool-status">{t.status}</span>}
-      </div>
+      </>
+    )
+    if (!arts.length) {
+      return (
+        <div data-turn={i} className={`assistant-tool tool-${t.status}`}>
+          {head}
+        </div>
+      )
+    }
+    // a tool call carrying artifacts becomes a disclosure card: the one-line
+    // row is the collapsed state; failures auto-expand (VS Code's ergonomic)
+    return (
+      <details data-turn={i} className={`assistant-tool tool-${t.status} tool-artifacts`} open={t.status === 'failed'}>
+        <summary>{head}</summary>
+        <div className="tool-artifact-body">
+          {arts.map((a, ai) =>
+            a.type === 'diff' && a.path ? (
+              <FileDiffDisclosure key={ai} path={a.path} oldText={a.oldText ?? ''} newText={a.newText ?? ''} open={arts.length === 1} />
+            ) : a.type === 'terminal' && a.terminalId ? (
+              <button
+                key={ai}
+                className="tool-terminal-row"
+                onClick={() => {
+                  const st = useKaisola.getState()
+                  const known = st.agentTerminals.find((at) => at.terminalId === a.terminalId)
+                  if (known) st.switchSession(known.terminalId)
+                }}
+                title="Open the terminal card this command ran in"
+              >
+                <Icon name="SquareTerminal" size={11} /> ran in a terminal
+                {useKaisola.getState().agentTerminals.some((at) => at.terminalId === a.terminalId) && <span className="tool-terminal-open">open</span>}
+              </button>
+            ) : null,
+          )}
+        </div>
+      </details>
     )
   }
   if (t.kind === 'thought') {
+    const live = t.thinkMs == null
     return (
-      <details data-turn={i} className="assistant-thought" open>
+      // auto-expand WHILE streaming, collapse once settled; the key remount on
+      // the transition hands the toggle back to the user afterwards (Zed's
+      // ThinkingBlockDisplay::Auto)
+      <details data-turn={i} key={live ? 'think-live' : 'think-done'} className="assistant-thought" {...(live ? { open: true } : {})}>
         <summary>
           <Icon name="Brain" size={12} />
           {t.thinkMs != null
@@ -119,6 +161,64 @@ const TurnRow = memo(function TurnRow({ t, i, agentName, showCaret, liveThinkSta
   )
 })
 
+/** One file's diff as a collapsible row — shared by permission cards and
+ *  tool-call artifact disclosures (same classes, one look). */
+function FileDiffDisclosure({ path, oldText, newText, open }: { path: string; oldText: string; newText: string; open?: boolean }) {
+  const stat = diffStat(oldText, newText)
+  const hunks = diffHunks(oldText, newText)
+  return (
+    <details className="perm-diff" open={open}>
+      <summary>
+        <Icon name="FileDiff" size={12} />
+        <span className="grow truncate">{shortPath(path)}</span>
+        <span className="perm-diff-stat">
+          {stat.add > 0 && <em className="add">+{stat.add}</em>}
+          {stat.del > 0 && <em className="del">−{stat.del}</em>}
+        </span>
+      </summary>
+      <div className="perm-diff-body">
+        {hunks.map((h, hi) => (
+          <div key={hi} className="perm-diff-hunk">
+            {h.lines.map((l, li) => (
+              <div key={li} className={`perm-diff-line ${l.kind}`}>
+                <span className="perm-diff-sign">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}</span>
+                {l.text || ' '}
+              </div>
+            ))}
+          </div>
+        ))}
+        {!hunks.length && <div className="perm-diff-line ctx">(no textual change)</div>}
+      </div>
+    </details>
+  )
+}
+
+/** The agent's live plan (ACP `plan` frames) — a pinned strip above the
+ *  transcript: count + current step collapsed, full checklist expanded. */
+function PlanStrip({ plan }: { plan: PlanEntry[] }) {
+  const done = plan.filter((e) => e.status === 'completed').length
+  const current = plan.find((e) => e.status === 'in_progress') ?? plan.find((e) => e.status === 'pending')
+  return (
+    <details className="plan-strip">
+      <summary>
+        <Icon name="ListChecks" size={12} />
+        <span className="plan-count">Plan · {done}/{plan.length}</span>
+        {current && <span className="plan-current truncate">{current.content}</span>}
+      </summary>
+      <div className="plan-entries">
+        {plan.map((e, i) => (
+          <div key={i} className={`plan-entry plan-${e.status}`}>
+            <span className="plan-mark">
+              {e.status === 'completed' ? <Icon name="Check" size={11} /> : e.status === 'in_progress' ? <span className="session-busy" /> : <span className="plan-dot" />}
+            </span>
+            <span className="truncate">{e.content}</span>
+          </div>
+        ))}
+      </div>
+    </details>
+  )
+}
+
 function PermissionCard({
   perm,
   onAllow,
@@ -141,35 +241,9 @@ function PermissionCard({
         {diffs.length > 1 && <span className="perm-card-agent">{diffs.length} files</span>}
         <span className="perm-card-agent">{perm.agent}</span>
       </div>
-      {diffs.map((d) => {
-        const stat = diffStat(d.oldText, d.newText)
-        const hunks = diffHunks(d.oldText, d.newText)
-        return (
-          <details key={d.path} className="perm-diff" open={diffs.length === 1}>
-            <summary>
-              <Icon name="FileDiff" size={12} />
-              <span className="grow truncate">{shortPath(d.path)}</span>
-              <span className="perm-diff-stat">
-                {stat.add > 0 && <em className="add">+{stat.add}</em>}
-                {stat.del > 0 && <em className="del">−{stat.del}</em>}
-              </span>
-            </summary>
-            <div className="perm-diff-body">
-              {hunks.map((h, hi) => (
-                <div key={hi} className="perm-diff-hunk">
-                  {h.lines.map((l, li) => (
-                    <div key={li} className={`perm-diff-line ${l.kind}`}>
-                      <span className="perm-diff-sign">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}</span>
-                      {l.text || ' '}
-                    </div>
-                  ))}
-                </div>
-              ))}
-              {!hunks.length && <div className="perm-diff-line ctx">(no textual change)</div>}
-            </div>
-          </details>
-        )
-      })}
+      {diffs.map((d) => (
+        <FileDiffDisclosure key={d.path} path={d.path} oldText={d.oldText} newText={d.newText} open={diffs.length === 1} />
+      ))}
       <div className="perm-card-actions">
         <button className="btn btn-primary btn-sm" onClick={onAllow}>Allow once</button>
         {!perm.sensitive && (
@@ -605,20 +679,60 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
       const p = locs?.find((l) => typeof l.path === 'string')?.path
       if (p && st.workspacePath && p.startsWith(st.workspacePath)) st.requestFile(p)
     }
+    // ACP ToolCallContent → renderable artifacts (diff / embedded terminal).
+    // Everything else in content[] is noise for the card — drop it quietly.
+    const artifactsOf = (u2: AcpUpdate): ToolArtifact[] | undefined => {
+      const raw = (u2 as { content?: unknown }).content
+      if (!Array.isArray(raw)) return undefined
+      const out: ToolArtifact[] = []
+      for (const c of raw as Array<Record<string, unknown>>) {
+        if (!c || typeof c !== 'object') continue
+        if (c.type === 'diff' && typeof c.path === 'string') {
+          out.push({ type: 'diff', path: c.path, oldText: String(c.oldText ?? ''), newText: String(c.newText ?? '') })
+        } else if (c.type === 'terminal' && typeof c.terminalId === 'string') {
+          out.push({ type: 'terminal', terminalId: c.terminalId })
+        }
+      }
+      return out.length ? out : undefined
+    }
+    const mergeArtifacts = (prev?: ToolArtifact[], next?: ToolArtifact[]) => {
+      if (!next) return prev
+      if (!prev) return next
+      // updates re-send content — replace same-path diffs, append new ones
+      const merged = [...prev]
+      for (const a of next) {
+        const i = merged.findIndex((m) => m.type === a.type && m.path === a.path && m.terminalId === a.terminalId)
+        if (i >= 0) merged[i] = a
+        else merged.push(a)
+      }
+      return merged
+    }
     const onUpdate = (u: AcpUpdate) => {
       const kind = u.sessionUpdate
       if (kind === 'agent_message_chunk') buffer('assistant', u.content?.text ?? u.text ?? '')
       else if (kind === 'agent_thought_chunk') buffer('thought', u.content?.text ?? u.text ?? '')
-      else if (kind === 'tool_call') {
+      else if (kind === 'plan') {
+        // the agent's own todo list — whole-array replace per frame (Zed's
+        // update_plan semantics), rendered as the pinned strip, never a turn
+        const entries = (u as { entries?: PlanEntry[] }).entries
+        if (Array.isArray(entries)) updateRuntime(threadId, (r) => ({ ...r, plan: entries }))
+      } else if (kind === 'tool_call') {
         const tc = u as { toolCallId?: string; title?: string; kind?: string; status?: string }
         flush()
         followLocations(u)
-        updateRuntime(threadId, (r) => ({ ...r, turns: [...r.turns, { kind: 'tool', toolId: tc.toolCallId, text: tc.title ?? tc.kind ?? 'tool', status: tc.status ?? 'pending', at: Date.now() }] }))
+        updateRuntime(threadId, (r) => ({ ...r, turns: [...r.turns, { kind: 'tool', toolId: tc.toolCallId, text: tc.title ?? tc.kind ?? 'tool', status: tc.status ?? 'pending', at: Date.now(), artifacts: artifactsOf(u) }] }))
       } else if (kind === 'tool_call_update') {
         const tc = u as { toolCallId?: string; title?: string; status?: string }
         flush()
         followLocations(u)
-        updateRuntime(threadId, (r) => ({ ...r, turns: r.turns.map((x) => (x.kind === 'tool' && x.toolId === tc.toolCallId ? { ...x, status: tc.status ?? x.status, text: tc.title ?? x.text } : x)) }))
+        updateRuntime(threadId, (r) => ({
+          ...r,
+          turns: r.turns.map((x) =>
+            x.kind === 'tool' && x.toolId === tc.toolCallId
+              ? { ...x, status: tc.status ?? x.status, text: tc.title ?? x.text, artifacts: mergeArtifacts(x.artifacts, artifactsOf(u)) }
+              : x,
+          ),
+        }))
       }
     }
     return { onUpdate, flush }
@@ -728,8 +842,17 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     return true
   }
   const drainingQueueRef = useRef(false)
+  // Queue pause semantics (review findings, 2026-07-09): a pause must always
+  // have a matching resume. Resumes: reconnect, a NEW enqueue (the user
+  // clearly wants the queue live), or a successful manual send. Stop PAUSES
+  // the queue (aborting a turn must not auto-fire the next prompt).
   const queuePausedRef = useRef(false)
+  const queueLenRef = useRef(queuedPrompts.length)
   useEffect(() => { if (connected) queuePausedRef.current = false }, [connected])
+  useEffect(() => {
+    if (queuedPrompts.length > queueLenRef.current) queuePausedRef.current = false // new enqueue resumes
+    queueLenRef.current = queuedPrompts.length
+  }, [queuedPrompts.length])
   useEffect(() => {
     if (!connected || busy || queuePausedRef.current || drainingQueueRef.current || queuedPrompts.length === 0) return
     const next = dequeueAssistantPrompt(active.id)
@@ -739,7 +862,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
       if (!sent) {
         enqueueAssistantPrompt(active.id, next, { front: true })
         queuePausedRef.current = true
-        useKaisola.getState().pushToast('warn', `${agentName} queue paused`)
+        useKaisola.getState().pushToast('warn', `${agentName} queue paused — send or queue a prompt to resume`)
       }
     }).finally(() => {
       drainingQueueRef.current = false
@@ -760,12 +883,22 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
       return
     }
     void sendText(text).then((sent) => {
-      // never swallow a ⌘L prompt silently — busy/unconnected must SAY so
-      if (!sent) useKaisola.getState().pushToast('info', 'Prompt not sent — the agent could not connect.')
+      // never swallow a ⌘L prompt: a race-y busy flip QUEUES it (review
+      // finding #4 — it used to be dropped with a misleading toast)
+      if (!sent) {
+        enqueueAssistantPrompt(active.id, { ...EMPTY_DRAFT, text: text.trim(), speed })
+        useKaisola.getState().pushToast('info', `Queued prompt for ${agentName}`)
+      }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [omniPrompt, threadId])
   const cancelActive = () => {
+    // Stop means STOP: pause the queue too, or flipping busy would auto-fire
+    // the next queued prompt the instant the user aborts (review finding #2)
+    if (queuedPrompts.length > 0) {
+      queuePausedRef.current = true
+      useKaisola.getState().pushToast('info', 'Queue paused — send or queue a prompt to resume')
+    }
     bridge.acp.cancel(agentKey)
     setThreadBusy(active.id, false)
     updateRuntime(active.id, (r) => ({ ...r, thinkStart: undefined }))
@@ -913,6 +1046,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
             </p>
           </div>
         )}
+        {(arun.plan?.length ?? 0) > 0 && <PlanStrip plan={arun.plan!} />}
         {arun.turns.map((t, i) => (
           <TurnRow
             key={i}

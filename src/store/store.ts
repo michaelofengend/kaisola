@@ -125,6 +125,16 @@ export interface AssistantThread {
   acpSessionId?: string
 }
 
+/** Diff/terminal artifacts a tool-call frame carries (ACP ToolCallContent). */
+export interface ToolArtifact {
+  type: 'diff' | 'terminal' | 'content'
+  path?: string
+  oldText?: string
+  newText?: string
+  terminalId?: string
+  text?: string
+}
+
 export interface AssistantTurn {
   kind: 'user' | 'assistant' | 'thought' | 'tool'
   text: string
@@ -132,6 +142,15 @@ export interface AssistantTurn {
   status?: string
   at?: number
   thinkMs?: number
+  /** Tool-call artifacts (diffs, embedded terminals) for the disclosure card. */
+  artifacts?: ToolArtifact[]
+}
+
+/** One ACP plan entry — the agent's own todo list (whole-array replace). */
+export interface PlanEntry {
+  content: string
+  priority?: string
+  status: 'pending' | 'in_progress' | 'completed' | string
 }
 
 export interface AssistantRuntime {
@@ -139,6 +158,8 @@ export interface AssistantRuntime {
   first: boolean
   /** Streaming-only; stripped from durable persistence. */
   thinkStart?: number
+  /** The agent's live plan (sessionUpdate:'plan'), replaced wholesale per frame. */
+  plan?: PlanEntry[]
 }
 
 export type AssistantSpeed = 'fast' | 'balanced' | 'deep'
@@ -1458,7 +1479,7 @@ function sanitizeSliceForPersist(slice: ProjectSliceMemory): ProjectSlicePersist
     ? slice.activeThreadId
     : assistantThreads[0]?.id ?? ''
   const fallbackCard = assistantThreads[0]?.id ?? terminals[0]?.id
-  const sessionGrid = gridState(dockGrid.length ? dockGrid : fallbackCard ? [[fallbackCard]] : [])
+  const sessionGrid = gridState(dockGrid.length ? dockGrid : slice.dockOpen && fallbackCard ? [[fallbackCard]] : [])
   const assistantRuntimes = Object.fromEntries(
     Object.entries(slice.assistantRuntimes)
       .filter(([id]) => assistantThreads.some((t) => t.id === id))

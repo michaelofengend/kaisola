@@ -91,6 +91,26 @@ function dispatch(msg) {
 async function handlePrompt(reqId, params) {
   const sid = params.sessionId
   const prompt = (params.prompt || []).map((b) => b.text || '').join(' ')
+  // "plan" anywhere in the prompt → exercise the plan + diff-artifact frames
+  // (the renderer's PlanStrip and tool-call disclosures; smoke drives this)
+  if (/\bplan\b/i.test(prompt)) {
+    update(sid, { sessionUpdate: 'plan', entries: [
+      { content: 'Inspect the failing module', priority: 'high', status: 'completed' },
+      { content: 'Patch the null guard', priority: 'high', status: 'in_progress' },
+      { content: 'Re-run the suite', priority: 'medium', status: 'pending' },
+    ] })
+    update(sid, { sessionUpdate: 'tool_call', toolCallId: 't-diff', title: 'Edit guard.ts', kind: 'edit', status: 'in_progress',
+      content: [{ type: 'diff', path: '/tmp/guard.ts', oldText: 'if (x) {\n  run(x)\n}\n', newText: 'if (x != null) {\n  run(x)\n}\n' }] })
+    update(sid, { sessionUpdate: 'tool_call_update', toolCallId: 't-diff', status: 'completed' })
+    update(sid, { sessionUpdate: 'plan', entries: [
+      { content: 'Inspect the failing module', priority: 'high', status: 'completed' },
+      { content: 'Patch the null guard', priority: 'high', status: 'completed' },
+      { content: 'Re-run the suite', priority: 'medium', status: 'in_progress' },
+    ] })
+    text(sid, 'plan exercised.')
+    send({ jsonrpc: '2.0', id: reqId, result: { stopReason: 'end_turn' } })
+    return
+  }
   thought(sid, `Reading the request and the project context, then I will run a quick command. (model=${models.currentModelId}, effort=${configOptions.find((o) => o.id === 'reasoning_effort').currentValue})`)
   text(sid, 'mock-agent online. ')
   update(sid, { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'echo agent-ran-this', kind: 'execute', status: 'pending' })

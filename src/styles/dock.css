@@ -459,6 +459,77 @@
 .assistant-tool.tool-completed { color: var(--success); }
 .assistant-tool.tool-failed { color: var(--danger); }
 .tool-status { color: var(--text-3); font-size: var(--fs-10); margin-left: var(--sp-1); }
+/* a tool call carrying artifacts (diffs / terminals) becomes a disclosure —
+   the one-line row is its summary; failures arrive pre-expanded */
+details.assistant-tool.tool-artifacts {
+  display: block;
+  align-self: stretch;
+  padding: 0;
+}
+details.assistant-tool.tool-artifacts > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 2px var(--sp-3);
+  cursor: pointer;
+  list-style: none;
+}
+details.assistant-tool.tool-artifacts > summary::-webkit-details-marker { display: none; }
+.tool-artifact-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border-top: 1px solid var(--border-faint);
+}
+.tool-terminal-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  align-self: flex-start;
+  font-size: var(--fs-11);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.tool-terminal-row:hover { color: var(--text-0); }
+.tool-terminal-open { color: var(--accent); font-size: var(--fs-10); }
+
+/* the agent's live plan (ACP plan frames): pinned above the transcript */
+.plan-strip {
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r-2);
+  background: var(--bg-2);
+  font-size: var(--fs-12);
+}
+.plan-strip > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+  list-style: none;
+  color: var(--text-1);
+}
+.plan-strip > summary::-webkit-details-marker { display: none; }
+.plan-count { font-weight: var(--fw-medium); flex-shrink: 0; }
+.plan-current { color: var(--text-3); min-width: 0; }
+.plan-entries {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-3) var(--sp-2);
+}
+.plan-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-2);
+  min-width: 0;
+}
+.plan-entry.plan-completed { color: var(--text-3); text-decoration: line-through; }
+.plan-entry.plan-in_progress { color: var(--text-0); }
+.plan-mark { flex-shrink: 0; width: 14px; display: inline-flex; justify-content: center; }
+.plan-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--border-strong); }
 
 /* Compact ledger for code-agent work: delegated calls + background terminals. */
 .agent-activity {
