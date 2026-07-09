@@ -26,6 +26,8 @@ const mentionIcon = (kind: Mention['kind']): string =>
         : kind === 'run' ? 'Terminal'
           : 'Image'
 const doneStatuses = new Set(['completed', 'failed', 'cancelled', 'canceled'])
+/** Streaming transcript flush cadence — ~12 renders/sec regardless of token rate. */
+const STREAM_FLUSH_MS = 80
 const statusTone = (status?: string): string => {
   const s = (status || 'pending').toLowerCase()
   return s === 'completed' ? 'completed' : s === 'failed' ? 'failed' : s === 'cancelled' || s === 'canceled' ? 'cancelled' : 'running'
@@ -47,6 +49,49 @@ const shortPath = (path?: string): string => {
  * a tool name. Buttons: Allow once · Always allow <pattern> (saves a client
  * rule + resolves matching pending asks) · Deny (stops the whole turn).
  */
+/** One transcript row, memoized: a streaming flush re-renders only the turn
+ *  that actually changed (the growing tail), not the whole transcript. */
+const TurnRow = memo(function TurnRow({ t, i, agentName, showCaret, liveThinkStart }: {
+  t: Turn; i: number; agentName: string; showCaret: boolean; liveThinkStart?: number
+}) {
+  if (t.kind === 'tool') {
+    return (
+      <div data-turn={i} className={`assistant-tool tool-${t.status}`}>
+        <Icon name={t.status === 'completed' ? 'CheckCircle2' : t.status === 'failed' ? 'XCircle' : 'Wrench'} size={11} />
+        {t.text}{t.status && t.status !== 'completed' && <span className="tool-status">{t.status}</span>}
+      </div>
+    )
+  }
+  if (t.kind === 'thought') {
+    return (
+      <details data-turn={i} className="assistant-thought" open>
+        <summary>
+          <Icon name="Brain" size={12} />
+          {t.thinkMs != null
+            ? `Thought for ${Math.max(1, Math.round(t.thinkMs / 1000))}s`
+            : liveThinkStart != null
+              ? `Thinking… ${Math.round((Date.now() - liveThinkStart) / 1000)}s`
+              : 'Thinking'}
+        </summary>
+        <div className="thought-text"><Markdown text={t.text} /></div>
+      </details>
+    )
+  }
+  return (
+    <div data-turn={i} className={`assistant-turn turn-${t.kind}`}>
+      <span className="turn-tag">
+        {t.kind === 'user' ? 'You' : agentName}
+        {t.at != null && <span className="turn-time">{clockTime(new Date(t.at).toISOString())}</span>}
+      </span>
+      <div className="turn-text">
+        {t.kind === 'assistant'
+          ? (t.text ? <Markdown text={t.text} /> : (showCaret ? '▌' : ''))
+          : t.text}
+      </div>
+    </div>
+  )
+})
+
 function PermissionCard({
   perm,
   onAllow,
@@ -376,16 +421,22 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     }
     // user-added ACP agents carry their own server command (Zed's agent_servers)
     const custom = useKaisola.getState().customAgents.find((a) => a.id === key && a.kind === 'acp')
+    // restart continuity: this thread's last agent-side session resumes via
+    // session/load when the agent supports it (stale ids fall back fresh)
+    const resumeSessionId = key === active.agentKey ? active.acpSessionId : undefined
     const res = await bridge.acp.connect(
       custom
-        ? { presetId: key, name: custom.name, command: custom.command, args: custom.args, autonomy, cwd }
-        : { presetId: key, autonomy, cwd },
+        ? { presetId: key, name: custom.name, command: custom.command, args: custom.args, autonomy, cwd, resumeSessionId }
+        : { presetId: key, autonomy, cwd, resumeSessionId },
     )
     if (res.ok) {
       setNotice(null); refresh()
       // this agentKey now belongs to the active project — so its background
       // permission asks / terminals route home after a mid-run tab switch
       useKaisola.getState().setAgentProject(key)
+      // remember the agent-side session so the NEXT connect can resume it
+      if (res.agent?.sessionId) useKaisola.getState().setThreadAcpSession(active.id, res.agent.sessionId)
+      if (res.resumed) setNotice('Resumed the previous session.')
     }
     else setNotice(res.message ?? 'Could not connect.')
     return res.ok
@@ -411,28 +462,47 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     refresh()
   }
 
-  const makeOnUpdate = (threadId: string) => (u: AcpUpdate) => {
-    const kind = u.sessionUpdate
-    const now = Date.now()
-    const append = (k: Turn['kind'], text: string) =>
+  // Chunks arrive far faster than frames paint, and every runtime update
+  // re-parses the growing turn's markdown from scratch. Buffer text chunks and
+  // flush on a ~80ms cadence so the transcript renders per flush, not per
+  // token. Tool calls flush the buffer first so turn order is preserved.
+  const makeOnUpdate = (threadId: string) => {
+    let pending: { kind: 'assistant' | 'thought'; text: string; at: number } | null = null
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let lastFlush = 0
+    const append = (k: 'assistant' | 'thought', text: string, at: number) =>
       updateRuntime(threadId, (r) => {
         const turns = [...r.turns]
         let thinkStart = r.thinkStart
         // start the thinking clock on the first thought; stop it (record duration
         // on the thought turn) when the model's visible output begins
-        if (k === 'thought' && thinkStart == null) thinkStart = now
+        if (k === 'thought' && thinkStart == null) thinkStart = at
         if (k === 'assistant' && thinkStart != null) {
-          const ms = now - thinkStart
+          const ms = at - thinkStart
           thinkStart = undefined
           for (let i = turns.length - 1; i >= 0; i--) {
             if (turns[i].kind === 'thought') { turns[i] = { ...turns[i], thinkMs: ms }; break }
           }
         }
         const last = turns[turns.length - 1]
-        if (last && last.kind === k && k !== 'tool') turns[turns.length - 1] = { ...last, text: last.text + text }
-        else turns.push({ kind: k, text, at: now })
+        if (last && last.kind === k) turns[turns.length - 1] = { ...last, text: last.text + text }
+        else turns.push({ kind: k, text, at })
         return { ...r, turns, thinkStart }
       })
+    const flush = () => {
+      if (timer) { clearTimeout(timer); timer = null }
+      if (!pending) return
+      const p = pending
+      pending = null
+      lastFlush = performance.now()
+      append(p.kind, p.text, p.at)
+    }
+    const buffer = (k: 'assistant' | 'thought', text: string) => {
+      if (pending && pending.kind !== k) flush()
+      if (pending) pending.text += text
+      else pending = { kind: k, text, at: Date.now() }
+      if (!timer) timer = setTimeout(flush, Math.max(0, STREAM_FLUSH_MS - (performance.now() - lastFlush)))
+    }
     // follow the agent (Zed's crosshair): tool calls that carry file locations
     // open those files as transient previews while the agent works
     const followLocations = (u2: AcpUpdate) => {
@@ -442,17 +512,23 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
       const p = locs?.find((l) => typeof l.path === 'string')?.path
       if (p && st.workspacePath && p.startsWith(st.workspacePath)) st.requestFile(p)
     }
-    if (kind === 'agent_message_chunk') append('assistant', u.content?.text ?? u.text ?? '')
-    else if (kind === 'agent_thought_chunk') append('thought', u.content?.text ?? u.text ?? '')
-    else if (kind === 'tool_call') {
-      const tc = u as { toolCallId?: string; title?: string; kind?: string; status?: string }
-      followLocations(u)
-      updateRuntime(threadId, (r) => ({ ...r, turns: [...r.turns, { kind: 'tool', toolId: tc.toolCallId, text: tc.title ?? tc.kind ?? 'tool', status: tc.status ?? 'pending', at: now }] }))
-    } else if (kind === 'tool_call_update') {
-      const tc = u as { toolCallId?: string; title?: string; status?: string }
-      followLocations(u)
-      updateRuntime(threadId, (r) => ({ ...r, turns: r.turns.map((x) => (x.kind === 'tool' && x.toolId === tc.toolCallId ? { ...x, status: tc.status ?? x.status, text: tc.title ?? x.text } : x)) }))
+    const onUpdate = (u: AcpUpdate) => {
+      const kind = u.sessionUpdate
+      if (kind === 'agent_message_chunk') buffer('assistant', u.content?.text ?? u.text ?? '')
+      else if (kind === 'agent_thought_chunk') buffer('thought', u.content?.text ?? u.text ?? '')
+      else if (kind === 'tool_call') {
+        const tc = u as { toolCallId?: string; title?: string; kind?: string; status?: string }
+        flush()
+        followLocations(u)
+        updateRuntime(threadId, (r) => ({ ...r, turns: [...r.turns, { kind: 'tool', toolId: tc.toolCallId, text: tc.title ?? tc.kind ?? 'tool', status: tc.status ?? 'pending', at: Date.now() }] }))
+      } else if (kind === 'tool_call_update') {
+        const tc = u as { toolCallId?: string; title?: string; status?: string }
+        flush()
+        followLocations(u)
+        updateRuntime(threadId, (r) => ({ ...r, turns: r.turns.map((x) => (x.kind === 'tool' && x.toolId === tc.toolCallId ? { ...x, status: tc.status ?? x.status, text: tc.title ?? x.text } : x)) }))
+      }
     }
+    return { onUpdate, flush }
   }
 
   const send = async () => {
@@ -482,7 +558,9 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     const mentionPrefix = mns.length ? `Referenced from the research project (use if relevant):\n${mns.map((m) => `- ${m.text}`).join('\n')}\n\n` : ''
     const filePrefix = files.length ? `Attached files (read them if relevant):\n${files.join('\n')}\n\n` : ''
     const payload = `${first ? `${buildContext()}\n\n` : ''}${mentionPrefix}${filePrefix}${text}`
-    const res = await bridge.acp.prompt(agentKey, payload, makeOnUpdate(threadId))
+    const stream = makeOnUpdate(threadId)
+    const res = await bridge.acp.prompt(agentKey, payload, stream.onUpdate)
+    stream.flush() // drain any buffered tail before settling the turn
     updateRuntime(threadId, (r) => {
       let turns = r.turns
       if (r.thinkStart != null) {
@@ -672,38 +750,16 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
             </p>
           </div>
         )}
-        {arun.turns.map((t, i) =>
-          t.kind === 'tool' ? (
-            <div key={i} data-turn={i} className={`assistant-tool tool-${t.status}`}>
-              <Icon name={t.status === 'completed' ? 'CheckCircle2' : t.status === 'failed' ? 'XCircle' : 'Wrench'} size={11} />
-              {t.text}{t.status && t.status !== 'completed' && <span className="tool-status">{t.status}</span>}
-            </div>
-          ) : t.kind === 'thought' ? (
-            <details key={i} data-turn={i} className="assistant-thought" open>
-              <summary>
-                <Icon name="Brain" size={12} />
-                {t.thinkMs != null
-                  ? `Thought for ${Math.max(1, Math.round(t.thinkMs / 1000))}s`
-                  : arun.thinkStart != null
-                    ? `Thinking… ${Math.round((Date.now() - arun.thinkStart) / 1000)}s`
-                    : 'Thinking'}
-              </summary>
-              <div className="thought-text"><Markdown text={t.text} /></div>
-            </details>
-          ) : (
-            <div key={i} data-turn={i} className={`assistant-turn turn-${t.kind}`}>
-              <span className="turn-tag">
-                {t.kind === 'user' ? 'You' : agentName}
-                {t.at != null && <span className="turn-time">{clockTime(new Date(t.at).toISOString())}</span>}
-              </span>
-              <div className="turn-text">
-                {t.kind === 'assistant'
-                  ? (t.text ? <Markdown text={t.text} /> : (busy && i === arun.turns.length - 1 ? '▌' : ''))
-                  : t.text}
-              </div>
-            </div>
-          ),
-        )}
+        {arun.turns.map((t, i) => (
+          <TurnRow
+            key={i}
+            t={t}
+            i={i}
+            agentName={agentName}
+            showCaret={busy && i === arun.turns.length - 1}
+            liveThinkStart={t.kind === 'thought' && t.thinkMs == null ? arun.thinkStart : undefined}
+          />
+        ))}
         {/* the agent is BLOCKED on these — inline, non-modal, option-per-button */}
         {permsForAgent.map((perm) => (
           <PermissionCard

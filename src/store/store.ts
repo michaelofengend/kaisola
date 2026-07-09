@@ -37,7 +37,7 @@ import { verifyCitation } from '../lib/verify'
 import { recomputeProvenanced, sectionTrust } from '../domain/trust'
 import { extractDoi, lookupOpenAlex, lookupOpenAlexByArxiv, resolveReferences } from '../lib/openalex'
 import { parseTei, locateQuote } from '../lib/grobid'
-import { bridge, isDesktop, type AcpPermissionRequest } from '../lib/bridge'
+import { bridge, isDesktop, acpScope, type AcpPermissionRequest } from '../lib/bridge'
 import { folderHue } from '../lib/sessionHue'
 import { forgetMountedTerminal } from '../components/Terminal'
 import {
@@ -72,7 +72,7 @@ export interface RepoCheckpoint {
 export interface AgentFeedItem {
   id: string
   at: number
-  kind: 'prompt' | 'tool' | 'stop' | 'permission'
+  kind: 'prompt' | 'tool' | 'stop' | 'permission' | 'task'
   text: string
   path?: string
   tool?: string
@@ -119,6 +119,9 @@ export interface AssistantThread {
   busy: boolean
   /** Session cwd override (worktree sessions) — falls back to the workspace. */
   cwd?: string
+  /** The agent-side ACP session id — reconnects after a restart try
+   * session/load with it so the agent resumes where the transcript left off. */
+  acpSessionId?: string
 }
 
 export interface AssistantTurn {
@@ -438,7 +441,7 @@ function provenanceKey(link: ProvenanceLink): string {
  * reset-on-switch ephemeral cursor (bucket F, rebuilt) — see `resetEphemeralCursors`.
  */
 export const PROJECT_SLICE_PERSIST_KEYS = [
-  'project', 'stage', 'workspacePath', 'autonomy', 'agentPreset', 'fileTabs', 'openFilePath',
+  'project', 'stage', 'workspacePath', 'autonomy', 'agentPreset', 'claudeAccountId', 'fileTabs', 'openFilePath',
   'repoCheckpoints', 'followAgent', 'annotations', 'assistantThreads', 'assistantRuntimes',
   'activeThreadId', 'terminals', 'panels', 'sessionGroups', 'pinnedSessions', 'worktreeSessions',
   'latexMode', 'dockGrid', 'dockViews', 'dockColWeights', 'canvasWidth', 'canvasOpen', 'dockOpen',
@@ -450,11 +453,35 @@ export const PROJECT_SLICE_MEMORY_KEYS = [
   'agentQueueRunning', 'agentTasks', 'latexDismissed', 'checkpoints',
 ] as const
 
+/** Terminal surface tone — 'paper' is the light "more white" look, independent
+ * of the app theme. Keep the color math in Terminal.tsx + tokens.css in sync. */
+export type TermBackground = 'ink' | 'slate' | 'paper'
+
+/** A named Claude subscription: an isolated CLAUDE_CONFIG_DIR the Claude CLI
+ * runs under. Projects bind to one by id (''= the default ~/.claude), so two
+ * project tabs can run two different subscriptions side by side. */
+export interface ClaudeAccount {
+  id: string
+  label: string
+  /** Absolute (or ~-prefixed) CLAUDE_CONFIG_DIR for this subscription. */
+  configDir: string
+  /** Signed-in email, refreshed from <configDir>/.claude.json when shown. */
+  email?: string
+}
+
+/** Render a config dir for a shell line: `~/x` becomes "$HOME/x" (the CLI does
+ * NOT expand a literal ~ arriving via an env var), anything else is
+ * single-quoted verbatim. */
+export const shellConfigDir = (dir: string): string =>
+  dir.startsWith('~/')
+    ? `"$HOME/${dir.slice(2).replace(/(["\\$`])/g, '\\$1')}"`
+    : `'${dir.replace(/'/g, `'\\''`)}'`
+
 const GLOBAL_KEYS = [
   'theme', 'themeMode', 'layoutMode', 'agentModels', 'fileTextZoom', 'termFontSize', 'termFontFamily',
-  'termFontWeight', 'termCursorColor', 'customAgents', 'enabledAgents', 'sessionTemplates', 'claudeModel', 'reasoningProvider',
+  'termFontWeight', 'termCursorColor', 'termBackground', 'customAgents', 'enabledAgents', 'sessionTemplates', 'claudeModel', 'reasoningProvider',
   'localBaseUrl', 'localModel', 'openaiBaseUrl', 'openaiModel', 'openAlexMailto', 'grobidEndpoint',
-  'sandboxMode', 'workflows', 'automationsEnabled', 'perfMode', 'railWidth', 'railOpen', 'claudeSessions',
+  'sandboxMode', 'workflows', 'automationsEnabled', 'perfMode', 'railWidth', 'railOpen', 'claudeSessions', 'claudeAccounts',
   'permissionRules', 'sensitiveGlobs', 'latexMain', 'unsavedBuffers',
 ] as const
 
@@ -613,6 +640,13 @@ interface KaisolaState {
    * auto-launch resumes it (`claude --resume`) so a restart lands you back
    * in the same conversation. Persisted; capped. */
   claudeSessions: Record<string, string>
+  /** Named Claude subscriptions — each an isolated CLAUDE_CONFIG_DIR. The
+   * implicit default account (~/.claude) is NOT listed here. Persisted. */
+  claudeAccounts: ClaudeAccount[]
+  /** This project's Claude account id ('' = default ~/.claude). Project-scoped
+   * + persisted: the Claude session in one project tab never runs under
+   * another tab's subscription. */
+  claudeAccountId: string
   termFontSize: number
   /** Terminal typeface — a curated mono list in Settings (persisted). */
   termFontFamily: string
@@ -621,6 +655,8 @@ interface KaisolaState {
   /** Terminal cursor color: 'auto' follows the terminal text color, otherwise
    * a hex value ('#95a456' restores the accent look). Persisted. */
   termCursorColor: string
+  /** Terminal surface tone: ink (near-black) / slate / paper (white). Persisted. */
+  termBackground: TermBackground
   /** Working-tree checkpoints (newest first) — hidden-ref git commits taken
    * before each Claude turn and on demand. Scoped to workspacePath. */
   repoCheckpoints: RepoCheckpoint[]
@@ -715,6 +751,14 @@ interface KaisolaState {
   setCanvasWidth: (w: number | null) => void
   setRailWidth: (w: number | null) => void
   setClaudeSession: (workspace: string, sessionId: string) => void
+  setClaudeAccountId: (id: string) => void
+  addClaudeAccount: (label: string, configDir: string) => void
+  removeClaudeAccount: (id: string) => void
+  setClaudeAccountEmail: (id: string, email: string | undefined) => void
+  /** (Re)launch the Claude terminal for the ACTIVE project under its bound
+   * account — the auto-launch and Settings' "apply account now" both use it.
+   * `expect` aborts if the active project/workspace moved during the probes. */
+  launchClaude: (opts?: { reveal?: boolean; expect?: { pid: string; ws: string } }) => Promise<boolean>
   setDockColWeights: (weights: number[] | null) => void
   /** Minimize/restore the main view — when minimized the work row is all cards. */
   toggleCanvas: () => void
@@ -781,6 +825,7 @@ interface KaisolaState {
   /** Auto-title a thread from its first message's topic (manual name wins). */
   autoNameThread: (id: string, text: string) => void
   setAssistantThreadAgent: (id: string, agentKey: string) => void
+  setThreadAcpSession: (id: string, sessionId: string | undefined) => void
   updateAssistantRuntime: (id: string, fn: (runtime: AssistantRuntime) => AssistantRuntime) => void
   resetAssistantRuntime: (id: string) => void
   reorderAssistantThreads: (srcId: string, destId: string) => void
@@ -799,6 +844,7 @@ interface KaisolaState {
   setTermFontFamily: (family: string) => void
   setTermFontWeight: (weight: number) => void
   setTermCursorColor: (color: string) => void
+  setTermBackground: (bg: TermBackground) => void
   toggleRail: () => void
   snapshotWorkspace: (label: string) => Promise<RepoCheckpoint | null>
   restoreRepoCheckpoint: (id: string) => Promise<void>
@@ -1265,6 +1311,7 @@ const freshSlice = (pid: string, path: string | null = null): ProjectSliceMemory
     workspacePath: path,
     autonomy: 'propose',
     agentPreset: 'codex',
+    claudeAccountId: '',
     fileTabs: [],
     openFilePath: null,
     repoCheckpoints: [],
@@ -1330,6 +1377,7 @@ function sanitizeSliceForPersist(slice: ProjectSliceMemory): ProjectSlicePersist
     workspacePath: slice.workspacePath,
     autonomy: slice.autonomy,
     agentPreset: slice.agentPreset,
+    claudeAccountId: slice.claudeAccountId,
     fileTabs: slice.fileTabs,
     openFilePath: slice.openFilePath,
     repoCheckpoints: slice.repoCheckpoints.slice(0, 40),
@@ -1378,6 +1426,7 @@ function persistSnapshot(s: KaisolaState) {
     termFontFamily: s.termFontFamily,
     termFontWeight: s.termFontWeight,
     termCursorColor: s.termCursorColor,
+    termBackground: s.termBackground,
     permissionRules: s.permissionRules.slice(-200),
     sensitiveGlobs: s.sensitiveGlobs,
     customAgents: s.customAgents,
@@ -1400,6 +1449,7 @@ function persistSnapshot(s: KaisolaState) {
     railWidth: s.railWidth,
     railOpen: s.railOpen,
     claudeSessions: s.claudeSessions,
+    claudeAccounts: s.claudeAccounts,
     // TABS
     projectTabs: s.projectTabs,
     activeProjectId: s.activeProjectId,
@@ -1609,10 +1659,13 @@ export const useKaisola = create<KaisolaState>()(
   railWidth: null,
   railOpen: true,
   claudeSessions: {},
+  claudeAccounts: [],
+  claudeAccountId: '',
   termFontSize: 12,
   termFontFamily: 'JetBrains Mono',
   termFontWeight: 500,
   termCursorColor: 'auto',
+  termBackground: 'paper' as TermBackground,
   repoCheckpoints: [],
   agentFeed: [],
   followAgent: false,
@@ -1779,6 +1832,67 @@ export const useKaisola = create<KaisolaState>()(
       while (entries.length >= 40) entries.shift()
       return { claudeSessions: Object.fromEntries([...entries, [workspace, sessionId]]) }
     }),
+  setClaudeAccountId: (id) => set({ claudeAccountId: id || '' }),
+  addClaudeAccount: (label, configDir) =>
+    set((s) => {
+      const lbl = label.trim() || 'Account'
+      const dir = configDir.trim()
+      if (!dir || s.claudeAccounts.some((a) => a.configDir === dir)) return s
+      const id = `ca-${Date.now().toString(36)}`
+      return { claudeAccounts: [...s.claudeAccounts, { id, label: lbl, configDir: dir }] }
+    }),
+  removeClaudeAccount: (id) =>
+    set((s) => ({
+      claudeAccounts: s.claudeAccounts.filter((a) => a.id !== id),
+      // a project bound to the removed account falls back to the default (~/.claude)
+      claudeAccountId: s.claudeAccountId === id ? '' : s.claudeAccountId,
+    })),
+  setClaudeAccountEmail: (id, email) =>
+    set((s) => ({ claudeAccounts: s.claudeAccounts.map((a) => (a.id === id ? { ...a, email } : a)) })),
+  launchClaude: async (opts) => {
+    const st = get()
+    const ws = st.workspacePath
+    const pid = st.activeProjectId
+    if (!ws || !isDesktop) return false
+    if (opts?.expect && (opts.expect.pid !== pid || opts.expect.ws !== ws)) return false
+    // risk #5: never arm the agent in a folder that no longer exists (a moved
+    // or deleted workspace would spawn the agent in the wrong tree / $HOME)
+    const exists = await bridge.fs.list(ws)
+    if (!exists.ok) return false
+    const acct = st.claudeAccounts.find((a) => a.id === st.claudeAccountId)
+    // resume the workspace's last conversation: the tracked session id when
+    // its transcript still exists (exact chat), else --continue when the
+    // account's config dir has ANY transcript for this folder
+    const sid = get().claudeSessions[ws]
+    const sessions = await bridge.claude.sessionExists?.(ws, sid ?? '', acct?.configDir)
+    // the Kaisola MCP server (project state + agent-task ledger) rides along
+    const mcpPath = (await bridge.mcp?.info().catch(() => null))?.configPath
+    const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`
+    const resumeArg = sid && sessions?.exists ? `--resume ${q(sid)}` : sessions?.any ? '--continue' : ''
+    // a fast tab switch may have moved on while we probed the folder
+    const now = get()
+    if (opts?.expect && (now.activeProjectId !== opts.expect.pid || now.workspacePath !== opts.expect.ws)) return false
+    if (!opts?.expect && (now.activeProjectId !== pid || now.workspacePath !== ws)) return false
+    // the hooks tap is armed at app startup (main) and its settings path is a
+    // constant on the bridge — the boot line is built synchronously
+    const hooksPath = bridge.claude.settingsPath
+    const boot = [
+      acct?.configDir ? `CLAUDE_CONFIG_DIR=${shellConfigDir(acct.configDir)}` : '',
+      hooksPath ? `claude --settings ${q(hooksPath)}` : 'claude',
+      mcpPath ? `--mcp-config ${q(mcpPath)}` : '',
+      resumeArg,
+    ].filter(Boolean).join(' ')
+    get().requestTerminal(boot, {
+      cwd: ws,
+      name: acct ? `Claude · ${acct.label}` : 'Claude',
+      singletonKey: 'agent:claude-code',
+      restart: true,
+      // never clobber a layout the user arranged — only App's one-time
+      // fresh-shell migration places the card
+      reveal: opts?.reveal ?? false,
+    })
+    return true
+  },
   setDockColWeights: (weights) =>
     set({ dockColWeights: weights && weights.length ? weights.map((w) => Math.max(0.15, w)) : null }),
   // minimizing the main view leaves only the session cards — so keep them shown
@@ -2361,6 +2475,8 @@ export const useKaisola = create<KaisolaState>()(
     })),
   setAssistantThreadAgent: (id, agentKey) =>
     set((s) => ({ assistantThreads: s.assistantThreads.map((t) => (t.id === id ? { ...t, agentKey } : t)) })),
+  setThreadAcpSession: (id, sessionId) =>
+    set((s) => ({ assistantThreads: s.assistantThreads.map((t) => (t.id === id ? { ...t, acpSessionId: sessionId } : t)) })),
   updateAssistantRuntime: (id, fn) =>
     set((s) => {
       const current = s.assistantRuntimes[id] ?? { turns: [], first: true }
@@ -2437,6 +2553,11 @@ export const useKaisola = create<KaisolaState>()(
   setTermFontWeight: (weight) => set({ termFontWeight: [400, 500, 700].includes(weight) ? weight : 500 }),
   setTermCursorColor: (color) =>
     set({ termCursorColor: color === 'auto' || /^#[0-9a-fA-F]{6}$/.test(color) ? color : 'auto' }),
+  setTermBackground: (bg) => {
+    const v: TermBackground = bg === 'ink' || bg === 'slate' ? bg : 'paper'
+    document.documentElement.dataset.termbg = v // tokens.css keys --term-bg off this
+    set({ termBackground: v })
+  },
   toggleRail: () => set((s) => ({ railOpen: !s.railOpen })),
 
   // ── working-tree checkpoints (Zed-style restore points, via hidden git refs) ──
@@ -3965,5 +4086,15 @@ export const useKaisola = create<KaisolaState>()(
     },
   ),
 )
+
+// Keep the bridge-level ACP scope pinned to the ACTIVE project: every acp call
+// composes its wire key from this, so a Codex/Gemini session in one project
+// tab can never answer (or be prompted from) another tab. Pop-out terminal
+// windows have a read-only store and make no acp calls — the stale scope there
+// is inert.
+acpScope.current = useKaisola.getState().activeProjectId
+useKaisola.subscribe((s) => {
+  if (acpScope.current !== s.activeProjectId) acpScope.current = s.activeProjectId
+})
 
 const trim = (s: string) => (s.length > 48 ? `${s.slice(0, 48)}…` : s)

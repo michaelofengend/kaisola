@@ -18,6 +18,9 @@ const { registerGitHandlers } = require('./ipc/gitHandler.cjs')
 const { registerLatexHandlers } = require('./ipc/latexHandler.cjs')
 const { registerClaudeHooksHandlers } = require('./ipc/claudeHooksHandler.cjs')
 const { registerUpdateHandlers } = require('./ipc/updateHandler.cjs')
+const { registerUsageHandlers } = require('./ipc/usageHandler.cjs')
+const { registerLedgerHandlers } = require('./ipc/ledgerHandler.cjs')
+const { registerMcpHandlers } = require('./ipc/mcpServer.cjs')
 const worktree = require('./ipc/worktreeHandler.cjs')
 
 process.env.KAISOLA_SMOKE = '1' // never auto-open a real browser during the test
@@ -70,6 +73,9 @@ app.whenReady().then(async () => {
   registerLatexHandlers(ipcMain)
   registerClaudeHooksHandlers(ipcMain)
   registerUpdateHandlers(ipcMain)
+  registerUsageHandlers(ipcMain)
+  registerLedgerHandlers(ipcMain)
+  registerMcpHandlers(ipcMain)
   // Liquid Glass prefs are cosmetic; the smoke shell answers with "unsupported"
   ipcMain.handle('shell:glass', () => ({ supported: false, active: false, enabled: false }))
   worktree.registerWorktreeHandlers(ipcMain)
@@ -154,8 +160,11 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, 600))
     const t = window.__kaisola.getState().terminals.find((term) => term.singletonKey === 'agent:claude-code')
     // boot = \`claude\`, plus \`--settings '<hooks file>'\` when the tap armed,
-    // plus \`--resume <sid>\` / \`--continue\` when the workspace has history
-    const bootOk = !!t && typeof t.boot === 'string' && /^claude( --settings '[^']+')?( --resume '[^']+'| --continue)?$/.test(t.boot)
+    // plus \`--mcp-config '<kaisola server>'\` when the MCP server is up, plus
+    // \`--resume <sid>\` / \`--continue\` when the workspace has history; a
+    // non-default account prefixes CLAUDE_CONFIG_DIR
+    const bootOk = !!t && typeof t.boot === 'string' &&
+      /^(CLAUDE_CONFIG_DIR=("[^"]+"|'[^']+') )?claude( --settings '[^']+')?( --mcp-config '[^']+')?( --resume '[^']+'| --continue)?$/.test(t.boot)
     return !!(!before && t && bootOk && t.restart === true && t.name === 'Claude' && t.cwd === ${JSON.stringify(claudeRoot)})
   })()`)
   const nativeWindow = {

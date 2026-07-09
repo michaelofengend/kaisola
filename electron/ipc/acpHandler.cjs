@@ -6,6 +6,7 @@ const path = require('node:path')
 const os = require('node:os')
 const { shell } = require('electron')
 const { AcpConnection } = require('./acp.cjs')
+const { mcpHttpEntry } = require('./mcpServer.cjs')
 const mgr = require('./terminalManager.cjs')
 
 const URL_RE = /https?:\/\/[^\s"'<>)]+/
@@ -163,12 +164,13 @@ function friendly(resolved, err, stderrTail) {
   return `${err.message}${tail}`
 }
 
-/** The calling window's connections, renderer-keyed by bare presetId. */
+/** The calling window's connections. `key` is the scoped wire key (bridge.ts
+ * splits it back into bare presetId + project scope for the renderer). */
 function agentSummary(sender) {
   return [...connections.values()]
     .filter((e) => e.sender === sender)
     .map((e) => ({
-      key: e.meta && e.meta.presetId, name: e.meta && e.meta.name, presetId: e.meta && e.meta.presetId,
+      key: (e.meta && (e.meta.key || e.meta.presetId)), name: e.meta && e.meta.name, presetId: e.meta && e.meta.presetId,
       connected: !!(e.conn && e.conn.alive), controls: e.controls,
       authMethods: (e.conn && e.conn.authMethods) || [],
     }))
@@ -187,8 +189,8 @@ function registerAcpHandlers(ipcMain) {
   ipcMain.handle('acp:status', (event) => {
     for (const [k, entry] of [...connections.entries()]) {
       if (!entry.sender || entry.sender.isDestroyed()) {
-        const presetId = entry.meta && entry.meta.presetId
-        const nk = ikey(event.sender, presetId)
+        const rendererKey = entry.meta && (entry.meta.key || entry.meta.presetId)
+        const nk = ikey(event.sender, rendererKey)
         if (!connections.has(nk)) {
           connections.delete(k)
           entry.sender = event.sender
@@ -201,9 +203,13 @@ function registerAcpHandlers(ipcMain) {
 
   ipcMain.handle('acp:connect', async (event, config = {}) => {
     const resolved = resolveConfig(config)
-    const key = resolved.presetId
+    // scope = the renderer's project id: the SAME preset in two project tabs is
+    // two independent connections/sessions. The composed key is what the
+    // renderer echoes back on every later call (bridge.ts scopes/unscopes it).
+    const scope = typeof config.scope === 'string' && config.scope ? config.scope : ''
+    const key = scope ? `${resolved.presetId}@@${scope}` : resolved.presetId
     const internalKey = ikey(event.sender, key)
-    const preset = presets().find((x) => x.id === key)
+    const preset = presets().find((x) => x.id === resolved.presetId)
     if (preset && preset.terminalOnly) {
       return { ok: false, message: `${preset.name} runs as a terminal session. Open it from the + menu or Settings.` }
     }
@@ -218,8 +224,15 @@ function registerAcpHandlers(ipcMain) {
     // callbacks keep reaching the renderer after a window close/reopen
     const entry = { conn: null, meta: null, sender: event.sender, controls: { modes: null, configOptions: [] }, current: { sender: null, channel: null }, autonomy: config.autonomy || DEFAULT_AUTONOMY }
 
+    // per-connection env on top of the preset's (e.g. CLAUDE_CONFIG_DIR / CODEX_HOME
+    // for the project's bound subscription)
+    const env = config.env && typeof config.env === 'object'
+      ? { ...(resolved.env || {}), ...config.env }
+      : resolved.env
     const conn = new AcpConnection(
-      { command: resolved.command, args: resolved.args, env: resolved.env, cwd: sessionCwd },
+      // every ACP agent gets the shared Kaisola MCP server (project state +
+      // agent-task ledger) when it can dial HTTP — one tool surface, all vendors
+      { command: resolved.command, args: resolved.args, env, cwd: sessionCwd, mcpServers: [mcpHttpEntry()].filter(Boolean) },
       {
         onUpdate: (params) => {
           try { const m = JSON.stringify(params).match(URL_RE); if (m) surfaceAuthUrl(entry, resolved.name, key, m[0]) } catch { /* noop */ }
@@ -293,15 +306,23 @@ function registerAcpHandlers(ipcMain) {
       conn.start()
       const handshake = (async () => {
         await conn.initialize()
+        // restart/relaunch continuity: resume the thread's prior session when
+        // the agent supports session/load; a stale/pruned id falls back fresh
+        if (config.resumeSessionId && conn.canLoadSession) {
+          try {
+            await conn.loadSession(String(config.resumeSessionId))
+            return { sessionId: String(config.resumeSessionId), resumed: true }
+          } catch { /* fall through to session/new */ }
+        }
         const session = await conn.newSession()
         return session
       })()
       const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('TIMEOUT')), CONNECT_TIMEOUT_MS))
       const session = await Promise.race([handshake, timeout])
-      entry.meta = { key, presetId: resolved.presetId, name: resolved.name, sessionId: session.sessionId }
+      entry.meta = { key, presetId: resolved.presetId, scope, name: resolved.name, sessionId: session.sessionId }
       entry.controls = conn.getControls()
       connections.set(internalKey, entry)
-      return { ok: true, key, agent: entry.meta, controls: entry.controls, authMethods: conn.authMethods }
+      return { ok: true, key, agent: entry.meta, controls: entry.controls, authMethods: conn.authMethods, resumed: !!session.resumed }
     } catch (err) {
       conn.dispose()
       return { ok: false, message: friendly(resolved, err, stderrTail) }

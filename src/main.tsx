@@ -13,7 +13,6 @@ import { parseTei, parseCoords, locateQuote } from './lib/grobid'
 import './styles/global.css'
 import './styles/shell.css'
 import './styles/signature.css'
-import './styles/views.css'
 import './styles/calm.css'
 import './styles/dock.css'
 import '@xterm/xterm/css/xterm.css'
@@ -21,6 +20,7 @@ import '@xterm/xterm/css/xterm.css'
 // apply persisted/initial theme + appearance-energy mode before first paint
 document.documentElement.dataset.theme = useKaisola.getState().theme
 document.documentElement.dataset.perf = useKaisola.getState().perfMode
+document.documentElement.dataset.termbg = useKaisola.getState().termBackground
 // solid (painted/eco) windows: main created this window opaque — square the
 // painted corners to the native clip before first paint (global.css)
 if (new URLSearchParams(location.search).get('solidwin') === '1') {

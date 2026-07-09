@@ -14,8 +14,9 @@ const PROTOCOL_VERSION = 1
 
 class AcpConnection {
   constructor(config, hooks = {}) {
-    this.config = config // { command, args, env, cwd }
+    this.config = config // { command, args, env, cwd, mcpServers }
     this.hooks = hooks // { onUpdate, onNotice, onPermission }
+    this.mcpServers = Array.isArray(config.mcpServers) ? config.mcpServers : null
     this.proc = null
     this.buffer = ''
     this.nextId = 1
@@ -233,7 +234,18 @@ class AcpConnection {
       },
     })
     this.authMethods = (res && res.authMethods) || []
+    // agents advertising loadSession can resume a prior session after an app
+    // restart (session/load) instead of starting blank
+    this.canLoadSession = !!(res && res.agentCapabilities && res.agentCapabilities.loadSession)
+    // agents that accept HTTP MCP servers get the Kaisola server at session/new
+    this.mcpHttpOk = !!(res && res.agentCapabilities && res.agentCapabilities.mcpCapabilities && res.agentCapabilities.mcpCapabilities.http)
     return res
+  }
+
+  /** The mcpServers param for session/new|load — the shared Kaisola server
+   * (project state + agent-task ledger), only for agents that can dial HTTP. */
+  sessionMcpServers() {
+    return this.mcpHttpOk && Array.isArray(this.mcpServers) ? this.mcpServers : []
   }
 
   /** Trigger an auth method (the agent runs its own OAuth / opens a browser). */
@@ -242,11 +254,25 @@ class AcpConnection {
   }
 
   async newSession() {
-    const res = await this.request('session/new', { cwd: this.cwd, mcpServers: [] })
+    const res = await this.request('session/new', { cwd: this.cwd, mcpServers: this.sessionMcpServers() })
     this.sessionId = res.sessionId
     this.modes = res.modes || null
     this.models = res.models || null
     this.configOptions = res.configOptions || []
+    this.hooks.onControls?.(this.getControls())
+    return res
+  }
+
+  /** Resume a prior session by id (agents advertising loadSession). The agent
+   * replays its history as session/update notifications — with no turn in
+   * flight those route nowhere, which is right: the renderer already shows the
+   * persisted transcript; what we want back is the AGENT's internal state. */
+  async loadSession(sessionId) {
+    const res = await this.request('session/load', { sessionId, cwd: this.cwd, mcpServers: this.sessionMcpServers() })
+    this.sessionId = sessionId
+    this.modes = (res && res.modes) || this.modes || null
+    this.models = (res && res.models) || this.models || null
+    this.configOptions = (res && res.configOptions) || this.configOptions || []
     this.hooks.onControls?.(this.getControls())
     return res
   }

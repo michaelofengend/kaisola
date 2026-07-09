@@ -190,6 +190,8 @@ export interface AcpAgent {
   connected: boolean
   controls?: AcpControls
   authMethods?: AcpAuthMethod[]
+  /** Project id the connection is scoped to ('' = unscoped/legacy). */
+  scope?: string
 }
 /** A session/update payload (loose — agents vary). */
 export interface AcpUpdate {
@@ -206,6 +208,7 @@ export interface AcpNotice {
   agent?: string
   key?: string
   url?: string // an OAuth/authorization URL the agent printed
+  scope?: string
 }
 export interface AcpTerminalInfo {
   terminalId: string
@@ -227,6 +230,8 @@ export interface AcpPermissionRequest {
   diffs?: Array<{ path: string; oldText: string; newText: string }>
   /** Touches a sensitive-glob file — card shows a warning, rules never cover it. */
   sensitive?: boolean
+  /** Project id the asking connection is scoped to — routes the card to its owner. */
+  scope?: string
 }
 /** A slimmed Claude Code hook event (UserPromptSubmit / PostToolUse / Stop). */
 export interface ClaudeHookEvent {
@@ -325,6 +330,45 @@ export interface TerminalMetaEvent {
   repo: string | null
   branch: string | null
 }
+/** A row in the shared agent-task ledger (coordination state, never research state). */
+export interface LedgerTask {
+  id: string
+  project?: string | null
+  title: string
+  detail?: string
+  status: 'open' | 'claimed' | 'in_progress' | 'blocked' | 'review' | 'done' | 'rejected' | string
+  owner?: string
+  createdBy?: string
+  dependsOn?: string[]
+  result?: string
+  createdAt: number
+  updatedAt: number
+}
+
+/** One rolling Codex rate-limit window (primary = 5h, secondary = weekly). */
+export interface CodexWindow {
+  usedPercent?: number
+  windowDurationMins?: number
+  resetsAt?: number // unix epoch seconds
+}
+export interface CodexUsage {
+  ok: boolean
+  message?: string
+  email?: string
+  plan?: string
+  primary?: CodexWindow | null
+  secondary?: CodexWindow | null
+}
+export interface ClaudeTokenSums { input: number; output: number; cacheRead: number; cacheWrite: number }
+export interface ClaudeUsage {
+  ok: boolean
+  message?: string
+  exists?: boolean
+  fiveHour?: ClaudeTokenSums
+  week?: ClaudeTokenSums
+  lastActivity?: number
+}
+
 export interface AcpConnectConfig {
   presetId?: string
   /** Custom (user-added) agents: the exact ACP server command to spawn. */
@@ -333,6 +377,14 @@ export interface AcpConnectConfig {
   name?: string
   cwd?: string
   autonomy?: string
+  /** Project id this connection belongs to — main keys the session by it, so
+   * the same agent in two project tabs is two independent sessions. */
+  scope?: string
+  /** Extra env for the spawned agent (e.g. CLAUDE_CONFIG_DIR per account). */
+  env?: Record<string, string>
+  /** Resume this session id via session/load when the agent supports it —
+   * restart continuity; a stale id silently falls back to a fresh session. */
+  resumeSessionId?: string
 }
 
 export interface UpdateState {
@@ -356,7 +408,7 @@ export interface KaisolaBridge {
   acp: {
     presets(): Promise<AcpPreset[]>
     status(): Promise<{ ok: boolean; agents: AcpAgent[] }>
-    connect(config: AcpConnectConfig): Promise<{ ok: boolean; key?: string; agent?: AcpMeta; controls?: AcpControls; authMethods?: AcpAuthMethod[]; message?: string }>
+    connect(config: AcpConnectConfig): Promise<{ ok: boolean; key?: string; agent?: AcpMeta; controls?: AcpControls; authMethods?: AcpAuthMethod[]; message?: string; resumed?: boolean }>
     disconnect(agentKey: string): Promise<{ ok: boolean }>
     cancel(agentKey: string): Promise<{ ok: boolean }>
     /** Live autonomy dial — update every connection this window owns in main. */
@@ -382,9 +434,30 @@ export interface KaisolaBridge {
     armHooks(): Promise<{ ok: boolean; settingsPath?: string; message?: string }>
     rebind(): Promise<{ ok: boolean }>
     onEvent(cb: (ev: ClaudeHookEvent) => void): () => void
-    /** Does ~/.claude/projects/<cwd>/<sessionId>.jsonl still exist? Gates
-     * --resume; `any` (any transcript for the cwd) gates the --continue fallback. */
-    sessionExists?(cwd: string, sessionId: string): Promise<{ ok: boolean; exists: boolean; any?: boolean }>
+    /** Does <configDir>/projects/<cwd>/<sessionId>.jsonl still exist? Gates
+     * --resume; `any` (any transcript for the cwd) gates the --continue fallback.
+     * configDir = the account's CLAUDE_CONFIG_DIR ('' / undefined = ~/.claude). */
+    sessionExists?(cwd: string, sessionId: string, configDir?: string): Promise<{ ok: boolean; exists: boolean; any?: boolean }>
+    /** Who is signed in under a Claude config dir (multi-subscription labels). */
+    accountInfo?(configDir?: string): Promise<{ ok: boolean; exists?: boolean; email?: string; org?: string }>
+  }
+  /** Subscription limits (the top-bar gauge). Codex = real percentages from the
+   * CLI's app-server; Claude = token sums estimated from local transcripts. */
+  usage?: {
+    codex(codexHome?: string): Promise<CodexUsage>
+    claude(configDir?: string): Promise<ClaudeUsage>
+  }
+  /** The shared agent-task ledger — agents coordinate through it (via the
+   * Kaisola MCP server); the human sees every change in the activity feed. */
+  ledger?: {
+    list(args?: { project?: string; status?: string }): Promise<{ ok: boolean; tasks: LedgerTask[] }>
+    post(args: { project?: string; title: string; detail?: string; owner?: string; createdBy?: string }): Promise<{ ok: boolean; task?: LedgerTask; message?: string }>
+    update(args: { id: string; status?: string; owner?: string; result?: string }): Promise<{ ok: boolean; task?: LedgerTask; message?: string }>
+    onEvent(cb: (ev: { type: 'posted' | 'updated'; task: LedgerTask }) => void): () => void
+  }
+  /** The in-app MCP server every connected agent shares. */
+  mcp?: {
+    info(): Promise<{ ok: boolean; url?: string | null; configPath?: string | null }>
   }
   git: {
     status(cwd: string): Promise<{ ok: boolean; notRepo?: boolean; root?: string; branch?: string | null; entries?: GitStatusEntry[] }>
@@ -874,7 +947,70 @@ declare global {
   }
 }
 
+// ── ACP project scoping ─────────────────────────────────────────────────────
+// One agent in two project tabs must be two independent sessions (a Claude
+// subscription bound to project A must never answer project B). The store
+// keeps `acpScope.current` = the active project id; every acp call composes
+// `<presetId>@@<scope>` as the wire key, and incoming events are split back so
+// call sites keep using bare preset ids. Unscoped keys (smoke tests, legacy)
+// pass through untouched.
+export const acpScope = { current: '' }
+const SCOPE_SEP = '@@'
+const scopedKey = (key: string) => (acpScope.current ? `${key}${SCOPE_SEP}${acpScope.current}` : key)
+const splitScopedKey = (raw: unknown): { key: string; scope: string } => {
+  const s = String(raw ?? '')
+  const i = s.indexOf(SCOPE_SEP)
+  return i < 0 ? { key: s, scope: '' } : { key: s.slice(0, i), scope: s.slice(i + SCOPE_SEP.length) }
+}
+/** Events for the visible project (or unscoped) — background scopes are dropped
+ * by transient consumers; permissions are ROUTED instead (App reads .scope). */
+const scopeIsCurrent = (scope: string) => !scope || scope === acpScope.current
+
+function scopeAcp(acp: KaisolaBridge['acp']): KaisolaBridge['acp'] {
+  return {
+    ...acp,
+    status: async () => {
+      const res = await acp.status()
+      const agents = (res.agents ?? [])
+        .map((a) => { const { key, scope } = splitScopedKey(a.key); return { ...a, key, scope } })
+        .filter((a) => scopeIsCurrent(a.scope ?? ''))
+      return { ...res, agents }
+    },
+    connect: (config) => acp.connect({ ...config, scope: config.scope ?? (acpScope.current || undefined) }),
+    disconnect: (k) => acp.disconnect(scopedKey(k)),
+    cancel: (k) => acp.cancel(scopedKey(k)),
+    setMode: (k, m) => acp.setMode(scopedKey(k), m),
+    setModel: (k, m) => acp.setModel(scopedKey(k), m),
+    setConfigOption: (k, c, v) => acp.setConfigOption(scopedKey(k), c, v),
+    authenticate: (k, m) => acp.authenticate(scopedKey(k), m),
+    prompt: (k, text, onUpdate) => acp.prompt(scopedKey(k), text, onUpdate),
+    onNotice: (cb) =>
+      acp.onNotice((n) => {
+        const { key, scope } = splitScopedKey(n.key)
+        if (scopeIsCurrent(scope)) cb({ ...n, key, scope })
+      }),
+    onControls: (cb) =>
+      acp.onControls((info) => {
+        const { key, scope } = splitScopedKey(info.key)
+        if (scopeIsCurrent(scope)) cb({ ...info, key })
+      }),
+    onTerminal: (cb) =>
+      acp.onTerminal((info) => {
+        const { key, scope } = splitScopedKey(info.agentKey)
+        if (scopeIsCurrent(scope)) cb({ ...info, agentKey: info.agentKey ? key : info.agentKey })
+      }),
+    onPermission: (cb) =>
+      acp.onPermission((req) => {
+        // never dropped — the card is parked in the OWNING project's slice
+        const { key, scope } = splitScopedKey(req.key)
+        cb({ ...req, key, scope })
+      }),
+  }
+}
+
 export const bridge: KaisolaBridge =
-  typeof window !== 'undefined' && window.kaisola ? window.kaisola : webMock
+  typeof window !== 'undefined' && window.kaisola
+    ? { ...window.kaisola, acp: scopeAcp(window.kaisola.acp) }
+    : webMock
 
 export const isDesktop = bridge.env === 'electron'

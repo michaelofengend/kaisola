@@ -299,7 +299,9 @@ export default function App() {
     const offs = [
       bridge.acp.onPermission((req) => {
         const st = useKaisola.getState()
-        const pid = projectIdForEvent(st, { agentKey: req.key })
+        // scoped connections name their owner exactly; legacy/unscoped asks
+        // fall back to the agentKey→project heuristic
+        const pid = req.scope || projectIdForEvent(st, { agentKey: req.key })
         const slice = st.projectSlices[pid]
         if (pid === st.activeProjectId || !slice) { st.receivePermission(req); return }
         if (requestIsSensitive(st.sensitiveGlobs, req)) {
@@ -329,6 +331,18 @@ export default function App() {
       // main resolved a pending ask itself (5-min timeout, or the agent died
       // while it was pending) — drop the inline card the composer is still showing
       bridge.acp.onPermissionResolved((permId) => useKaisola.getState().dismissPermission(permId)),
+      // agent-task ledger traffic (agents coordinating over the Kaisola MCP
+      // server) lands in the OWNING project's activity feed — agent↔agent
+      // messages stay in the human's line of sight
+      bridge.ledger?.onEvent(({ type, task }) => {
+        const st = useKaisola.getState()
+        const pid = projectIdForEvent(st, { cwd: task.project ?? undefined })
+        const who = task.createdBy || task.owner || 'agent'
+        const text = type === 'posted'
+          ? `${who} posted: ${task.title}${task.owner ? ` → ${task.owner}` : ''}`
+          : `${task.title} → ${task.status}${task.result ? ` · ${task.result.slice(0, 80)}` : ''}`
+        pushProjectFeed(pid, pid === st.activeProjectId, { at: task.updatedAt, kind: 'task', text })
+      }),
     ]
     return () => { for (const off of offs) off?.() }
   }, [])
@@ -493,20 +507,7 @@ export default function App() {
     if (autoClaudeRef.current.has(key)) return
     autoClaudeRef.current.add(key)
     void (async () => {
-      // risk #5: never arm the agent in a folder that no longer exists (a moved
-      // or deleted workspace would spawn the agent in the wrong tree / $HOME)
-      const exists = await bridge.fs.list(workspacePath)
-      if (!exists.ok) return
-      // resume the workspace's last conversation: the tracked session id when
-      // its transcript still exists (exact chat), else --continue when the
-      // folder has ANY transcript (covers chats started outside Kaisola); a
-      // workspace with no history boots plain.
-      const sid = useKaisola.getState().claudeSessions[workspacePath]
-      const sessions = await bridge.claude.sessionExists?.(workspacePath, sid ?? '')
-      const resumeArg = sid && sessions?.exists ? `--resume ${shq(sid)}` : sessions?.any ? '--continue' : ''
-      // a fast switch may have moved on while we probed the folder
       const before = useKaisola.getState()
-      if (before.activeProjectId !== activeProjectId || before.workspacePath !== workspacePath) return
       const freshShell =
         // 'focus' was the pre-rename default; 'studio' is the current one — a
         // pristine store can carry either depending on when it was created.
@@ -520,25 +521,10 @@ export default function App() {
         (before.dockGrid[0]?.[0] === before.activeThreadId || before.dockGrid[0]?.[0] === before.terminals[0]?.id) &&
         !before.terminals.some((term) => term.singletonKey === 'agent:claude-code')
 
-      // the hooks tap is armed at app startup (main) and its settings path is a
-      // constant on the bridge — the boot line is built synchronously, so the
-      // pty never boots plain `claude` in a race with an async arm
-      const hooksPath = bridge.claude.settingsPath
-      const boot = [
-        hooksPath ? `claude --settings ${shq(hooksPath)}` : 'claude',
-        resumeArg,
-      ].filter(Boolean).join(' ')
-      requestTerminal(boot, {
-        cwd: workspacePath,
-        name: 'Claude',
-        singletonKey: 'agent:claude-code',
-        restart: true,
-        // never clobber a layout the user arranged — only the one-time
-        // fresh-shell migration below places the card
-        reveal: false,
-      })
-
-      if (!freshShell || bridge.smoke) return
+      // the boot line (account env, --resume/--continue probing, hooks tap) is
+      // owned by the store so Settings' "apply account now" reuses it verbatim
+      const launched = await useKaisola.getState().launchClaude({ expect: { pid: activeProjectId, ws: workspacePath } })
+      if (!launched || !freshShell || bridge.smoke) return
       queueMicrotask(() => {
         const latest = useKaisola.getState()
         const claude = latest.terminals.find((term) => term.singletonKey === 'agent:claude-code')

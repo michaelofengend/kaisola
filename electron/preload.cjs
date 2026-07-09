@@ -110,12 +110,38 @@ const bridge = {
     })(),
     armHooks: () => ipcRenderer.invoke('claude:arm'),
     rebind: () => ipcRenderer.invoke('claude:rebind'),
-    sessionExists: (cwd, sessionId) => ipcRenderer.invoke('claude:session-exists', { cwd, sessionId }),
+    sessionExists: (cwd, sessionId, configDir) => ipcRenderer.invoke('claude:session-exists', { cwd, sessionId, configDir }),
+    accountInfo: (configDir) => ipcRenderer.invoke('claude:account-info', { configDir }),
     onEvent: (cb) => {
       const listener = (_e, ev) => cb(ev)
       ipcRenderer.on('claude:event', listener)
       return () => ipcRenderer.removeListener('claude:event', listener)
     },
+  },
+
+  // ── subscription limits (the top-bar gauge) ──
+  usage: {
+    codex: (codexHome) => ipcRenderer.invoke('usage:codex', { codexHome }),
+    claude: (configDir) => ipcRenderer.invoke('usage:claude', { configDir }),
+  },
+
+  // ── shared agent-task ledger (agent↔agent coordination, human-visible) ──
+  ledger: {
+    list: (args) => ipcRenderer.invoke('ledger:list', args),
+    post: (args) => ipcRenderer.invoke('ledger:post', args),
+    update: (args) => ipcRenderer.invoke('ledger:update', args),
+    onEvent: (cb) => {
+      const listener = (_e, ev) => cb(ev)
+      ipcRenderer.on('ledger:event', listener)
+      return () => ipcRenderer.removeListener('ledger:event', listener)
+    },
+  },
+
+  // ── the Kaisola MCP server (one tool surface for every connected agent) ──
+  // async on purpose: a sendSync here would FREEZE the renderer forever if the
+  // handler isn't registered (sendSync never returns without a listener)
+  mcp: {
+    info: () => ipcRenderer.invoke('mcp:info'),
   },
 
   // ── git checkpoints + status (tree tinting, diff review) + commit panel ──

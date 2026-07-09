@@ -146,17 +146,21 @@ function registerClaudeHooksHandlers(ipcMain) {
   ipcMain.handle('claude:rebind', () => ({ ok: true }))
 
   // Does a Claude Code session transcript still exist for this workspace?
-  // Claude stores sessions at ~/.claude/projects/<cwd with non-alnum → '-'>/
+  // Claude stores sessions at <config dir>/projects/<cwd with non-alnum → '-'>/
   // <session-id>.jsonl — the renderer asks before booting `claude --resume`,
   // so a pruned/stale id never boots into an error message. `any` reports
   // whether the workspace has ANY transcript at all: with no tracked id the
   // boot falls back to `claude --continue` (most recent conversation in that
-  // directory — covers sessions started outside Kaisola too).
-  ipcMain.handle('claude:session-exists', (_e, { cwd, sessionId } = {}) => {
+  // directory — covers sessions started outside Kaisola too). `configDir` is
+  // the account's CLAUDE_CONFIG_DIR (multi-subscription); empty = ~/.claude.
+  ipcMain.handle('claude:session-exists', (_e, { cwd, sessionId, configDir } = {}) => {
     if (typeof cwd !== 'string' || !cwd) return { ok: false, exists: false, any: false }
     try {
       const os = require('node:os')
-      const dir = path.join(os.homedir(), '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
+      const base = typeof configDir === 'string' && configDir.trim()
+        ? configDir.replace(/^~(?=\/|$)/, os.homedir())
+        : path.join(os.homedir(), '.claude')
+      const dir = path.join(base, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
       const any = fs.existsSync(dir) && fs.readdirSync(dir).some((f) => f.endsWith('.jsonl'))
       const exists =
         typeof sessionId === 'string' && /^[a-zA-Z0-9-]+$/.test(sessionId)
@@ -165,6 +169,27 @@ function registerClaudeHooksHandlers(ipcMain) {
       return { ok: true, exists, any }
     } catch {
       return { ok: false, exists: false, any: false }
+    }
+  })
+
+  // Who is signed in under a Claude config dir? Reads <dir>/.claude.json —
+  // the CLI records the OAuth account there (email + org). Powers the account
+  // labels on session cards and Settings rows. Empty configDir = ~/.claude.
+  ipcMain.handle('claude:account-info', (_e, { configDir } = {}) => {
+    try {
+      const os = require('node:os')
+      const base = typeof configDir === 'string' && configDir.trim()
+        ? configDir.replace(/^~(?=\/|$)/, os.homedir())
+        : path.join(os.homedir(), '.claude')
+      const raw = fs.readFileSync(path.join(base, '.claude.json'), 'utf8')
+      const cfg = JSON.parse(raw)
+      const oa = cfg && typeof cfg === 'object' ? cfg.oauthAccount || {} : {}
+      const email = typeof oa.emailAddress === 'string' ? oa.emailAddress : undefined
+      const org = typeof oa.organizationName === 'string' ? oa.organizationName : undefined
+      return { ok: true, email, org, exists: true }
+    } catch {
+      // dir missing or not signed in yet — both are fine, the row just shows "not signed in"
+      return { ok: true, exists: false }
     }
   })
 }

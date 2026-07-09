@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useKaisola, type ThemeMode, type PerfMode, type CustomAgent } from '../store/store'
+import { useKaisola, shellConfigDir, type ThemeMode, type PerfMode, type CustomAgent, type TermBackground } from '../store/store'
 import { bridge, isDesktop, type AcpAgent } from '../lib/bridge'
 import type { AutonomyLevel } from '../domain/types'
 import { useAgentRegistry, openAgentSession, type RegistryAgent } from '../lib/registry'
@@ -16,6 +16,111 @@ const CLAUDE_MODELS = [
   { value: 'claude-sonnet-4-6', name: 'Sonnet 4.6' },
   { value: 'claude-haiku-4-5', name: 'Haiku 4.5' },
 ]
+
+/** Multiple Claude subscriptions: each account is an isolated CLAUDE_CONFIG_DIR;
+ * the ACTIVE project binds to one, and its Claude terminal runs under it —
+ * accounts never bleed across project tabs. */
+function ClaudeAccountsBlock() {
+  const accounts = useKaisola((s) => s.claudeAccounts)
+  const accountId = useKaisola((s) => s.claudeAccountId)
+  const setAccountId = useKaisola((s) => s.setClaudeAccountId)
+  const addAccount = useKaisola((s) => s.addClaudeAccount)
+  const removeAccount = useKaisola((s) => s.removeClaudeAccount)
+  const setEmail = useKaisola((s) => s.setClaudeAccountEmail)
+  const requestTerminal = useKaisola((s) => s.requestTerminal)
+  const launchClaude = useKaisola((s) => s.launchClaude)
+  const pushToast = useKaisola((s) => s.pushToast)
+  const [label, setLabel] = useState('')
+  const [defaultEmail, setDefaultEmail] = useState<string | undefined>()
+  // refresh signed-in identities (email from each dir's .claude.json) on mount
+  useEffect(() => {
+    void bridge.claude.accountInfo?.().then((r) => setDefaultEmail(r?.email))
+    for (const a of useKaisola.getState().claudeAccounts) {
+      void bridge.claude.accountInfo?.(a.configDir).then((r) => {
+        if (r && r.email !== a.email) setEmail(a.id, r.email)
+      })
+    }
+  }, [setEmail])
+  const slug = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  const newDir = slug ? `~/.claude-${slug}` : ''
+  const signIn = (a?: { configDir: string; label: string }) => {
+    const cmd = a
+      ? `mkdir -p ${shellConfigDir(a.configDir)} && CLAUDE_CONFIG_DIR=${shellConfigDir(a.configDir)} claude /login`
+      : 'claude /login'
+    requestTerminal(cmd, { name: a ? `Claude login · ${a.label}` : 'Claude login' })
+  }
+  const bindProject = (id: string) => {
+    setAccountId(id)
+    // apply immediately: relaunch the project's Claude terminal under the account
+    void launchClaude({ reveal: true })
+    const name = id ? accounts.find((a) => a.id === id)?.label ?? 'account' : 'the default account'
+    pushToast('info', `Claude is relaunching under ${name}.`)
+  }
+  const row = (a: { id: string; label: string; dir: string; email?: string; removable: boolean }) => (
+    <div key={a.id || 'default'} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+      <Icon name="UserRound" size={12} />
+      <span style={{ fontWeight: 500 }}>{a.label}</span>
+      <span className="faint truncate" title={a.dir}>{a.email ?? 'not signed in'}</span>
+      <span className="grow" />
+      <button className="btn btn-ghost btn-sm" onClick={() => signIn(a.removable ? { configDir: a.dir, label: a.label } : undefined)} title={`Sign in in a terminal (${a.dir})`}>
+        Sign in
+      </button>
+      {a.removable && (
+        <button className="btn-icon btn-sm" onClick={() => removeAccount(a.id)} title="Remove account (keeps its files on disk)">
+          <Icon name="X" size={13} />
+        </button>
+      )}
+    </div>
+  )
+  return (
+    <>
+      <div className="settings-row">
+        <span className="settings-row-label">Claude accounts</span>
+        <div className="settings-row-control" style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 6, minWidth: 0 }}>
+          {row({ id: '', label: 'Default', dir: '~/.claude', email: defaultEmail, removable: false })}
+          {accounts.map((a) => row({ id: a.id, label: a.label, dir: a.configDir, email: a.email, removable: true }))}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input
+              className="input"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="Add account — label (e.g. Work)"
+              spellCheck={false}
+              onKeyDown={(e) => { if (e.key === 'Enter' && newDir) { addAccount(label, newDir); setLabel('') } }}
+            />
+            <button
+              className="btn btn-primary btn-sm"
+              disabled={!newDir}
+              onClick={() => { addAccount(label, newDir); setLabel('') }}
+              title={newDir ? `Creates an isolated ${newDir}` : 'Give the account a label first'}
+            >
+              <Icon name="Plus" size={12} /> Add
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="settings-row">
+        <span className="settings-row-label">This project uses</span>
+        <div className="settings-row-control">
+          <Dropdown
+            value={accountId}
+            options={[
+              { value: '', name: 'Default account', description: '~/.claude' },
+              ...accounts.map((a) => ({ value: a.id, name: a.label, description: a.email ?? a.configDir })),
+            ]}
+            onSelect={bindProject}
+            align="right"
+            title="Which Claude subscription this project's sessions run under"
+          />
+        </div>
+      </div>
+      <p className="settings-note">
+        Each account is an isolated CLAUDE_CONFIG_DIR — sign in once per account. The binding is per
+        project tab, so two projects can run two subscriptions side by side without mixing sessions.
+      </p>
+    </>
+  )
+}
 
 /** The Zed-style settings nav — one entry per pane. */
 const SECTIONS = [
@@ -68,6 +173,8 @@ export function Settings() {
   const setTermFontWeight = useKaisola((s) => s.setTermFontWeight)
   const termCursorColor = useKaisola((s) => s.termCursorColor)
   const setTermCursorColor = useKaisola((s) => s.setTermCursorColor)
+  const termBackground = useKaisola((s) => s.termBackground)
+  const setTermBackground = useKaisola((s) => s.setTermBackground)
   const permissionRules = useKaisola((s) => s.permissionRules)
   const removePermissionRule = useKaisola((s) => s.removePermissionRule)
   const sensitiveGlobs = useKaisola((s) => s.sensitiveGlobs)
@@ -379,6 +486,22 @@ export function Settings() {
                   </div>
                 </div>
                 <div className="settings-row">
+                  <span className="settings-row-label">Background</span>
+                  <div className="settings-row-control">
+                    <Dropdown
+                      value={termBackground}
+                      options={[
+                        { value: 'paper', name: 'Paper (white)' },
+                        { value: 'slate', name: 'Slate' },
+                        { value: 'ink', name: 'Ink (dark)' },
+                      ]}
+                      onSelect={(v) => setTermBackground(v as TermBackground)}
+                      align="right"
+                      title="Terminal surface tone — independent of the app theme"
+                    />
+                  </div>
+                </div>
+                <div className="settings-row">
                   <span className="settings-row-label">Cursor color</span>
                   <div className="settings-row-control" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                     <button
@@ -474,6 +597,7 @@ export function Settings() {
                     <p className="settings-note">Runs this command on your machine with your login — only add agents you trust.</p>
                   </>
                 )}
+                <ClaudeAccountsBlock />
               </>
             ))}
 

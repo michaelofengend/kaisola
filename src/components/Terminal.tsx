@@ -5,7 +5,7 @@ import { SearchAddon } from '@xterm/addon-search'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { bridge, isDesktop } from '../lib/bridge'
-import { useKaisola, POP_TERMINAL_ID } from '../store/store'
+import { useKaisola, POP_TERMINAL_ID, type TermBackground } from '../store/store'
 import { clockTime } from '../lib/format'
 import { Icon } from './Icon'
 
@@ -56,15 +56,30 @@ const LIGHT_THEME: ITheme = {
 // app's dominant cost while an agent streams. Glass BAKES the old translucent look
 // (45% --term-bg over the opaque --bg-1 card) into a solid color, so it's visually
 // identical to the old transparent surface but never re-composited; eco stays flat
-// --term-bg. Keep these in sync with tokens.css if --term-bg / --bg-1 change.
-const TERM_SURFACE = {
-  glass: { dark: '#0d0f13', light: '#f5f6f8' }, // = color-mix(in srgb, var(--term-bg) 45%, var(--bg-1))
-  eco: { dark: '#0b0d11', light: '#e9ebef' }, // = var(--term-bg)
+// --term-bg. The termBackground setting (ink / slate / paper) picks the tone;
+// 'paper' is light regardless of app theme and swaps to the light text palette.
+// Keep these in sync with tokens.css [data-termbg] if --term-bg / --bg-1 change.
+const TERM_SURFACE: Record<TermBackground, { glass: { dark: string; light: string }; eco: { dark: string; light: string } }> = {
+  ink: {
+    glass: { dark: '#0d0f13', light: '#f5f6f8' }, // = color-mix(in srgb, var(--term-bg) 45%, var(--bg-1))
+    eco: { dark: '#0b0d11', light: '#e9ebef' }, // = var(--term-bg)
+  },
+  slate: {
+    glass: { dark: '#1c2027', light: '#f5f6f8' },
+    eco: { dark: '#191d24', light: '#e9ebef' },
+  },
+  paper: {
+    glass: { dark: '#eceef0', light: '#f5f6f8' },
+    eco: { dark: '#e9ebef', light: '#e9ebef' },
+  },
 }
-const xtermTheme = (theme: 'dark' | 'light', eco: boolean, cursorColor = 'auto') => {
-  const base = theme === 'light' ? LIGHT_THEME : DARK_THEME
+const xtermTheme = (theme: 'dark' | 'light', eco: boolean, cursorColor = 'auto', termBg: TermBackground = 'paper') => {
+  // paper is a light surface even in the dark app — text must flip with it
+  const lightSurface = theme === 'light' || termBg === 'paper'
+  const base = lightSurface ? LIGHT_THEME : DARK_THEME
   const t = cursorColor === 'auto' ? base : { ...base, cursor: cursorColor }
-  return { ...t, background: (eco ? TERM_SURFACE.eco : TERM_SURFACE.glass)[theme] }
+  const surface = TERM_SURFACE[termBg] ?? TERM_SURFACE.paper
+  return { ...t, background: (eco ? surface.eco : surface.glass)[theme] }
 }
 
 /** Output kept for a HIDDEN terminal until its card is shown again. Sized to
@@ -142,6 +157,7 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
   const termFontFamily = useKaisola((s) => s.termFontFamily)
   const termFontWeight = useKaisola((s) => s.termFontWeight)
   const termCursorColor = useKaisola((s) => s.termCursorColor)
+  const termBackground = useKaisola((s) => s.termBackground)
   const setTermFontSize = useKaisola((s) => s.setTermFontSize)
   // put-away cards keep their pty but must not keep painting: output buffers
   // here and replays when the card is shown (pop-out windows are always shown).
@@ -171,6 +187,8 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
   fontWeightRef.current = termFontWeight
   const cursorColorRef = useRef(termCursorColor)
   cursorColorRef.current = termCursorColor
+  const termBgRef = useRef(termBackground)
+  termBgRef.current = termBackground
   // boot delivery: `create` boots only FRESH ptys; a boot adopted while the pty
   // is already live arrives via the record's bootPending flag instead
   const bootPending = useKaisola((s) => s.terminals.find((t) => t.id === id)?.bootPending)
@@ -187,9 +205,9 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
     if (!term) return
     try {
       term.options.allowTransparency = false // opaque in both modes — no transparent-WebGL per-frame compose
-      term.options.theme = xtermTheme(theme, ecoMode, termCursorColor)
+      term.options.theme = xtermTheme(theme, ecoMode, termCursorColor, termBackground)
     } catch { /* renderer mid-rebuild */ }
-  }, [theme, ecoMode, termCursorColor])
+  }, [theme, ecoMode, termCursorColor, termBackground])
 
   // a card being put away / brought back: replay buffered output, and stop the
   // cursor-blink render loop while nobody can see it
@@ -252,7 +270,7 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
       scrollback: 5000,
       // lift low-contrast ANSI colors (dim grays on glass) to a readable floor
       minimumContrastRatio: 3,
-      theme: xtermTheme(themeRef.current, ecoRef.current, cursorColorRef.current),
+      theme: xtermTheme(themeRef.current, ecoRef.current, cursorColorRef.current, termBgRef.current),
     })
     termRef.current = term
     const fit = new FitAddon()
