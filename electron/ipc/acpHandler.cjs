@@ -85,7 +85,10 @@ const entryFor = (sender, presetId) => connections.get(ikey(sender, presetId))
 // renderer decides WHICH of these show in the + menu (Settings → Agents).
 function presets() {
   return [
-    { id: 'claude-code', name: 'Claude', terminalOnly: true, terminalCommand: 'claude',
+    // Claude speaks ACP (chat threads) since v0.1.20 — the auto-prepared
+    // per-project terminal (accounts, hooks tap, --mcp-config, --resume) stays
+    // the workspace default until the ACP path reaches feature parity.
+    { id: 'claude-code', name: 'Claude',
       command: 'npx', args: ['-y', '@zed-industries/claude-code-acp'],
       login: 'claude /login', installCmd: 'npm i -g @anthropic-ai/claude-code',
       docs: 'https://docs.anthropic.com/en/docs/claude-code/overview', builtin: false },

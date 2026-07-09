@@ -407,8 +407,9 @@ app.whenReady().then(async () => {
   const acp = await win.webContents.executeJavaScript(`(async () => {
     const presets = await window.kaisola.acp.presets()
     const claude = presets.find((p) => p.id === 'claude-code')
-    // Claude stays terminal-only (the hooks tap needs the pty); minimal name now
-    const claudeTerminal = !!(claude && claude.terminalOnly && claude.terminalCommand === 'claude' && claude.name === 'Claude')
+    // Claude is an ACP chat agent (the + menu opens a thread); the prepared
+    // per-project TERMINAL still exists separately (claudePrepared covers it)
+    const claudeTerminal = !!(claude && !claude.terminalOnly && claude.name === 'Claude')
     const conn = await window.kaisola.acp.connect({ presetId: 'mock' })
     if (!conn.ok) return { presets: presets.length, claudeTerminal, connect: false, message: conn.message }
     const authCount = (conn.authMethods || []).length
