@@ -22,7 +22,10 @@ const { registerUpdateHandlers } = require('./ipc/updateHandler.cjs')
 const worktree = require('./ipc/worktreeHandler.cjs')
 
 process.env.KAISOLA_SMOKE = '1'
-const USER_DATA = path.join(os.tmpdir(), 'kaisola-solidprobe')
+// Per-process isolation: a previous probe can leave a short-lived Chromium
+// lock/broker behind; reusing its profile makes the next Electron abort before
+// JavaScript receives an error.
+const USER_DATA = path.join(os.tmpdir(), `kaisola-solidprobe-${process.pid}`)
 try { fsx.rmSync(USER_DATA, { recursive: true, force: true }) } catch { /* fresh */ }
 fsx.mkdirSync(USER_DATA, { recursive: true })
 app.setPath('userData', USER_DATA)

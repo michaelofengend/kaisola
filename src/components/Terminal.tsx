@@ -427,13 +427,7 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
       agentTurnOpenRef.current = false
       const state = useKaisola.getState()
       state.setTerminalMeta(id, { agentBusy: false })
-      const owner = terminalOwnerMap(state)[id]
-      if (!owner) return
-      const seen = owner === state.activeProjectId && state.dockOpen && state.dockViews.includes(id) && !document.hidden && document.hasFocus()
-      if (!seen) {
-        state.markNeedsYou(id, owner)
-        state.setProjectActivity(owner, 'completed')
-      }
+      bridge.terminal.agentTurn(id, false)
     }
     const armAgentDone = () => {
       if (!agentTurnOpenRef.current) return
@@ -459,6 +453,7 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
       agentTurnOpenRef.current = true
       const state = useKaisola.getState()
       state.setTerminalMeta(id, { agentBusy: true, lastExit: null })
+      bridge.terminal.agentTurn(id, true)
       const owner = terminalOwnerMap(state)[id]
       if (owner && owner !== state.activeProjectId) state.setProjectActivity(owner, 'running')
       captureCodexSession()
@@ -754,6 +749,12 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
     }
 
     const restoreSnapshot = (snap: Partial<TermSnapshot>) => {
+      if (typeof snap.agentBusy === 'boolean' || snap.agentCompletedAt != null) {
+        useKaisola.getState().setTerminalMeta(id, {
+          ...(typeof snap.agentBusy === 'boolean' ? { agentBusy: snap.agentBusy } : {}),
+          ...(snap.agentCompletedAt != null ? { agentCompletedAt: snap.agentCompletedAt } : {}),
+        })
+      }
       const restoreView = () => {
         const fromBottom = Number(snap.viewState?.scrollFromBottom)
         if (Number.isFinite(fromBottom) && fromBottom > 0) {

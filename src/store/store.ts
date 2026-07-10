@@ -87,6 +87,8 @@ export interface TerminalMeta {
   /** A CLI agent has an unanswered prompt. Unlike `running` this settles when
    * output goes quiet, so Codex/Claude tabs do not pulse forever while idle. */
   agentBusy?: boolean
+  /** Broker timestamp for deduplicating completion receipts across reconnects. */
+  agentCompletedAt?: number | null
   cwd?: string | null
   root?: string | null
   repo?: string | null

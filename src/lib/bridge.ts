@@ -364,6 +364,8 @@ export interface TermSnapshot {
   exitStatus?: { exitCode: number; signal: string | null } | null
   viewState?: { scrollFromBottom?: number; cols?: number; rows?: number } | null
   continuation?: TermContinuation | null
+  agentBusy?: boolean
+  agentCompletedAt?: number | null
 }
 /** Live identity of a pty session — who's running, where (diff-broadcast). */
 export interface TerminalMetaEvent {
@@ -374,6 +376,8 @@ export interface TerminalMetaEvent {
   root: string | null
   repo: string | null
   branch: string | null
+  agentBusy?: boolean
+  agentCompletedAt?: number | null
 }
 /** A human-gated write from an agent (hypothesis_propose / claim_assert over MCP). */
 export interface McpProposalEvent {
@@ -657,6 +661,7 @@ export interface KaisolaBridge {
   terminal: {
     create(id: string, cwd?: string, cols?: number, rows?: number): Promise<{ ok: boolean; cwd?: string; shell?: string; message?: string; existed?: boolean } & Partial<TermSnapshot>>
     write(id: string, data: string): Promise<{ ok: boolean }>
+    agentTurn(id: string, busy: boolean): void
     resize(id: string, cols: number, rows: number): Promise<{ ok: boolean }>
     snapshot(id: string): Promise<TermSnapshot>
     attach(id: string): Promise<TermSnapshot>
@@ -670,6 +675,7 @@ export interface KaisolaBridge {
     onData(id: string, cb: (data: string) => void): () => void
     onExit(id: string, cb: (code: number) => void): () => void
     onMeta(cb: (meta: TerminalMetaEvent) => void): () => void
+    onAgentActivity(cb: (activity: { id: string; busy: boolean; completedAt?: number | null }) => void): () => void
   }
   /** Append-only transcript storage for turns outside the renderer's recent
    * working set. IPC returns unknown records deliberately; the renderer
@@ -799,6 +805,12 @@ export interface KaisolaBridge {
     adoptionComplete(transferId: string, ok: boolean): void
     /** Source-side commit after removal; closes a now-empty detached window. */
     finishTransfer(transferId: string): Promise<{ ok: boolean }>
+  }
+  /** Native macOS attention surface: dock badge + clickable notifications. */
+  attention?: {
+    setCount(count: number): void
+    notify(payload: { title: string; body?: string; projectId?: string; sessionId?: string }): void
+    onOpen(cb: (payload: { projectId?: string; sessionId?: string }) => void): () => void
   }
   /** In-app software updates — the GitHub releases feed via electron-updater. */
   update?: {
@@ -976,6 +988,7 @@ const webMock: KaisolaBridge = {
     async write() {
       return { ok: false }
     },
+    agentTurn() {},
     async resize() {
       return { ok: false }
     },
@@ -1010,6 +1023,9 @@ const webMock: KaisolaBridge = {
       return () => {}
     },
     onMeta() {
+      return () => {}
+    },
+    onAgentActivity() {
       return () => {}
     },
   },
@@ -1220,6 +1236,11 @@ const webMock: KaisolaBridge = {
     async finishTransfer() {
       return { ok: false }
     },
+  },
+  attention: {
+    setCount() {},
+    notify() {},
+    onOpen() { return () => {} },
   },
   winCtl() {
     /* the browser owns its own window chrome */

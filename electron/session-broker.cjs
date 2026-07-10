@@ -156,6 +156,8 @@ async function dispatch(client, method, params = {}) {
       return { ok: true, detached: mgr.detachSender(owner) }
     case 'terminal.write':
       return { ok: mgr.write(String(params.id || ''), String(params.data ?? '')) }
+    case 'terminal.agentTurn':
+      return { ok: mgr.agentTurn(String(params.id || ''), !!params.busy) }
     case 'terminal.resize':
       return { ok: mgr.resize(String(params.id || ''), Number(params.cols), Number(params.rows)) }
     case 'terminal.snapshot':

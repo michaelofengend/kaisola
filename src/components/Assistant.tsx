@@ -1296,7 +1296,17 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
       const state = useKaisola.getState()
       const owner = owningSlice()
       const seen = state.activeProjectId === projectId && !!owner?.dockOpen && !!owner?.dockViews.includes(threadId) && !document.hidden && document.hasFocus()
-      if (!seen) state.markNeedsYou(threadId, projectId)
+      if (!seen) {
+        state.markNeedsYou(threadId, projectId)
+        const tab = state.projectTabs.find((project) => project.id === projectId)
+        const projectName = tab?.title ?? tab?.workspacePath?.split('/').filter(Boolean).pop() ?? 'Kaisola'
+        bridge.attention?.notify({
+          title: res.ok ? `${agentName} finished` : `${agentName} stopped`,
+          body: projectName,
+          projectId,
+          sessionId: threadId,
+        })
+      }
       if (state.activeProjectId !== projectId) state.setProjectActivity(projectId, res.ok ? 'completed' : 'failed')
     }
     if (!res.ok) {

@@ -155,7 +155,7 @@ async function pollMeta() {
   const cwds = await cwdOfPids(pollable.map((t) => t.pid))
   for (const t of live) {
     const prev = metaCache.get(t.id) || {}
-    const next = { ...prev, process: t.process }
+    const next = { ...prev, process: t.process, agentBusy: !!t.agentBusy, agentCompletedAt: t.agentCompletedAt || null }
     const cwd = cwds.get(t.pid)
     if (cwd) next.cwd = cwd
     if (next.cwd && next.cwd !== prev.cwd) {
@@ -168,7 +168,7 @@ async function pollMeta() {
       next.root = git.root
       next.branch = git.branch
     }
-    if (next.process !== prev.process || next.cwd !== prev.cwd || next.branch !== prev.branch || next.root !== prev.root) {
+    if (next.process !== prev.process || next.cwd !== prev.cwd || next.branch !== prev.branch || next.root !== prev.root || next.agentBusy !== prev.agentBusy || next.agentCompletedAt !== prev.agentCompletedAt) {
       metaCache.set(t.id, next)
       const payload = {
         id: t.id,
@@ -178,6 +178,8 @@ async function pollMeta() {
         root: next.root || null,
         repo: next.root ? path.basename(next.root) : null,
         branch: next.branch || null,
+        agentBusy: next.agentBusy,
+        agentCompletedAt: next.agentCompletedAt,
       }
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.webContents.isDestroyed()) win.webContents.send('terminal:meta', payload)
@@ -234,6 +236,9 @@ function registerTerminalHandlers(ipcMain) {
   })
 
   ipcMain.handle('terminal:write', (event, { id, data } = {}) => broker().terminal('write', event.sender, { id, data }))
+  ipcMain.on('terminal:agent-turn', (event, { id, busy } = {}) => {
+    void broker().terminal('agentTurn', event.sender, { id, busy }, { timeoutMs: 3000 }).catch(() => {})
+  })
   ipcMain.handle('terminal:resize', (event, { id, cols, rows } = {}) => broker().terminal('resize', event.sender, { id, cols, rows }))
   ipcMain.handle('terminal:snapshot', (event, { id } = {}) => broker().terminal('snapshot', event.sender, { id }))
   ipcMain.handle('terminal:detachRenderer', (event, { id, viewState } = {}) => broker().terminal('detachRenderer', event.sender, { id, viewState }))

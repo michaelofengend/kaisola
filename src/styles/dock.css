@@ -993,10 +993,10 @@ details.assistant-tool.tool-artifacts > summary::-webkit-details-marker { displa
 .assistant-stream {
   flex: 1;
   overflow-y: auto;
-  padding: var(--sp-5) var(--sp-6);
+  padding: var(--sp-5) clamp(var(--sp-6), 2vw, var(--sp-9));
   display: flex;
   flex-direction: column;
-  gap: var(--sp-5);
+  gap: 10px;
 }
 /* centered, calm empty state — the pane should feel open, not instructional */
 .assistant-empty {
@@ -1049,7 +1049,7 @@ details.assistant-tool.tool-artifacts > summary::-webkit-details-marker { displa
 .assistant-turn {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
+  gap: 3px;
 }
 .turn-tag {
   font-size: var(--fs-10);
@@ -1082,27 +1082,34 @@ details.assistant-tool.tool-artifacts > summary::-webkit-details-marker { displa
 .turn-user .turn-text {
   color: var(--text-0);
 }
+.turn-assistant .turn-text {
+  max-width: 96ch;
+  white-space: normal; /* Markdown owns paragraph rhythm; don't preserve source blanks twice. */
+}
 
 /* ── Markdown (agent output) ─────────────────────────────────────────────── */
-.md { font-size: var(--fs-13); line-height: var(--lh-normal); color: var(--text-1); }
+.md { font-size: var(--fs-13); line-height: 1.55; color: var(--text-1); }
 .md > *:first-child { margin-top: 0; }
 .md > *:last-child { margin-bottom: 0; }
-.md p { margin: 0 0 var(--sp-4); }
-.md h1, .md h2, .md h3, .md h4, .md h5 { margin: var(--sp-5) 0 var(--sp-3); font-weight: var(--fw-semibold); color: var(--text-0); line-height: var(--lh-snug); }
+.md p { margin: 0 0 6px; }
+.md p + p { margin-top: 2px; }
+.md h1, .md h2, .md h3, .md h4, .md h5 { margin: 14px 0 5px; font-weight: var(--fw-semibold); color: var(--text-0); line-height: 1.3; }
 .md h1 { font-size: var(--fs-16); }
 .md h2 { font-size: var(--fs-15); }
 .md h3 { font-size: var(--fs-14); }
 .md h4, .md h5 { font-size: var(--fs-13); }
-.md ul, .md ol { margin: 0 0 var(--sp-4); padding-left: var(--sp-7); }
-.md li { margin: var(--sp-1) 0; }
-.md li > ul, .md li > ol { margin: var(--sp-1) 0; }
+.md ul, .md ol { margin: 2px 0 8px; padding-left: 19px; }
+.md li { margin: 2px 0; padding-left: 1px; }
+.md li + li { margin-top: 4px; }
+.md li > p { margin: 0; }
+.md li > ul, .md li > ol { margin: 2px 0 3px; }
 .md a { color: var(--accent); text-decoration: none; cursor: pointer; }
 .md a:hover { text-decoration: underline; }
 .md strong { color: var(--text-0); font-weight: var(--fw-semibold); }
 .md code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-3); border: 1px solid var(--border-faint); border-radius: var(--r-1); padding: 1px 4px; }
-.md pre { margin: 0 0 var(--sp-4); padding: var(--sp-4); background: var(--bg-inset); border: 1px solid var(--border-faint); border-radius: var(--r-3); overflow-x: auto; }
+.md pre { margin: 4px 0 8px; padding: var(--sp-4); background: var(--bg-inset); border: 1px solid var(--border-faint); border-radius: var(--r-3); overflow-x: auto; }
 .md pre code { background: none; border: none; padding: 0; font-size: var(--fs-12); }
-.md blockquote { margin: 0 0 var(--sp-4); padding-left: var(--sp-4); border-left: 2px solid var(--border-strong); color: var(--text-2); }
+.md blockquote { margin: 3px 0 8px; padding-left: var(--sp-4); border-left: 2px solid var(--border-strong); color: var(--text-2); }
 .md hr { border: 0; border-top: 1px solid var(--border-faint); margin: var(--sp-5) 0; }
 .md table { border-collapse: collapse; margin: 0 0 var(--sp-4); font-size: var(--fs-12); display: block; overflow-x: auto; }
 .md th, .md td { border: 1px solid var(--border); padding: var(--sp-2) var(--sp-3); text-align: left; }

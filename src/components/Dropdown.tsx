@@ -74,11 +74,14 @@ export function Dropdown({
       e.stopPropagation()
       setOpen(false)
     }
-    document.addEventListener('mousedown', onDoc)
+    // Capture phase is intentional: modal panels (Settings included) stop
+    // bubbling pointer events at their surface. A bubble listener therefore
+    // left the dropdown preview open when clicking another setting.
+    document.addEventListener('mousedown', onDoc, true)
     window.addEventListener('resize', onScrollResize)
     window.addEventListener('keydown', onKey, true)
     return () => {
-      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('mousedown', onDoc, true)
       window.removeEventListener('resize', onScrollResize)
       window.removeEventListener('keydown', onKey, true)
     }

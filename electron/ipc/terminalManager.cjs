@@ -66,6 +66,7 @@ const FLUSH_MS_FOCUSED = 16
 const FLUSH_MS_BLURRED = 100
 let flushMs = FLUSH_MS_FOCUSED
 const FLUSH_CAP = 65_536 // a burst bigger than this flushes immediately
+const AGENT_QUIET_MS = 4500
 
 /** main.cjs calls this on app focus/blur — the stream profile follows. */
 function setAppFocused(focused) {
@@ -204,6 +205,42 @@ function spawn({ id, command, args, cwd, env, cols, rows, sender }) {
     detachedAt: null,
     detachedBytes: 0,
     exitedWhileDetached: false,
+    // Agent activity is deliberately broker-owned: hidden Eco tabs retain no
+    // xterm/React renderer, but their turn still settles and notifies the app.
+    agentBusy: false,
+    agentCompletedAt: null,
+    agentQuietTimer: null,
+  }
+  const broadcastAgentActivity = () => {
+    send(rec.sender || rec.lastSender, 'terminal:agent-activity', {
+      id,
+      busy: rec.agentBusy,
+      completedAt: rec.agentCompletedAt,
+    })
+  }
+  const settleAgentTurn = () => {
+    if (rec.agentQuietTimer) clearTimeout(rec.agentQuietTimer)
+    rec.agentQuietTimer = null
+    if (!rec.agentBusy) return
+    rec.agentBusy = false
+    rec.agentCompletedAt = Date.now()
+    broadcastAgentActivity()
+  }
+  const armAgentQuiet = () => {
+    if (!rec.agentBusy) return
+    if (rec.agentQuietTimer) clearTimeout(rec.agentQuietTimer)
+    rec.agentQuietTimer = setTimeout(settleAgentTurn, AGENT_QUIET_MS)
+    rec.agentQuietTimer.unref?.()
+  }
+  rec.setAgentTurn = (busy) => {
+    if (busy) {
+      if (rec.agentQuietTimer) clearTimeout(rec.agentQuietTimer)
+      rec.agentBusy = true
+      rec.agentCompletedAt = null
+      broadcastAgentActivity()
+      armAgentQuiet()
+    } else settleAgentTurn()
+    return true
   }
   const flushPending = () => {
     if (rec.flushTimer) {
@@ -224,12 +261,14 @@ function spawn({ id, command, args, cwd, env, cols, rows, sender }) {
       if (rec.pending.length >= FLUSH_CAP) flushPending()
       else if (!rec.flushTimer) rec.flushTimer = setTimeout(flushPending, flushMs)
     }
+    armAgentQuiet()
   })
   p.onExit(({ exitCode, signal }) => {
     flushPending() // the tail of the stream must land before the exit signal
     rec.exited = true
     rec.exitedWhileDetached = !rec.rendererVisible
     rec.exitStatus = { exitCode: exitCode ?? 0, signal: signal ?? null }
+    settleAgentTurn()
     send(rec.sender, `terminal:exit:${id}`, rec.exitStatus.exitCode)
     rec.waiters.forEach((w) => w(rec.exitStatus))
     rec.waiters = []
@@ -251,6 +290,11 @@ function write(id, data) {
   const r = terms.get(id)
   if (r) r.pty.write(data)
   return !!r
+}
+
+function agentTurn(id, busy) {
+  const rec = terms.get(id)
+  return rec?.setAgentTurn?.(!!busy) ?? false
 }
 
 function resize(id, cols, rows) {
@@ -343,7 +387,13 @@ function detachSenderPrefix(prefix) {
 function snapshot(id) {
   const r = terms.get(id)
   if (!r) return { output: '', exited: true, exitStatus: null }
-  return { ...r.spool.snapshot(OUTPUT_CAP), exited: r.exited, exitStatus: r.exitStatus }
+  return {
+    ...r.spool.snapshot(OUTPUT_CAP),
+    exited: r.exited,
+    exitStatus: r.exitStatus,
+    agentBusy: r.agentBusy,
+    agentCompletedAt: r.agentCompletedAt,
+  }
 }
 
 function waitForExit(id) {
@@ -368,6 +418,7 @@ function kill(id) {
 function release(id) {
   const r = terms.get(id)
   if (r?.flushTimer) clearTimeout(r.flushTimer)
+  if (r?.agentQuietTimer) clearTimeout(r.agentQuietTimer)
   kill(id)
   r?.spool.close({ remove: true })
   terms.delete(id)
@@ -390,6 +441,7 @@ function untrackChild(child) {
 function killAll() {
   for (const r of terms.values()) {
     if (r.flushTimer) clearTimeout(r.flushTimer)
+    if (r.agentQuietTimer) clearTimeout(r.agentQuietTimer)
     try {
       r.pty.kill()
     } catch {
@@ -426,7 +478,7 @@ function list() {
     try {
       proc = r.pty.process || ''
     } catch { /* pty backend may refuse mid-teardown */ }
-    out.push({ id: r.id, pid: r.pty.pid, process: proc })
+    out.push({ id: r.id, pid: r.pty.pid, process: proc, agentBusy: r.agentBusy, agentCompletedAt: r.agentCompletedAt })
   }
   return out
 }
@@ -442,4 +494,4 @@ function diagnostics() {
   }))
 }
 
-module.exports = { available, has, isLive, spawn, write, resize, setSender, detachRenderer, detachSender, detachSenderPrefix, snapshot, waitForExit, kill, release, trackChild, untrackChild, killAll, list, setAppFocused, configureStorage, setEventSink, diagnostics }
+module.exports = { available, has, isLive, spawn, write, agentTurn, resize, setSender, detachRenderer, detachSender, detachSenderPrefix, snapshot, waitForExit, kill, release, trackChild, untrackChild, killAll, list, setAppFocused, configureStorage, setEventSink, diagnostics }

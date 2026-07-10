@@ -90,7 +90,9 @@ export function SessionTabs() {
   terminals.forEach((t, i) => {
     const meta = terminalMeta[t.id]
     const agentKey = terminalAgentKey(t.singletonKey)
-    const working = agentKey ? !!meta?.agentBusy : !!meta?.running
+    // A broker kept alive by v0.1.39 does not expose the new precise activity
+    // bit yet; foreground-process state is the safe compatibility fallback.
+    const working = agentKey ? !!(meta?.agentBusy ?? meta?.running) : !!meta?.running
     const label = terminalLabel(t, { meta, agents, index: i, count: terminals.length })
     const failed = !working && (meta?.lastExit ?? 0) > 0
     tabs.set(t.id, {

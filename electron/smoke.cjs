@@ -722,6 +722,94 @@ app.whenReady().then(async () => {
   })()`)
   console.log('ACTIVITY_UI=' + JSON.stringify(activityUi))
 
+  // 7b-ii) project/window tabs derive running state from parked slices. Eco
+  // keeps the tiny opacity pulse, completion stays still, and clearing the
+  // unread receipt removes the dot. Native attention plumbing is exposed.
+  const attentionUi = await win.webContents.executeJavaScript(`(async () => {
+    const st = window.__kaisola.getState()
+    const pid = st.newProject({ path: '/tmp/attention-smoke', focus: false })
+    const slice = window.__kaisola.getState().projectSlices[pid]
+    const tid = slice.assistantThreads[0].id
+    st.patchProject(pid, (sl) => ({
+      assistantThreads: sl.assistantThreads.map((thread) => thread.id === tid ? { ...thread, busy: true } : thread),
+    }))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    let tab = document.querySelector('.ptab[data-project-id="' + pid + '"]')
+    const dot = tab?.querySelector('.ptab-badge')
+    const running = tab?.getAttribute('data-state') === 'running'
+    const pulse = dot ? getComputedStyle(dot).animationName.includes('queue-pulse') : false
+    st.patchProject(pid, (sl) => ({
+      assistantThreads: sl.assistantThreads.map((thread) => thread.id === tid ? { ...thread, busy: false } : thread),
+      needsYou: { ...sl.needsYou, [tid]: true },
+    }))
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    tab = document.querySelector('.ptab[data-project-id="' + pid + '"]')
+    const completed = tab?.getAttribute('data-state') === 'completed'
+    const still = tab?.querySelector('.ptab-badge') ? getComputedStyle(tab.querySelector('.ptab-badge')).animationName === 'none' : false
+    st.patchProject(pid, (sl) => ({ needsYou: {} }))
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    tab = document.querySelector('.ptab[data-project-id="' + pid + '"]')
+    const cleared = !tab?.getAttribute('data-state')
+    const nativeAttention = typeof window.kaisola.attention?.setCount === 'function' && typeof window.kaisola.attention?.notify === 'function'
+    st.closeProject(pid, { force: true })
+    return { running, pulse, completed, still, cleared, nativeAttention }
+  })()`)
+  console.log('ATTENTION_UI=' + JSON.stringify(attentionUi))
+
+  // The detached PTY broker, not xterm, owns CLI turn quieting. Prove an Eco
+  // renderer can detach completely and still receive the completion receipt.
+  const brokerActivity = await win.webContents.executeJavaScript(`(async () => {
+    const id = 'agent-activity-broker-smoke'
+    const events = []
+    const off = window.kaisola.terminal.onAgentActivity((event) => {
+      if (event.id === id) events.push(event)
+    })
+    const created = await window.kaisola.terminal.create(id, '/tmp', 80, 24)
+    window.kaisola.terminal.agentTurn(id, true)
+    await new Promise((resolve) => setTimeout(resolve, 160))
+    const detached = await window.kaisola.terminal.detachRenderer(id)
+    for (let i = 0; i < 32 && !events.some((event) => !event.busy && event.completedAt); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 180))
+    }
+    const snapshot = await window.kaisola.terminal.snapshot(id)
+    off()
+    await window.kaisola.terminal.kill(id)
+    return {
+      created: !!created.ok,
+      began: events.some((event) => event.busy),
+      detached: !!detached.ok,
+      settled: events.some((event) => !event.busy && !!event.completedAt),
+      durable: snapshot.agentBusy === false && Number(snapshot.agentCompletedAt) > 0,
+    }
+  })()`)
+  console.log('BROKER_ACTIVITY=' + JSON.stringify(brokerActivity))
+
+  // 7b-iii) ACP prose uses compact Markdown rhythm rather than preserving
+  // source blank lines on top of block margins.
+  const transcriptTypography = await win.webContents.executeJavaScript(`(async () => {
+    const st = window.__kaisola.getState()
+    const tid = st.activeThreadId
+    st.setAssistantThreadAgent(tid, 'mock')
+    st.updateAssistantRuntime(tid, () => ({
+      first: false,
+      turns: [{ kind: 'assistant', text: 'A concise paragraph.\\n\\n- First item\\n- Second item', at: Date.now() }],
+    }))
+    st.setDockView(tid)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    const text = document.querySelector('.turn-assistant .turn-text')
+    const stream = document.querySelector('.assistant-stream')
+    const li = text?.querySelector('li')
+    const style = text ? getComputedStyle(text) : null
+    return {
+      rendered: !!text?.querySelector('.md p') && !!li,
+      normalWhitespace: style?.whiteSpace === 'normal',
+      readableWidth: !!style?.maxWidth && style.maxWidth !== 'none' && parseFloat(style.maxWidth) <= 1100,
+      compactStream: stream ? parseFloat(getComputedStyle(stream).rowGap) <= 10 : false,
+      compactList: li ? parseFloat(getComputedStyle(li).marginBottom) <= 4 : false,
+    }
+  })()`)
+  console.log('TRANSCRIPT_TYPOGRAPHY=' + JSON.stringify(transcriptTypography))
+
   // 7c) prompts typed while an ACP turn is active coalesce into ONE ordered
   //     follow-up and drain without relying on a React re-render after a ref
   //     flips. This regresses the two-item queue that used to remain stranded.
@@ -1697,8 +1785,15 @@ a^2 + b^2 = c^2
     const navNames = [...document.querySelectorAll('.settings-nav-item')].map((e) => e.textContent || '')
     const hasAppearance = navNames.some((l) => /General/.test(l)) && /Theme/.test(document.querySelector('.settings-pane')?.textContent || '')
     const hasSidebarControls = /Sidebar/.test(document.querySelector('.settings-panel-v2')?.textContent || '')
+    const dropdown = document.querySelector('.settings-pane .drop-btn')
+    dropdown?.click()
+    await new Promise((r) => setTimeout(r, 50))
+    const previewOpened = !!document.querySelector('.drop-menu')
+    document.querySelector('.settings-pane-head')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await new Promise((r) => setTimeout(r, 50))
+    const previewDismissed = !document.querySelector('.drop-menu')
     window.__kaisola.getState().setSettingsOpen(false)
-    return { hasAppearance, noSidebarControls: !hasSidebarControls }
+    return { hasAppearance, noSidebarControls: !hasSidebarControls, previewOpened, previewDismissed }
   })()`)
   console.log('SETTINGS=' + JSON.stringify(settings))
 
@@ -2862,6 +2957,9 @@ a^2 + b^2 = c^2
     !permrules.saved || !permrules.cascaded || !permrules.autoAnswered || !permrules.rejectCascade ||
     !sensitive.surfaced || !sensitive.stillPending || !sensitive.diffFlagged || sensitive.pendingAfter !== 0 ||
     !activityUi.card || !activityUi.hasSubagent || !activityUi.hasTerminal || !activityUi.hasStatus || !activityUi.standardizedDot || !activityUi.openBtn || !activityUi.noContext || !activityUi.noMention || !activityUi.compactChrome || !activityUi.overflow ||
+    !attentionUi.running || !attentionUi.pulse || !attentionUi.completed || !attentionUi.still || !attentionUi.cleared || !attentionUi.nativeAttention ||
+    !brokerActivity.created || !brokerActivity.began || !brokerActivity.detached || !brokerActivity.settled || !brokerActivity.durable ||
+    !transcriptTypography.rendered || !transcriptTypography.normalWhitespace || !transcriptTypography.readableWidth || !transcriptTypography.compactStream || !transcriptTypography.compactList ||
     !promptQueue.started || !promptQueue.queuedTwo || !promptQueue.compactCapsule || !promptQueue.queuePopover || !promptQueue.drained || !promptQueue.combinedOnce || !promptQueue.deliveredTogether || !promptQueue.newestSpeedWon ||
     !persist.stored || !persist.hasTheme || !persist.hasAgent || !persist.hasThread || !persist.hasChatTurn || !persist.hasDraft || !persist.draftBounded || !persist.hasCodexEffort ||
     !boot.hasId || !boot.ran ||
@@ -2895,7 +2993,7 @@ a^2 + b^2 = c^2
     !toggle.hasFig || !toggle.visibleAtRest || !toggle.putAway || !toggle.back || !toggle.hidesAll ||
     !autoname.named || !autoname.rowShows || !autoname.sticky || !autoname.manualWins || !autoname.termNamed ||
     !minimalUi.noSidebar || !minimalUi.noSidebarResize || !minimalUi.noStageNav || !minimalUi.hasRail || !minimalUi.hasPlus || !minimalUi.hasFiles ||
-    !settings.hasAppearance || !settings.noSidebarControls ||
+    !settings.hasAppearance || !settings.noSidebarControls || !settings.previewOpened || !settings.previewDismissed ||
     !extensionsUi.opened || extensionsUi.cards < 8 || !extensionsUi.hasFilters || !extensionsUi.csvInstalled || !extensionsUi.jsonInstalled ||
     !extensionsUi.persisted || !extensionsUi.defaultUninstallPersisted || !extensionsUi.csvPreview || !extensionsUi.jsonPreview || !extensionsUi.boundedJsonPreview || !extensionsUi.closed ||
     !dropfit.hasBtn || !dropfit.fits ||

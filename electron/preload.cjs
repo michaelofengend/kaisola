@@ -221,6 +221,7 @@ const bridge = {
   terminal: {
     create: (id, cwd, cols, rows) => ipcRenderer.invoke('terminal:create', { id, cwd, cols, rows }),
     write: (id, data) => ipcRenderer.invoke('terminal:write', { id, data }),
+    agentTurn: (id, busy) => ipcRenderer.send('terminal:agent-turn', { id, busy }),
     resize: (id, cols, rows) => ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
     snapshot: (id) => ipcRenderer.invoke('terminal:snapshot', { id }),
     attach: (id) => ipcRenderer.invoke('terminal:attach', { id }),
@@ -247,6 +248,11 @@ const bridge = {
       const listener = (_e, meta) => cb(meta)
       ipcRenderer.on('terminal:meta', listener)
       return () => ipcRenderer.removeListener('terminal:meta', listener)
+    },
+    onAgentActivity: (cb) => {
+      const listener = (_e, activity) => cb(activity)
+      ipcRenderer.on('terminal:agent-activity', listener)
+      return () => ipcRenderer.removeListener('terminal:agent-activity', listener)
     },
   },
   assistantArchive: {
@@ -413,6 +419,17 @@ const bridge = {
     // sync the native window title to the active project.
     tabsChanged: (list) => ipcRenderer.send('tabs:changed', list),
     setTitle: (title) => ipcRenderer.send('win:set-title', title),
+  },
+  // App-wide attention: main aggregates every renderer into the macOS dock
+  // badge and owns native notifications so they work while Chromium is hidden.
+  attention: {
+    setCount: (count) => ipcRenderer.send('attention:count', count),
+    notify: (payload) => ipcRenderer.send('attention:notify', payload),
+    onOpen: (cb) => {
+      const listener = (_e, payload) => cb(payload)
+      ipcRenderer.on('attention:open', listener)
+      return () => ipcRenderer.removeListener('attention:open', listener)
+    },
   },
   // in-app software updates (electron-updater ↔ the GitHub releases feed)
   update: {

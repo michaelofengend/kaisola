@@ -23,15 +23,16 @@ const tabLabel = (t: { title?: string; workspacePath: string | null }) => t.titl
 export function ProjectTabs() {
   const tabs = useKaisola((s) => s.projectTabs)
   const activeId = useKaisola((s) => s.activeProjectId)
-  // the ACTIVE window tab shows a LIVE running dot (any running pty / busy
-  // thread in the current slice) — the parked `tab.activity` badge only ever
-  // marks BACKGROUND tabs (setProjectActivity refuses the active one)
-  const activeRunning = useKaisola(
-    (s) =>
-      s.terminals.some((t) => terminalAgentKey(t.singletonKey) ? s.terminalMeta[t.id]?.agentBusy : s.terminalMeta[t.id]?.running) ||
-      s.agentTerminals.some((t) => s.terminalMeta[t.terminalId]?.running) ||
-      s.assistantThreads.some((t) => t.busy),
-  )
+  // Derive activity for EVERY project, including parked slices. Previously a
+  // tab only received `running` after it was already in the background, so the
+  // common flow (start agent → switch tab) lost its dot entirely.
+  const projectSlices = useKaisola((s) => s.projectSlices)
+  const terminalMeta = useKaisola((s) => s.terminalMeta)
+  const activeTerminals = useKaisola((s) => s.terminals)
+  const activeAgentTerminals = useKaisola((s) => s.agentTerminals)
+  const activeThreads = useKaisola((s) => s.assistantThreads)
+  const activeNeedsYou = useKaisola((s) => s.needsYou)
+  const activePermissions = useKaisola((s) => s.pendingPermissions)
   const switchProject = useKaisola((s) => s.switchProject)
   const closeProject = useKaisola((s) => s.closeProject)
   const reorderProjects = useKaisola((s) => s.reorderProjects)
@@ -84,6 +85,33 @@ export function ProjectTabs() {
           const active = tab.id === activeId
           const label = tabLabel(tab)
           const loneEmpty = tabs.length === 1 && !tab.workspacePath
+          const slice = active
+            ? {
+                terminals: activeTerminals,
+                agentTerminals: activeAgentTerminals,
+                assistantThreads: activeThreads,
+                needsYou: activeNeedsYou,
+                pendingPermissions: activePermissions,
+              }
+            : projectSlices[tab.id]
+          const running = !!slice && (
+            slice.terminals.some((terminal) => terminalAgentKey(terminal.singletonKey)
+              ? (terminalMeta[terminal.id]?.agentBusy ?? terminalMeta[terminal.id]?.running)
+              : terminalMeta[terminal.id]?.running) ||
+            slice.agentTerminals.some((terminal) => terminalMeta[terminal.terminalId]?.running) ||
+            slice.assistantThreads.some((thread) => thread.busy)
+          )
+          const needsAttention = !!slice?.pendingPermissions.length
+          const unread = !!slice && Object.keys(slice.needsYou).length > 0
+          const state = needsAttention || tab.activity === 'needs-you'
+            ? 'needs-you'
+            : tab.activity === 'failed'
+              ? 'failed'
+              : running
+                ? 'running'
+                : unread
+                  ? 'completed'
+                  : tab.activity
           return (
             <div
               key={tab.id}
@@ -93,7 +121,7 @@ export function ProjectTabs() {
               aria-selected={active}
               data-project-id={tab.id}
               data-active={active}
-              data-state={tab.activity ?? (active && activeRunning ? 'running' : undefined)}
+              data-state={state}
               style={{ '--ptab-hue': tab.color ?? tab.hue } as CSSProperties}
               draggable={editing !== tab.id}
               onDragStart={() => (dragRef.current = tab.id)}

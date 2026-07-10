@@ -4,7 +4,7 @@
 // the UI is fully usable without Electron. Electron adds the native shell plus
 // the privileged "tools" the research IDE needs (model calls, filesystem,
 // running experiments) — all behind a locked-down preload bridge.
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, screen, shell } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const { registerModelHandlers } = require('./ipc/modelHandler.cjs')
@@ -29,6 +29,7 @@ const { registerExtensionHandlers } = require('./ipc/extensionHandler.cjs')
 const { registerUpdateHandlers } = require('./ipc/updateHandler.cjs')
 const { registerGlassHandlers, wireGlassEvents } = require('./ipc/glassHandler.cjs')
 const { registerAssistantArchiveHandlers } = require('./ipc/assistantArchive.cjs')
+const { registerAttentionHandlers } = require('./ipc/attentionHandler.cjs')
 
 const DEV_URL = process.env.KAISOLA_DEV_URL ?? process.env.PASOLA_DEV_URL // set by `npm run electron:dev`
 const isDev = !!DEV_URL
@@ -941,6 +942,7 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   registerUpdateHandlers(ipcMain, { waitForRestartSafe: waitForAcpRestartSafe })
   registerGlassHandlers(ipcMain)
   registerAssistantArchiveHandlers(ipcMain, path.join(app.getPath('userData'), 'assistant-archives'))
+  registerAttentionHandlers(ipcMain, { app, BrowserWindow, Notification })
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -157,11 +157,17 @@ function pushProjectFeed(pid: string, isActive: boolean, item: Omit<AgentFeedIte
 // Deduped per project within a short window so a chatty turn doesn't stack
 // notification banners.
 const lastNotifyAt = new Map<string, number>()
-function notifyAgent(title: string, body: string, pid: string) {
-  if (typeof Notification === 'undefined' || bridge.smoke) return
+function notifyAgent(title: string, body: string, pid: string, sessionId?: string) {
+  if (bridge.smoke) return
   const now = Date.now()
-  if (now - (lastNotifyAt.get(pid) ?? 0) < 15_000) return
-  lastNotifyAt.set(pid, now)
+  const key = `${pid}\0${sessionId ?? ''}`
+  if (now - (lastNotifyAt.get(key) ?? 0) < 15_000) return
+  lastNotifyAt.set(key, now)
+  if (bridge.attention) {
+    bridge.attention.notify({ title, body, projectId: pid, sessionId })
+    return
+  }
+  if (typeof Notification === 'undefined') return
   try {
     const n = new Notification(title, { body, silent: true })
     n.onclick = () => {
@@ -170,6 +176,54 @@ function notifyAgent(title: string, body: string, pid: string) {
       if (st.projectTabs.some((t) => t.id === pid)) st.switchProject(pid)
     }
   } catch { /* notifications denied/unavailable — the tab badge still shows */ }
+}
+
+/** Keep the native dock badge equal to unread session/permission work across
+ * every project in this window. Regaining focus acknowledges only sessions
+ * that are actually visible; hidden tabs keep their still completion dot. */
+function AttentionSync() {
+  const unreadCount = useKaisola((state) => {
+    const count = (slice: Pick<typeof state, 'needsYou' | 'pendingPermissions'> | undefined) =>
+      slice ? Object.keys(slice.needsYou).length + slice.pendingPermissions.length : 0
+    return count(state) + Object.values(state.projectSlices).reduce((sum, slice) => sum + count(slice), 0)
+  })
+  const visibleUnread = useKaisola((state) => state.dockViews.filter((id) => state.needsYou[id]).join('\0'))
+
+  useEffect(() => {
+    bridge.attention?.setCount(unreadCount)
+  }, [unreadCount])
+
+  useEffect(() => {
+    const acknowledgeVisible = () => {
+      if (document.hidden || !document.hasFocus()) return
+      const state = useKaisola.getState()
+      for (const id of state.dockViews) {
+        if (state.needsYou[id]) state.setDockView(id)
+      }
+    }
+    const off = bridge.attention?.onOpen(({ projectId, sessionId }) => {
+      const state = useKaisola.getState()
+      if (projectId && state.projectTabs.some((tab) => tab.id === projectId)) state.switchProject(projectId)
+      if (sessionId) useKaisola.getState().switchSession(sessionId)
+      acknowledgeVisible()
+    })
+    window.addEventListener('focus', acknowledgeVisible)
+    document.addEventListener('visibilitychange', acknowledgeVisible)
+    acknowledgeVisible()
+    return () => {
+      off?.()
+      window.removeEventListener('focus', acknowledgeVisible)
+      document.removeEventListener('visibilitychange', acknowledgeVisible)
+      bridge.attention?.setCount(0)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!visibleUnread || document.hidden || !document.hasFocus()) return
+    const state = useKaisola.getState()
+    for (const id of visibleUnread.split('\0')) state.setDockView(id)
+  }, [visibleUnread])
+  return null
 }
 
 /** A turn-start checkpoint for a BACKGROUND project (the active project uses the
@@ -283,9 +337,36 @@ export default function App() {
   // terminalMeta stays a GLOBAL map keyed by unique terminal id (never swapped),
   // so a background pty's identity survives; we only mirror a live pty onto its
   // tab as a 'running' badge (once, without clobbering a needs-you/failed dot).
-  useEffect(
-    () =>
-      bridge.terminal.onMeta((m) => {
+  useEffect(() => {
+      const applyAgentActivity = (activity: { id: string; busy: boolean; completedAt?: number | null }) => {
+        const st = useKaisola.getState()
+        const previousCompletedAt = st.terminalMeta[activity.id]?.agentCompletedAt
+        st.setTerminalMeta(activity.id, {
+          agentBusy: activity.busy,
+          ...(activity.completedAt != null ? { agentCompletedAt: activity.completedAt } : {}),
+        })
+        const pid = terminalOwnerMap(st)[activity.id]
+        if (!pid) return
+        if (activity.busy) {
+          if (pid !== st.activeProjectId) st.setProjectActivity(pid, 'running')
+          return
+        }
+        if (activity.completedAt == null || activity.completedAt === previousCompletedAt) return
+        const owner = pid === st.activeProjectId ? st : st.projectSlices[pid]
+        const seen = pid === st.activeProjectId && !!owner?.dockOpen && !!owner?.dockViews.includes(activity.id) && !document.hidden && document.hasFocus()
+        if (seen) return
+        st.markNeedsYou(activity.id, pid)
+        st.setProjectActivity(pid, 'completed')
+        const terminal = owner?.terminals.find((record) => record.id === activity.id)
+        const provider = /claude/i.test(terminal?.singletonKey ?? '')
+          ? 'Claude'
+          : /codex/i.test(terminal?.singletonKey ?? '')
+            ? 'Codex'
+            : terminal?.name ?? 'Agent'
+        const tab = st.projectTabs.find((project) => project.id === pid)
+        notifyAgent(`${provider} finished`, tab ? projectLabel(tab) : 'Kaisola', pid, activity.id)
+      }
+      const offMeta = bridge.terminal.onMeta((m) => {
         const st = useKaisola.getState()
         st.setTerminalMeta(m.id, {
           fgProcess: m.fgProcess,
@@ -295,6 +376,9 @@ export default function App() {
           repo: m.repo,
           branch: m.branch,
         })
+        if (typeof m.agentBusy === 'boolean') {
+          applyAgentActivity({ id: m.id, busy: m.agentBusy, completedAt: m.agentCompletedAt })
+        }
         if (m.running) {
           const pid = terminalOwnerMap(st)[m.id]
           const owner = pid === st.activeProjectId ? st : pid ? st.projectSlices[pid] : undefined
@@ -307,9 +391,10 @@ export default function App() {
             if (tab && !tab.activity) st.setProjectActivity(pid, 'running')
           }
         }
-      }),
-    [],
-  )
+      })
+      const offActivity = bridge.terminal.onAgentActivity(applyAgentActivity)
+      return () => { offMeta(); offActivity() }
+    }, [])
 
   // an ACP agent is blocked on a permission — resolve the OWNING project first
   // (agentKey map). Active → the live path (reads assistantThreads by req.key).
@@ -324,7 +409,12 @@ export default function App() {
         // fall back to the agentKey→project heuristic
         const pid = req.scope || projectIdForEvent(st, { agentKey: req.key })
         const slice = st.projectSlices[pid]
-        if (pid === st.activeProjectId || !slice) { st.receivePermission(req); return }
+        const announce = () => {
+          if (pid === st.activeProjectId && !document.hidden && document.hasFocus()) return
+          const tab = st.projectTabs.find((project) => project.id === pid)
+          notifyAgent(`${req.agent} needs you`, tab ? projectLabel(tab) : req.title, pid, req.key.split('::')[1])
+        }
+        if (pid === st.activeProjectId || !slice) { st.receivePermission(req); announce(); return }
         if (requestIsSensitive(st.sensitiveGlobs, req)) {
           st.patchProject(
             pid,
@@ -334,6 +424,7 @@ export default function App() {
             }),
             'needs-you',
           )
+          announce()
           return
         }
         if (requestMatchesRules(st.permissionRules, slice.workspacePath, req)) {
@@ -348,6 +439,7 @@ export default function App() {
           }),
           'needs-you',
         )
+        announce()
       }),
       // main resolved a pending ask itself (5-min timeout, or the agent died
       // while it was pending) — drop the inline card the composer is still showing
@@ -465,6 +557,7 @@ export default function App() {
             ev.event === 'Stop' ? 'Claude finished' : 'Claude needs you',
             tab ? projectLabel(tab) : 'Kaisola',
             pid,
+            claudeTerminal?.id,
           )
         }
       }
@@ -596,6 +689,7 @@ export default function App() {
           isn't rendered and --tabstrip-h collapses the row to 0) */}
       {isDesktop && !POP_TERMINAL_ID && <ProjectTabs />}
       {isDesktop && <TabMenuSync />}
+      {isDesktop && !POP_TERMINAL_ID && <AttentionSync />}
       <TopProgress />
       <div
         className="app-body"

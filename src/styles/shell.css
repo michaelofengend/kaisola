@@ -1350,14 +1350,9 @@
 :root[data-perf='eco'] .dock-pane-term {
   background: var(--term-bg);
 }
-:root[data-perf='eco'] .ptab-badge,
-:root[data-perf='eco'] .stab-badge,
-:root[data-perf='eco'] .session-busy,
-:root[data-perf='eco'] .session-needs,
-:root[data-perf='eco'] .queue-dot,
-:root[data-perf='eco'] .agent-pulse-dot,
-:root[data-perf='eco'] .agent-run-dot,
-/* the conic "agent running" border-beam + top progress beam repaint a full
+/* Tiny activity dots are deliberately allowed to pulse in Eco: opacity on a
+   6px element is negligible and is the primary cross-tab working signal. The
+   conic agent border-beam + top progress beam repaint a full
    gradient ring/bar every frame — the most expensive animations eco used to
    leave running, against its own "still indicators" contract */
 :root[data-perf='eco'] .agent-row.is-running::before,
