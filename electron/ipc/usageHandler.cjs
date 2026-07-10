@@ -45,6 +45,26 @@ const expandHome = (p) => (typeof p === 'string' ? p.replace(/^~(?=\/|$)/, os.ho
 const messageOf = (err) => String((err && err.message) || err || 'Unknown error')
 const tail = (text, cap = CODEX_ERROR_TAIL) => text.slice(-cap).trim()
 
+/** Never surface Codex's timestamped ANSI diagnostics as product copy. A 401
+ * here means the CLI's saved ChatGPT session expired or was revoked; the CLI
+ * can still be installed and an already-running terminal can still exist. */
+function normalizeCodexFailure(text, fallback = 'Codex usage is unavailable.') {
+  const clean = String(text || fallback)
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\[(?:\d+;?)+m/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const authRequired = /\b401\b|unauthori[sz]ed|token[_ -]?(?:revoked|expired)|invalidated oauth|auth(?:entication)?[_ -]?error/i.test(clean)
+  if (authRequired) {
+    return {
+      ok: false,
+      authRequired: true,
+      message: 'Your Codex sign-in expired. Sign in again to refresh usage limits.',
+    }
+  }
+  return { ok: false, message: clean || fallback }
+}
+
 const claudeBase = (configDir) => path.resolve(
   configDir && typeof configDir === 'string' && configDir.trim()
     ? expandHome(configDir.trim())
@@ -338,7 +358,7 @@ function codexUsage(codexHome, options = {}) {
     }
     const fail = (fallback) => {
       const detail = tail(stderr)
-      done({ ok: false, message: detail || fallback })
+      done(normalizeCodexFailure(detail, fallback))
     }
 
     try {
@@ -388,7 +408,7 @@ function codexUsage(codexHome, options = {}) {
         if (msg.error) { fail(msg.error.message || 'Codex account read failed.'); return }
         account.value = (msg.result && msg.result.account) || null
         if (!account.value) {
-          done({ ok: false, message: 'Codex is not signed in. Run `codex login`.' })
+          done({ ok: false, authRequired: true, message: 'Codex is not signed in. Sign in to read usage limits.' })
           return
         }
         send(3, 'account/rateLimits/read', {})
@@ -721,6 +741,7 @@ module.exports = {
   codexUsage,
   codexSubscriptionUsage,
   codexRateLimitSnapshot,
+  normalizeCodexFailure,
   claudeUsage,
   claudeSubscriptionUsage,
   claudeSessionUsage,

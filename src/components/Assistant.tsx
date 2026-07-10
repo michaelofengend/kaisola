@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   useKaisola,
@@ -33,6 +33,42 @@ type ControlKind = 'mode' | 'model' | 'config'
 interface UiControl { id: string; name: string; category: string; value: string; options: { value: string; name: string; description?: string }[]; kind: ControlKind }
 
 const ARCHIVED_TURN_KINDS = new Set<Turn['kind']>(['user', 'assistant', 'thought', 'tool'])
+
+interface AssistantViewport { top: number; fromBottom: number; atBottom: boolean }
+const ASSISTANT_VIEWPORTS_KEY = 'kaisola:assistant-viewports'
+const assistantViewports = new Map<string, AssistantViewport>()
+let assistantViewportsLoaded = false
+let assistantViewportTimer: number | null = null
+
+const loadAssistantViewports = () => {
+  if (assistantViewportsLoaded) return
+  assistantViewportsLoaded = true
+  try {
+    const rows = JSON.parse(localStorage.getItem(ASSISTANT_VIEWPORTS_KEY) || '[]') as Array<[string, AssistantViewport]>
+    for (const [key, value] of rows.slice(-120)) {
+      if (key && Number.isFinite(value?.top) && Number.isFinite(value?.fromBottom)) assistantViewports.set(key, value)
+    }
+  } catch { /* a corrupt cosmetic cache must never block a transcript */ }
+}
+
+const rememberAssistantViewport = (key: string, value: AssistantViewport, flush = false) => {
+  loadAssistantViewports()
+  assistantViewports.delete(key)
+  assistantViewports.set(key, value)
+  while (assistantViewports.size > 120) assistantViewports.delete(assistantViewports.keys().next().value!)
+  const persist = () => {
+    assistantViewportTimer = null
+    try { localStorage.setItem(ASSISTANT_VIEWPORTS_KEY, JSON.stringify([...assistantViewports])) } catch { /* storage unavailable */ }
+  }
+  if (assistantViewportTimer != null) window.clearTimeout(assistantViewportTimer)
+  if (flush) persist()
+  else assistantViewportTimer = window.setTimeout(persist, 240)
+}
+
+const assistantViewport = (key: string) => {
+  loadAssistantViewports()
+  return assistantViewports.get(key)
+}
 // History is durable in main's append-only archive. Keep only a compact page in
 // Chromium: users can page through every turn, but old prose/diffs no longer
 // sit duplicated in both the renderer heap and the disk archive.
@@ -869,11 +905,24 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
 
   // stick to the bottom only if the user is already near it — don't yank them
   // down while they're scrolling up to read.
-  const stickRef = useRef(true)
+  const viewportKey = `${projectId}\u0000${threadId}`
+  // A running turn or a non-empty composer always belongs at the live prompt.
+  // Idle/read-only transcripts still restore the exact saved reading offset.
+  const openAtLivePrompt = busy || !!input.trim() || attachments.length > 0 || mentions.length > 0
+  const stickRef = useRef(openAtLivePrompt || (assistantViewport(viewportKey)?.atBottom ?? true))
+  const restoringViewportRef = useRef(false)
+  const saveViewport = (flush = false) => {
+    const el = scrollRef.current
+    if (!el) return
+    const fromBottom = Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight)
+    rememberAssistantViewport(viewportKey, { top: el.scrollTop, fromBottom, atBottom: fromBottom < 90 }, flush)
+  }
   const onStreamScroll = () => {
     const el = scrollRef.current
     if (el) {
+      if (restoringViewportRef.current) return
       stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 90
+      saveViewport()
       // which prompt is above the fold — the rail's darkened tick
       let active = 0
       prompts.forEach((p, n) => {
@@ -886,7 +935,55 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
   useEffect(() => {
     if (stickRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [arun, threadId])
-  useEffect(() => { stickRef.current = true }, [threadId])
+  // Theme/energy/rail changes can resize or briefly remount a transcript even
+  // though its session did not change. Restore the disk-backed viewport and
+  // keep bottom-pinned composers bottom-pinned through the reflow.
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    restoringViewportRef.current = true
+    const persistElement = (flush = false) => {
+      const fromBottom = Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight)
+      rememberAssistantViewport(viewportKey, { top: el.scrollTop, fromBottom, atBottom: fromBottom < 90 }, flush)
+    }
+    const restore = () => {
+      const saved = assistantViewport(viewportKey)
+      const atLivePrompt = openAtLivePrompt || !saved || saved.atBottom
+      if (!saved || atLivePrompt) {
+        stickRef.current = true
+        el.scrollTop = el.scrollHeight
+        return
+      }
+      stickRef.current = false
+      el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - saved.fromBottom)
+    }
+    restore()
+    const frame = requestAnimationFrame(restore)
+    const settleA = window.setTimeout(restore, 60)
+    const settleB = window.setTimeout(() => {
+      restore()
+      restoringViewportRef.current = false
+      persistElement()
+    }, 160)
+    const observer = new ResizeObserver(() => {
+      const saved = assistantViewport(viewportKey)
+      if (stickRef.current) el.scrollTop = el.scrollHeight
+      else if (saved) el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - saved.fromBottom)
+    })
+    observer.observe(el)
+    return () => {
+      cancelAnimationFrame(frame)
+      window.clearTimeout(settleA)
+      window.clearTimeout(settleB)
+      restoringViewportRef.current = false
+      // React may clear scrollRef before a deletion cleanup. The captured DOM
+      // node still owns the final geometry, so persist from it directly.
+      persistElement(true)
+      observer.disconnect()
+    }
+    // The element belongs to this thread for the lifetime of this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewportKey])
   // clear the auth prompt once we're connected
   useEffect(() => { if (connected) { setNotice(null); setAuthUrl(null) } }, [connected])
   // live tick so the "thinking…" timer updates while a response streams

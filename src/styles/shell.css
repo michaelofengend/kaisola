@@ -12,8 +12,8 @@
   --app-active-glass-tint: #fffefd;
   /* lift percentages are tuned to replace the old post-blur brightness(1.34),
      which stretched the blur's 8-bit steps into visible bands in light theme */
-  --app-active-glass-lift-top: 45%;
-  --app-active-glass-lift-bottom: 30%;
+  --app-active-glass-lift-top: 30%;
+  --app-active-glass-lift-bottom: 18%;
   /* chrome veil — the static constant the old blur(1600px) chrome converged
      to (kernel wider than the window ⇒ the filter collapsed to a per-theme
      rgba constant; solved from capture means, glassprobe.cjs). Wallpaper
@@ -22,7 +22,7 @@
      field (.app::before spans its row), so the window top reads as one
      uninterrupted pane and stops costing its own composited layer. */
   --wash-rail-color: 255 254 254;
-  --wash-rail-alpha: 35%;
+  --wash-rail-alpha: 24%;
   /* frost grain for native Live Glass chrome only. Eco hides the pseudo. */
   --frost-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0.04 0'/%3E%3C/filter%3E%3Crect width='96' height='96' filter='url(%23n)'/%3E%3C/svg%3E");
   --side-veil-alpha: 0%;
@@ -85,15 +85,16 @@
    (main syncs nativeTheme.themeSource); this layer does the rest. */
 :root[data-theme='dark'] .app {
   --app-active-glass-tint: #0b0d12;
-  /* 2.5x would pass 100% (a solid wall) — clamped just under so color still breathes */
-  --app-active-glass-lift-top: 90%;
-  --app-active-glass-lift-bottom: 80%;
+  /* enough ink for contrast, but deliberately below the old near-solid wash so
+     the native desktop color still breathes through dark Live Glass */
+  --app-active-glass-lift-top: 74%;
+  --app-active-glass-lift-bottom: 64%;
   /* dark text-on-glass needs a bit more ink under 12px terminal type */
   --session-glass-alpha: 64%;
   /* dark rail veil (see the light-theme block): near-opaque ink — that's
      what the dark blur chrome measured as, and what keeps rail text readable */
   --wash-rail-color: 11 12 17;
-  --wash-rail-alpha: 83%;
+  --wash-rail-alpha: 70%;
 }
 
 /* Deliberately NO data-winfocus overrides on any surface: the shell looks
@@ -376,7 +377,7 @@
   }
 }
 
-/* Four permanent controls: search · usage · agents · overflow. */
+/* Four permanent controls: search · usage · files · overflow. */
 .tabstrip-tools {
   display: flex;
   align-items: center;

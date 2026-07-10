@@ -8,6 +8,7 @@ import { useUpdateState } from '../lib/updates'
 import { Icon } from './Icon'
 import { GoogleIcon } from './ProviderIcon'
 import { Dropdown } from './Dropdown'
+import { UsageSettings } from './shell/LimitsButton'
 
 // Current Claude models (for the direct API path). Checked 2026-07-09.
 const CLAUDE_MODELS = [
@@ -138,24 +139,28 @@ function ClaudeAccountsBlock() {
 /** The Zed-style settings nav — one entry per pane. */
 const SECTIONS = [
   { id: 'general', name: 'General', icon: 'SlidersHorizontal' },
+  { id: 'usage', name: 'Usage', icon: 'Gauge' },
   { id: 'interface', name: 'Interface', icon: 'PanelsTopLeft' },
   { id: 'terminal', name: 'Terminal', icon: 'SquareTerminal' },
   { id: 'agents', name: 'Agents', icon: 'Bot' },
   { id: 'guardrails', name: 'Guardrails', icon: 'ShieldCheck' },
   { id: 'models', name: 'Models & API keys', icon: 'KeyRound' },
   { id: 'literature', name: 'Literature', icon: 'BookOpen' },
+  { id: 'advanced', name: 'Advanced', icon: 'Braces' },
 ] as const
 type SectionId = (typeof SECTIONS)[number]['id']
 
 /** One quiet line under each pane title — sparse panes read as designed, not empty. */
 const SECTION_DESC: Record<SectionId, string> = {
   general: 'Theme, native Live Glass or the lowest-memory Eco shell, and software updates.',
+  usage: 'Live subscription windows for your signed-in Codex and Claude accounts.',
   interface: 'The little conveniences — every one of them yours to switch off.',
   terminal: 'Every terminal card — font size, weight, typeface, and cursor color.',
   agents: 'The CLIs in your + menu. Each runs with your existing install and login — Kaisola never proxies a model.',
   guardrails: 'What agents may do without you: autonomy, saved permission rules, and protected files.',
   models: 'Where AI features think, and the API keys they use — keys live in the OS keychain.',
   literature: 'Sources for the research corpus: PDF ingestion and citation lookups.',
+  advanced: 'Disk-first renderer caching and editable JSON settings and keybindings.',
 }
 
 const slug = (s: string) =>
@@ -274,6 +279,10 @@ export function Settings() {
   const [agents, setAgents] = useState<AcpAgent[]>([])
   const [glass, setGlass] = useState<{ supported: boolean; active: boolean; enabled: boolean } | null>(null)
   const [section, setSection] = useState<SectionId>('general')
+  const [hiddenResidents, setHiddenResidents] = useState(() => {
+    const value = Number(localStorage.getItem('kaisola:hidden-terminal-residents') ?? 0)
+    return Number.isFinite(value) ? Math.min(8, Math.max(0, Math.round(value))) : 0
+  })
 
   // custom-agent form (hidden until "Custom…")
   const [adding, setAdding] = useState(false)
@@ -510,6 +519,8 @@ export function Settings() {
                 {isDesktop && <UpdatesRow />}
               </>
             )}
+
+            {section === 'usage' && <UsageSettings />}
 
             {section === 'interface' && (
               <>
@@ -876,6 +887,41 @@ export function Settings() {
                   </div>
                 </div>
                 <p className="settings-note">A contact email joins OpenAlex's polite pool, raising your rate limits.</p>
+              </>
+            )}
+
+            {section === 'advanced' && (
+              <>
+                <div className="settings-row">
+                  <span className="settings-row-label">Hidden terminal renderers <span className="faint" style={{ fontWeight: 400 }}>· processes always continue</span></span>
+                  <div className="settings-row-control">
+                    <Dropdown
+                      value={String(hiddenResidents)}
+                      options={[
+                        { value: '0', name: 'Disk only', description: 'Lowest memory; reconstruct hidden terminal views from disk' },
+                        { value: '1', name: 'Keep 1 warm', description: 'Faster recent-tab switching' },
+                        { value: '2', name: 'Keep 2 warm', description: 'More memory, two instant terminal views' },
+                        { value: '4', name: 'Keep 4 warm', description: 'Highest memory; useful on large-memory Macs' },
+                      ]}
+                      onSelect={(value) => {
+                        const count = Number(value)
+                        setHiddenResidents(count)
+                        localStorage.setItem('kaisola:hidden-terminal-residents', String(count))
+                        window.dispatchEvent(new Event('kaisola:terminal-residency'))
+                      }}
+                      align="right"
+                      title="Hidden PTYs and drafts always remain disk-backed; this controls only how many hidden xterm canvases stay in renderer memory"
+                    />
+                  </div>
+                </div>
+                <div className="settings-row">
+                  <span className="settings-row-label">Configuration files</span>
+                  <div className="settings-row-control">
+                    <button className="btn btn-ghost btn-sm" onClick={() => void openConfigFile('settings')}><Icon name="Settings" size={12} /> settings.json</button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => void openConfigFile('keymap')}><Icon name="Keyboard" size={12} /> keymap.json</button>
+                  </div>
+                </div>
+                <p className="settings-note">Disk only is the default. Running terminals, agent processes, drafts, scrollback, and histories continue; only invisible renderer canvases are released.</p>
               </>
             )}
 

@@ -24,6 +24,7 @@ const { registerGitHandlers } = require('./ipc/gitHandler.cjs')
 const { registerClaudeHooksHandlers } = require('./ipc/claudeHooksHandler.cjs')
 const { registerUpdateHandlers } = require('./ipc/updateHandler.cjs')
 const { registerGlassHandlers } = require('./ipc/glassHandler.cjs')
+const { registerExtensionHandlers } = require('./ipc/extensionHandler.cjs')
 const worktree = require('./ipc/worktreeHandler.cjs')
 
 process.env.KAISOLA_SMOKE = '1'
@@ -53,6 +54,7 @@ app.whenReady().then(async () => {
   registerDbHandlers(ipcMain); registerCodexHandlers(ipcMain); worktree.registerWorktreeHandlers(ipcMain)
   registerGitHandlers(ipcMain); registerClaudeHooksHandlers(ipcMain); registerUpdateHandlers(ipcMain)
   registerGlassHandlers(ipcMain)
+  registerExtensionHandlers(ipcMain)
   ipcMain.handle('shell:glass', () => ({ supported: false, active: false, enabled: false }))
   ipcMain.handle('shell:window-mode', () => ({ wantSolid: false, liveSolid: false }))
 
@@ -71,6 +73,7 @@ app.whenReady().then(async () => {
   const js = (code) => win.webContents.executeJavaScript(code, true)
   await win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   await wait(1600)
+  await js(`window.__kaisola.getState().setPerfMode('glass')`)
   await js(`window.__kaisola.getState().setLayoutMode('studio')`)
   // the rail defaults CLOSED since the "quieter start" work — open it, then poll
   await js(`window.__kaisola.setState({ railOpen: true })`)

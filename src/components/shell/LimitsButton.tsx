@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { bridge, isDesktop, type ClaudeTokenSums, type ClaudeUsage, type CodexUsage } from '../../lib/bridge'
+import { useClickAway } from '../../lib/useClickAway'
 import { useKaisola } from '../../store/store'
 import { Icon } from '../Icon'
 
@@ -85,8 +86,8 @@ const extraAmount = (value: number | undefined, currency?: string): string => {
 
 interface ClaudeRow { id: string; label: string; email?: string; usage?: ClaudeUsage }
 
-export function LimitsButton() {
-  const [open, setOpen] = useState(false)
+function UsageSurface({ embedded = false }: { embedded?: boolean }) {
+  const [open, setOpen] = useState(embedded)
   const [pos, setPos] = useState<{ right: number; top: number }>({ right: 12, top: 44 })
   const [codexLoading, setCodexLoading] = useState(false)
   const [claudeLoading, setClaudeLoading] = useState(false)
@@ -94,8 +95,11 @@ export function LimitsButton() {
   const [claude, setClaude] = useState<ClaudeRow[]>([])
   const [updatedAt, setUpdatedAt] = useState(0)
   const btnRef = useRef<HTMLButtonElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
   const seqRef = useRef(0)
   const initialLoadRef = useRef(false)
+  const requestTerminal = useKaisola((s) => s.requestTerminal)
+  const close = useCallback(() => setOpen(false), [])
 
   const load = useCallback(async (force = false, exactOnly = false) => {
     if (!bridge.usage) return
@@ -145,7 +149,7 @@ export function LimitsButton() {
     if (!open) {
       const r = btnRef.current?.getBoundingClientRect()
       if (r) setPos({ right: Math.max(8, window.innerWidth - r.right), top: r.bottom + 6 })
-      void load()
+      if (!bridge.smoke) void load()
     }
     setOpen(!open)
   }
@@ -158,12 +162,7 @@ export function LimitsButton() {
     void load(false, true)
   }, [load])
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open])
+  useClickAway(open && !embedded, close, btnRef, panelRef)
 
   if (!isDesktop || !bridge.usage) return null
   const codexPeak = codex?.ok ? Math.max(codex.primary?.usedPercent ?? 0, codex.secondary?.usedPercent ?? 0) : null
@@ -182,9 +181,126 @@ export function LimitsButton() {
     claudePeak == null ? null : `Claude ${Math.round(claudePeak)}% peak`,
   ].filter(Boolean).join(' · ')
 
+  const signInCodex = () => {
+    requestTerminal('codex login', { name: 'Codex Login', restart: true })
+    useKaisola.getState().setSettingsOpen(false)
+    setOpen(false)
+  }
+
+  const content = (
+    <div
+      ref={panelRef}
+      className={embedded ? 'settings-usage' : 'limits-panel'}
+      style={embedded ? {
+        width: '100%', display: 'flex', flexDirection: 'column', gap: 16, fontSize: 'var(--fs-12)',
+      } : {
+        position: 'fixed', right: pos.right, top: pos.top, width: 350, maxHeight: 'min(620px, calc(100vh - 70px))', overflowY: 'auto', zIndex: 'var(--z-menu, 900)' as never,
+        background: 'var(--bg-3)', border: '1px solid var(--border)', borderRadius: 'var(--r-3, 10px)',
+        boxShadow: 'var(--shadow-3, 0 12px 40px rgba(0,0,0,.4))', padding: '12px 14px',
+        display: 'flex', flexDirection: 'column', gap: 13, fontSize: 'var(--fs-12)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <Icon name="Gauge" size={14} />
+        <span style={{ fontWeight: 600 }}>Usage</span>
+        <span className="faint">Updated {relativeTime(updatedAt)}</span>
+        <span className="grow" />
+        <button className="btn-icon btn-sm" onClick={() => void load(true)} title="Refresh usage (bypass cache)" disabled={codexLoading || claudeLoading}>
+          <Icon name="RefreshCw" size={12} />
+        </button>
+      </div>
+
+      <section style={{ display: 'flex', flexDirection: 'column', gap: 9 }} aria-label="Codex usage">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span style={{ fontWeight: 600 }}>Codex</span>
+          <span className="faint truncate">{codex?.ok ? [codex.email, codex.plan].filter(Boolean).join(' · ') : ''}</span>
+        </div>
+        {codex?.ok ? (
+          <>
+            <WindowBar label="Current session" usedPercent={codex.primary?.usedPercent} resetsAt={codex.primary?.resetsAt} color="var(--success)" />
+            <WindowBar label="Weekly" usedPercent={codex.secondary?.usedPercent} resetsAt={codex.secondary?.resetsAt} color="var(--accent)" />
+          </>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="faint grow">{codexLoading ? 'Reading Codex limits…' : codex?.message ?? 'Not available'}</span>
+            {codex?.authRequired && !codexLoading && (
+              <button className="btn btn-primary btn-sm" onClick={signInCodex}>Sign in again</button>
+            )}
+          </div>
+        )}
+      </section>
+
+      <div style={{ height: 1, background: 'var(--border)' }} />
+
+      <section style={{ display: 'flex', flexDirection: 'column', gap: 9 }} aria-label="Claude subscription usage">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span style={{ fontWeight: 600 }}>Claude</span>
+          <span className="faint">subscription limits</span>
+        </div>
+        {claude.length === 0 && <span className="faint">{claudeLoading ? 'Reading Claude limits…' : 'No accounts'}</span>}
+        {claude.map((row) => {
+          const usage = row.usage
+          const limits = usage?.limits
+          const activity = usage?.activity
+          const hasLimits = Boolean(limits?.fiveHour || limits?.sevenDay || limits?.modelScoped?.length)
+          const plan = usage?.subscriptionType ? usage.subscriptionType.charAt(0).toUpperCase() + usage.subscriptionType.slice(1) : ''
+          return (
+            <div key={row.id} style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, minWidth: 0 }}>
+                <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>{row.label}</span>
+                {plan && <span className="tag" style={{ textTransform: 'none' }}>{plan}</span>}
+                <span className="faint truncate" title={row.email}>{row.email}</span>
+              </div>
+              {hasLimits ? (
+                <>
+                  <WindowBar label="Current session" usedPercent={limits?.fiveHour?.usedPercent} resetsAt={limits?.fiveHour?.resetsAt} />
+                  <WindowBar label="Weekly" usedPercent={limits?.sevenDay?.usedPercent} resetsAt={limits?.sevenDay?.resetsAt} />
+                  {limits?.modelScoped?.map((model) => (
+                    <WindowBar key={`${model.label}:${model.resetsAt ?? ''}`} label={model.label} usedPercent={model.usedPercent} resetsAt={model.resetsAt} />
+                  ))}
+                  {limits?.extraUsage && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                      <span>Extra usage</span>
+                      <span className="faint">
+                        {limits.extraUsage.enabled
+                          ? `${extraAmount(limits.extraUsage.usedCredits, limits.extraUsage.currency)} / ${extraAmount(limits.extraUsage.monthlyLimit, limits.extraUsage.currency)}${limits.extraUsage.utilization == null ? '' : ` · ${Math.round(limits.extraUsage.utilization)}%`}`
+                          : 'Off'}
+                      </span>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <span className="faint">{claudeLoading && !usage ? 'Reading…' : usage?.message ?? 'No subscription limits reported yet'}</span>
+              )}
+              {usage && (
+                <span className="faint" style={{ fontSize: 'var(--fs-10, 10px)', lineHeight: 1.35 }}>
+                  {usage.sourceLabel ?? 'Claude'}{usage.experimental ? ' · experimental structured API' : ''}
+                  {usage.updatedAt ? ` · ${relativeTime(usage.updatedAt)}` : ''}{usage.stale ? ' · last known good' : ''}
+                  {usage.refreshError ? ` · refresh failed: ${usage.refreshError}` : ''}
+                </span>
+              )}
+              {activity && (
+                <details style={{ color: 'var(--text-3)', fontSize: 'var(--fs-10, 10px)' }}>
+                  <summary style={{ cursor: 'pointer' }}>Local activity diagnostic</summary>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 5 }}>
+                    <ClaudeActivity label="Last 5 hours" sums={activity.fiveHour} />
+                    <ClaudeActivity label="Last 7 days" sums={activity.week} />
+                    {activity.lastActivity ? <span>Last response {relativeTime(activity.lastActivity)}</span> : null}
+                    {activity.partial && <span>Recent {activity.scannedFiles ?? ''} files scanned; older activity was capped.</span>}
+                    <span>Transcript tokens are local diagnostics, not plan percentages.</span>
+                  </div>
+                </details>
+              )}
+            </div>
+          )
+        })}
+      </section>
+    </div>
+  )
+
   return (
     <>
-      <button
+      {!embedded && <button
         ref={btnRef}
         className="btn-icon"
         data-active={open}
@@ -195,113 +311,16 @@ export function LimitsButton() {
       >
         <Icon name="Gauge" size={15} />
         <span aria-hidden style={{ position: 'absolute', width: 6, height: 3, borderRadius: 3, right: 5, top: 5, background: indicator }} />
-      </button>
-      {open && createPortal(
-        <div className="tree-menu-overlay" onMouseDown={() => setOpen(false)}>
-          <div
-            className="limits-panel"
-            style={{
-              position: 'fixed', right: pos.right, top: pos.top, width: 350, maxHeight: 'min(620px, calc(100vh - 70px))', overflowY: 'auto', zIndex: 'var(--z-menu, 900)' as never,
-              background: 'var(--bg-3)', border: '1px solid var(--border)', borderRadius: 'var(--r-3, 10px)',
-              boxShadow: 'var(--shadow-3, 0 12px 40px rgba(0,0,0,.4))', padding: '12px 14px',
-              display: 'flex', flexDirection: 'column', gap: 13, fontSize: 'var(--fs-12)',
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-              <Icon name="Gauge" size={14} />
-              <span style={{ fontWeight: 600 }}>Usage</span>
-              <span className="faint">Updated {relativeTime(updatedAt)}</span>
-              <span className="grow" />
-              <button className="btn-icon btn-sm" onClick={() => void load(true)} title="Refresh usage (bypass cache)" disabled={codexLoading || claudeLoading}>
-                <Icon name="RefreshCw" size={12} />
-              </button>
-            </div>
-
-            <section style={{ display: 'flex', flexDirection: 'column', gap: 9 }} aria-label="Codex usage">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                <span style={{ fontWeight: 600 }}>Codex</span>
-                <span className="faint truncate">{codex?.ok ? [codex.email, codex.plan].filter(Boolean).join(' · ') : ''}</span>
-              </div>
-              {codex?.ok ? (
-                <>
-                  <WindowBar label="Current session" usedPercent={codex.primary?.usedPercent} resetsAt={codex.primary?.resetsAt} color="var(--success)" />
-                  <WindowBar label="Weekly" usedPercent={codex.secondary?.usedPercent} resetsAt={codex.secondary?.resetsAt} color="var(--accent)" />
-                </>
-              ) : (
-                <span className="faint">{codexLoading ? 'Reading Codex limits…' : codex?.message ?? 'Not available'}</span>
-              )}
-            </section>
-
-            <div style={{ height: 1, background: 'var(--border)' }} />
-
-            <section style={{ display: 'flex', flexDirection: 'column', gap: 9 }} aria-label="Claude subscription usage">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                <span style={{ fontWeight: 600 }}>Claude</span>
-                <span className="faint">subscription limits</span>
-              </div>
-              {claude.length === 0 && <span className="faint">{claudeLoading ? 'Reading Claude limits…' : 'No accounts'}</span>}
-              {claude.map((row) => {
-                const usage = row.usage
-                const limits = usage?.limits
-                const activity = usage?.activity
-                const hasLimits = Boolean(limits?.fiveHour || limits?.sevenDay || limits?.modelScoped?.length)
-                const plan = usage?.subscriptionType ? usage.subscriptionType.charAt(0).toUpperCase() + usage.subscriptionType.slice(1) : ''
-                return (
-                  <div key={row.id} style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, minWidth: 0 }}>
-                      <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>{row.label}</span>
-                      {plan && <span className="tag" style={{ textTransform: 'none' }}>{plan}</span>}
-                      <span className="faint truncate" title={row.email}>{row.email}</span>
-                    </div>
-                    {hasLimits ? (
-                      <>
-                        <WindowBar label="Current session" usedPercent={limits?.fiveHour?.usedPercent} resetsAt={limits?.fiveHour?.resetsAt} />
-                        <WindowBar label="Weekly" usedPercent={limits?.sevenDay?.usedPercent} resetsAt={limits?.sevenDay?.resetsAt} />
-                        {limits?.modelScoped?.map((model) => (
-                          <WindowBar key={`${model.label}:${model.resetsAt ?? ''}`} label={model.label} usedPercent={model.usedPercent} resetsAt={model.resetsAt} />
-                        ))}
-                        {limits?.extraUsage && (
-                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                            <span>Extra usage</span>
-                            <span className="faint">
-                              {limits.extraUsage.enabled
-                                ? `${extraAmount(limits.extraUsage.usedCredits, limits.extraUsage.currency)} / ${extraAmount(limits.extraUsage.monthlyLimit, limits.extraUsage.currency)}${limits.extraUsage.utilization == null ? '' : ` · ${Math.round(limits.extraUsage.utilization)}%`}`
-                                : 'Off'}
-                            </span>
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <span className="faint">{claudeLoading && !usage ? 'Reading…' : usage?.message ?? 'No subscription limits reported yet'}</span>
-                    )}
-                    {usage && (
-                      <span className="faint" style={{ fontSize: 'var(--fs-10, 10px)', lineHeight: 1.35 }}>
-                        {usage.sourceLabel ?? 'Claude'}{usage.experimental ? ' · experimental structured API' : ''}
-                        {usage.updatedAt ? ` · ${relativeTime(usage.updatedAt)}` : ''}{usage.stale ? ' · last known good' : ''}
-                        {usage.refreshError ? ` · refresh failed: ${usage.refreshError}` : ''}
-                      </span>
-                    )}
-                    {activity && (
-                      <details style={{ color: 'var(--text-3)', fontSize: 'var(--fs-10, 10px)' }}>
-                        <summary style={{ cursor: 'pointer' }}>Local activity diagnostic</summary>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 5 }}>
-                          <ClaudeActivity label="Last 5 hours" sums={activity.fiveHour} />
-                          <ClaudeActivity label="Last 7 days" sums={activity.week} />
-                          {activity.lastActivity ? <span>Last response {relativeTime(activity.lastActivity)}</span> : null}
-                          {activity.partial && <span>Recent {activity.scannedFiles ?? ''} files scanned; older activity was capped.</span>}
-                          <span>Transcript tokens are local diagnostics, not plan percentages.</span>
-                        </div>
-                      </details>
-                    )}
-                  </div>
-                )
-              })}
-            </section>
-          </div>
-        </div>,
-        document.body,
-      )}
+      </button>}
+      {embedded ? content : open && createPortal(content, document.body)}
     </>
   )
+}
+
+export function LimitsButton() {
+  return <UsageSurface />
+}
+
+export function UsageSettings() {
+  return <UsageSurface embedded />
 }

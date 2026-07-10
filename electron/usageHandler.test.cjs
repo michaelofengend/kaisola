@@ -11,6 +11,7 @@ const {
   codexUsage,
   codexSubscriptionUsage,
   codexRateLimitSnapshot,
+  normalizeCodexFailure,
   claudeUsage,
   claudeSessionUsage,
   claudeSubscriptionUsage,
@@ -71,6 +72,14 @@ test('Codex usage uses app-server windows and the Codex multi-bucket', async () 
 test('Codex snapshot falls back to the legacy response', () => {
   const legacy = { planType: 'plus', primary: { usedPercent: 7 } }
   assert.equal(codexRateLimitSnapshot({ rateLimits: legacy }), legacy)
+})
+
+test('Codex revoked OAuth diagnostics become a concise sign-in state', () => {
+  const result = normalizeCodexFailure('\u001b[2mERROR\u001b[0m failed to refresh models: 401 Unauthorized: auth error code: token_revoked')
+  assert.equal(result.ok, false)
+  assert.equal(result.authRequired, true)
+  assert.equal(result.message, 'Your Codex sign-in expired. Sign in again to refresh usage limits.')
+  assert.doesNotMatch(result.message, /backend-api|cf-ray|\u001b/)
 })
 
 test('Codex subscription reads share in-flight work and cache rapid panel opens', async () => {

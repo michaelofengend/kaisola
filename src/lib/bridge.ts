@@ -432,6 +432,8 @@ export interface CodexWindow {
 export interface CodexUsage {
   ok: boolean
   message?: string
+  /** The saved ChatGPT OAuth session expired/revoked; offer `codex login`. */
+  authRequired?: boolean
   email?: string
   plan?: string
   primary?: CodexWindow | null

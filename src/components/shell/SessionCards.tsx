@@ -1,4 +1,4 @@
-import { Suspense, lazy, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useKaisola, type TerminalMeta } from '../../store/store'
 import { sessionHue, terminalAgentKey } from '../../lib/sessionHue'
@@ -80,6 +80,12 @@ export function SessionCards() {
   const termRemounts = useKaisola((s) => s.termRemounts)
   const dockColWeights = useKaisola((s) => s.dockColWeights)
   const setDockColWeights = useKaisola((s) => s.setDockColWeights)
+  const [, bumpResidencyPreference] = useState(0)
+  useEffect(() => {
+    const refresh = () => bumpResidencyPreference((value) => value + 1)
+    window.addEventListener('kaisola:terminal-residency', refresh)
+    return () => window.removeEventListener('kaisola:terminal-residency', refresh)
+  }, [])
   // Keep only a tiny most-recently-used set of hidden xterms warm. Older ones
   // unmount, persist their viewport/scrollback to disk, and leave the pty alive.
   const hiddenCap = hiddenTerminalResidentCap(perfMode)

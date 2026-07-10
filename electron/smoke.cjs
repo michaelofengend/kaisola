@@ -469,6 +469,63 @@ app.whenReady().then(async () => {
   })()`)
   console.log('TERMINAL=' + JSON.stringify(term))
 
+  // 4a) appearance and shell reflow are visual mutations, not navigation:
+  //      terminal + ACP composers stay at the live prompt and keep drafts.
+  const viewportPersistence = await win.webContents.executeJavaScript(`(async () => {
+    try {
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    const st = window.__kaisola.getState()
+    const previous = { themeMode: st.themeMode, perfMode: st.perfMode, railOpen: st.railOpen, layoutMode: st.layoutMode }
+    st.setLayoutMode('studio')
+    st.setDock(true, 'terminal')
+    const terminal = st.terminals.find((row) => st.dockViews.includes(row.id)) || st.terminals[0]
+    await window.kaisola.terminal.write(terminal.id, "i=0; while [ $i -lt 180 ]; do echo viewport-$i; i=$((i+1)); done\\r")
+    await wait(700)
+    const termViewport = document.querySelector('[data-terminal-id="' + terminal.id + '"] .xterm-viewport')
+    if (termViewport) termViewport.scrollTop = termViewport.scrollHeight
+    const termDistance = () => termViewport ? Math.max(0, termViewport.scrollHeight - termViewport.scrollTop - termViewport.clientHeight) : 9999
+    st.setThemeMode(st.theme === 'light' ? 'dark' : 'light')
+    st.setPerfMode(st.perfMode === 'eco' ? 'glass' : 'eco')
+    st.toggleRail()
+    await wait(220)
+    const terminalBottomKept = termDistance() < 12
+
+    st.requestNewThread('mock')
+    const threadId = window.__kaisola.getState().activeThreadId
+    st.updateAssistantRuntime(threadId, () => ({
+      first: false,
+      turns: Array.from({ length: 70 }, (_, i) => ({ kind: i % 2 ? 'assistant' : 'user', text: 'Viewport line ' + i + ' '.repeat(20) + 'content '.repeat(18) })),
+    }))
+    st.setAssistantDraft(threadId, { text: 'draft survives visual changes' })
+    st.setDockView(threadId)
+    await wait(260)
+    let stream = document.querySelector('.assistant[data-thread-id="' + threadId + '"] .assistant-stream')
+    if (stream) stream.scrollTop = stream.scrollHeight
+    st.setThemeMode(st.theme === 'light' ? 'dark' : 'light')
+    st.setPerfMode(st.perfMode === 'eco' ? 'glass' : 'eco')
+    st.toggleRail()
+    await wait(180)
+    const assistantBottomAfterReflow = !!stream && stream.scrollHeight - stream.scrollTop - stream.clientHeight < 12
+    st.setLayoutMode('focus')
+    await wait(90)
+    st.setLayoutMode('studio')
+    await wait(220)
+    stream = document.querySelector('.assistant[data-thread-id="' + threadId + '"] .assistant-stream')
+    const assistantRemountDistance = stream ? stream.scrollHeight - stream.scrollTop - stream.clientHeight : null
+    const assistantBottomAfterRemount = !!stream && assistantRemountDistance < 12
+    const draftKept = window.__kaisola.getState().assistantDrafts[threadId]?.text === 'draft survives visual changes'
+    window.__kaisola.getState().closeAssistantThread(threadId)
+    st.setThemeMode(previous.themeMode)
+    st.setPerfMode(previous.perfMode)
+    if (window.__kaisola.getState().railOpen !== previous.railOpen) st.toggleRail()
+    st.setLayoutMode(previous.layoutMode)
+    return { terminalBottomKept, assistantBottomAfterReflow, assistantBottomAfterRemount, assistantRemountDistance, assistantStreamFound: !!stream, draftKept }
+    } catch (error) {
+      return { terminalBottomKept: false, assistantBottomAfterReflow: false, assistantBottomAfterRemount: false, draftKept: false, error: String(error && (error.stack || error.message) || error) }
+    }
+  })()`)
+  console.log('VIEWPORT_PERSISTENCE=' + JSON.stringify(viewportPersistence))
+
   // 4b) window hibernation tears down the renderer only: after the grace the
   //     broker owns the same live PTY + disk spool, visibility reattaches it,
   //     replays hidden output, and an existing boot command is never re-run.
@@ -1454,11 +1511,9 @@ a^2 + b^2 = c^2
     get().setStage('corpus') // canvas shown
     await new Promise((r) => setTimeout(r, 120))
     const shownBefore = !!document.querySelector('.canvas-wrap')
-    document.querySelector('.tabstrip-tools > button[title="More"]')?.click()
-    await new Promise((r) => setTimeout(r, 40))
-    const hasBtn = [...document.querySelectorAll('.shell-more-menu .tree-menu-item')].some((button) => /Hide files|Show files/.test(button.textContent || ''))
-    document.querySelector('.tree-menu-overlay')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-    get().toggleCanvas()
+    const filesButton = document.querySelector('.tabstrip-tools [aria-label="Hide files"]')
+    const hasBtn = !!filesButton
+    filesButton?.click()
     await new Promise((r) => setTimeout(r, 120))
     const hidden = !document.querySelector('.canvas-wrap') && get().canvasOpen === false
     const cardsStay = get().dockOpen && !!document.querySelector('.session-card[data-show="true"]')
@@ -1784,6 +1839,17 @@ a^2 + b^2 = c^2
     // Zed-style settings: a nav of categories, one pane at a time
     const navNames = [...document.querySelectorAll('.settings-nav-item')].map((e) => e.textContent || '')
     const hasAppearance = navNames.some((l) => /General/.test(l)) && /Theme/.test(document.querySelector('.settings-pane')?.textContent || '')
+    const usageNav = [...document.querySelectorAll('.settings-nav-item')].find((e) => /Usage/.test(e.textContent || ''))
+    usageNav?.click()
+    await new Promise((r) => setTimeout(r, 50))
+    const hasUsage = !!document.querySelector('.settings-usage') && /Codex/.test(document.querySelector('.settings-pane')?.textContent || '') && /Claude/.test(document.querySelector('.settings-pane')?.textContent || '')
+    const advancedNav = [...document.querySelectorAll('.settings-nav-item')].find((e) => /Advanced/.test(e.textContent || ''))
+    advancedNav?.click()
+    await new Promise((r) => setTimeout(r, 50))
+    const hasDiskResidency = /Hidden terminal renderers/.test(document.querySelector('.settings-pane')?.textContent || '') && /settings\.json/.test(document.querySelector('.settings-pane')?.textContent || '')
+    const generalNav = [...document.querySelectorAll('.settings-nav-item')].find((e) => /General/.test(e.textContent || ''))
+    generalNav?.click()
+    await new Promise((r) => setTimeout(r, 30))
     const hasSidebarControls = /Sidebar/.test(document.querySelector('.settings-panel-v2')?.textContent || '')
     const dropdown = document.querySelector('.settings-pane .drop-btn')
     dropdown?.click()
@@ -1793,7 +1859,16 @@ a^2 + b^2 = c^2
     await new Promise((r) => setTimeout(r, 50))
     const previewDismissed = !document.querySelector('.drop-menu')
     window.__kaisola.getState().setSettingsOpen(false)
-    return { hasAppearance, noSidebarControls: !hasSidebarControls, previewOpened, previewDismissed }
+    await new Promise((r) => setTimeout(r, 30))
+    const usageButton = document.querySelector('[aria-label="Open Claude and Codex usage"]')
+    const filesButton = document.querySelector('[aria-label="Hide files"],[aria-label="Show files"]')
+    usageButton?.click()
+    await new Promise((r) => setTimeout(r, 30))
+    const usagePreviewOpened = !!document.querySelector('.limits-panel')
+    document.querySelector('.canvas')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    await new Promise((r) => setTimeout(r, 30))
+    const usagePreviewDismissed = !document.querySelector('.limits-panel')
+    return { hasAppearance, hasUsage, hasDiskResidency, hasFilesButton: !!filesButton, noSidebarControls: !hasSidebarControls, previewOpened, previewDismissed, usagePreviewOpened, usagePreviewDismissed }
   })()`)
   console.log('SETTINGS=' + JSON.stringify(settings))
 
@@ -2203,10 +2278,11 @@ a^2 + b^2 = c^2
     if (nav) nav.click()
     await new Promise((r) => setTimeout(r, 80))
     const body = (document.querySelector('.settings-pane') || {}).textContent || ''
-    // Zed-style settings: 7 nav categories (Interface joined in v0.1.23),
+    // Zed-style settings: nine focused categories, exactly one active, no
+    // accordion folds left.
     // exactly one active, no folds left
     const tabsOk = document.querySelectorAll('.settings-fold').length === 0 &&
-      document.querySelectorAll('.settings-nav-item').length === 7 &&
+      document.querySelectorAll('.settings-nav-item').length === 9 &&
       document.querySelectorAll('.settings-nav-item[data-active="true"]').length === 1
     g().setSettingsOpen(false)
     g().setReasoningProvider('openai')
@@ -2946,6 +3022,7 @@ a^2 + b^2 = c^2
     !emptyOk || !demoOk ||
     !review.opened || !review.closed || !review.decided ||
     !term.run || !term.ptyOk || !term.cdWorks || !term.dock || !term.host || !term.lightComposerPalette ||
+    !viewportPersistence.terminalBottomKept || !viewportPersistence.assistantBottomAfterReflow || !viewportPersistence.assistantBottomAfterRemount || !viewportPersistence.draftKept ||
     !terminalContinuity.mounted || !terminalContinuity.rendererReleased || !terminalContinuity.reattached || !terminalContinuity.samePid || !terminalContinuity.spooled || !terminalContinuity.replayed || !terminalContinuity.bootOnce ||
     !terminalContinuity.receiptPersisted || !terminalContinuity.tabReceipt || !terminalContinuity.receiptShown || !terminalContinuity.receiptCleared ||
     !model.shape || !model.graceful ||
@@ -2993,7 +3070,7 @@ a^2 + b^2 = c^2
     !toggle.hasFig || !toggle.visibleAtRest || !toggle.putAway || !toggle.back || !toggle.hidesAll ||
     !autoname.named || !autoname.rowShows || !autoname.sticky || !autoname.manualWins || !autoname.termNamed ||
     !minimalUi.noSidebar || !minimalUi.noSidebarResize || !minimalUi.noStageNav || !minimalUi.hasRail || !minimalUi.hasPlus || !minimalUi.hasFiles ||
-    !settings.hasAppearance || !settings.noSidebarControls || !settings.previewOpened || !settings.previewDismissed ||
+    !settings.hasAppearance || !settings.hasUsage || !settings.hasDiskResidency || !settings.hasFilesButton || !settings.noSidebarControls || !settings.previewOpened || !settings.previewDismissed || !settings.usagePreviewOpened || !settings.usagePreviewDismissed ||
     !extensionsUi.opened || extensionsUi.cards < 8 || !extensionsUi.hasFilters || !extensionsUi.csvInstalled || !extensionsUi.jsonInstalled ||
     !extensionsUi.persisted || !extensionsUi.defaultUninstallPersisted || !extensionsUi.csvPreview || !extensionsUi.jsonPreview || !extensionsUi.boundedJsonPreview || !extensionsUi.closed ||
     !dropfit.hasBtn || !dropfit.fits ||

@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useKaisola } from '../../store/store'
 import { bridge, type LedgerTask } from '../../lib/bridge'
 import { Icon } from '../Icon'
+import { useClickAway } from '../../lib/useClickAway'
 
 /**
  * The cross-project inbox: one bell in the tab strip rolling up everything
@@ -31,6 +32,10 @@ export function InboxButton() {
   const activeProjectId = useKaisola((s) => s.activeProjectId)
   const [open, setOpen] = useState(false)
   const [ledgerRows, setLedgerRows] = useState<LedgerTask[]>([])
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const close = useCallback(() => setOpen(false), [])
+  useClickAway(open, close, buttonRef, panelRef)
 
   const rows: Row[] = []
   if (enabled) {
@@ -98,6 +103,7 @@ export function InboxButton() {
   return (
     <div className="inbox-wrap">
       <button
+        ref={buttonRef}
         className="inbox-btn"
         onClick={() => setOpen((o) => !o)}
         title="Everything that needs you, across every project tab"
@@ -107,9 +113,7 @@ export function InboxButton() {
         <span className="inbox-count">{count}</span>
       </button>
       {open && (
-        <>
-          <div className="inbox-overlay" onMouseDown={() => setOpen(false)} />
-          <div className="inbox-menu">
+          <div ref={panelRef} className="inbox-menu">
             {rows.length === 0 && ledgerRows.length === 0 && <div className="inbox-empty">Nothing needs you.</div>}
             {rows.map((row) => (
               <button key={row.key} className="inbox-row" onClick={() => jump(row)}>
@@ -126,7 +130,6 @@ export function InboxButton() {
               </button>
             ))}
           </div>
-        </>
       )}
     </div>
   )

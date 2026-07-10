@@ -84,6 +84,22 @@ const xtermTheme = (theme: 'dark' | 'light', eco: boolean, cursorColor = 'auto',
   return { ...t, background: (eco ? surface.eco : surface.glass)[theme] }
 }
 
+/** xterm may reflow its buffer when its palette, font, or fitted geometry
+ * changes. Preserve the user's distance from the live prompt through both the
+ * synchronous update and the next paint instead of snapping to row zero. */
+const preserveTerminalViewport = (term: XTerm, mutate: () => void) => {
+  const fromBottom = Math.max(0, term.buffer.active.baseY - term.buffer.active.viewportY)
+  const restore = () => {
+    try {
+      if (fromBottom <= 1) term.scrollToBottom()
+      else term.scrollToLine(Math.max(0, term.buffer.active.baseY - fromBottom))
+    } catch { /* renderer mid-rebuild */ }
+  }
+  mutate()
+  restore()
+  requestAnimationFrame(restore)
+}
+
 /** Output kept for a HIDDEN terminal until its card is shown again. Sized to
  * comfortably refill the 5000-line scrollback (~100 chars/line) — a bigger
  * buffer only makes re-showing the card parse megabytes it will immediately
@@ -289,8 +305,10 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
     const term = termRef.current
     if (!term) return
     try {
-      term.options.allowTransparency = false // opaque in both modes — no transparent-WebGL per-frame compose
-      term.options.theme = xtermTheme(theme, ecoMode, termCursorColor, termBackground)
+      preserveTerminalViewport(term, () => {
+        term.options.allowTransparency = false // opaque in both modes — no transparent-WebGL per-frame compose
+        term.options.theme = xtermTheme(theme, ecoMode, termCursorColor, termBackground)
+      })
     } catch { /* renderer mid-rebuild */ }
   }, [theme, ecoMode, termCursorColor, termBackground])
 
@@ -326,12 +344,14 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
   useEffect(() => {
     const term = termRef.current
     if (!term) return
-    term.options.fontSize = termFontSize
-    term.options.fontFamily = fontStack(termFontFamily)
-    term.options.fontWeight = termFontWeight as 400 | 500 | 700
     try {
-      fitRef.current?.fit()
-      bridge.terminal.resize(id, term.cols, term.rows)
+      preserveTerminalViewport(term, () => {
+        term.options.fontSize = termFontSize
+        term.options.fontFamily = fontStack(termFontFamily)
+        term.options.fontWeight = termFontWeight as 400 | 500 | 700
+        fitRef.current?.fit()
+        bridge.terminal.resize(id, term.cols, term.rows)
+      })
     } catch { /* transient */ }
   }, [termFontSize, termFontFamily, termFontWeight, id])
 
@@ -757,8 +777,11 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
       }
       const restoreView = () => {
         const fromBottom = Number(snap.viewState?.scrollFromBottom)
-        if (Number.isFinite(fromBottom) && fromBottom > 0) {
-          try { term.scrollToLine(Math.max(0, term.buffer.active.baseY - fromBottom)) } catch { /* stale geometry */ }
+        if (Number.isFinite(fromBottom)) {
+          try {
+            if (fromBottom <= 1) term.scrollToBottom()
+            else term.scrollToLine(Math.max(0, term.buffer.active.baseY - fromBottom))
+          } catch { /* stale geometry */ }
         }
       }
       if (snap.output) term.write(snap.output, restoreView)
@@ -818,8 +841,10 @@ export function Terminal({ id, attach = false, boot, cwd }: { id: string; attach
 
     const doFit = () => {
       try {
-        fit.fit()
-        bridge.terminal.resize(id, term.cols, term.rows)
+        preserveTerminalViewport(term, () => {
+          fit.fit()
+          bridge.terminal.resize(id, term.cols, term.rows)
+        })
       } catch {
         /* ignore */
       }
