@@ -301,13 +301,13 @@ function startMcpServer() {
 function writeClaudeConfig() {
   if (!port) return
   try {
-    fs.writeFileSync(configPath(), JSON.stringify({
+    catalog.writePrivateJson(configPath(), {
       mcpServers: {
         ...catalog.claudeUserEntries(),
         // last so a user entry can never shadow the built-in server
         kaisola: { type: 'http', url: `http://127.0.0.1:${port}/`, headers: { Authorization: `Bearer ${token}` } },
       },
-    }, null, 2))
+    })
   } catch { /* claude just boots without the kaisola tools */ }
 }
 catalog.onChange(writeClaudeConfig)
@@ -351,6 +351,11 @@ function registerMcpHandlers(ipcMain) {
 function disposeMcp() {
   try { server?.close() } catch { /* going down anyway */ }
   server = null
+  port = 0
+  token = ''
+  // This file carries a per-launch bearer token. It is recreated atomically on
+  // the next start and should not outlive the server it authenticates.
+  try { fs.unlinkSync(configPath()) } catch { /* missing / already removed */ }
 }
 
 module.exports = { registerMcpHandlers, disposeMcp, mcpHttpEntry }

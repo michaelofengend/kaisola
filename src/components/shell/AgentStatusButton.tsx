@@ -199,10 +199,11 @@ export function AgentStatusButton() {
   const rowState = (r: McpServerRow): { tone: string; state: string; title?: string } => {
     if (r.scope === 'project' && !r.approved) return { tone: DOT.warn, state: 'needs approval', title: 'This server came with the repo — approve it once to arm it' }
     if (!r.enabled) return { tone: DOT.off, state: 'off' }
-    if (r.kind === 'stdio') return { tone: DOT.on, state: 'with session', title: 'stdio servers start inside each agent session' }
+    if (r.kind === 'stdio') return { tone: DOT.warn, state: 'configured', title: 'Starts inside a new agent session; Kaisola does not auto-run stdio status checks' }
     const p = probes[r.name]
     if (!p) return { tone: DOT.off, state: 'checking…' }
     if (!p.ok) return { tone: DOT.err, state: 'unreachable', title: p.message }
+    if (p.verified === false || p.status === 'configured') return { tone: DOT.warn, state: 'configured', title: p.message }
     return { tone: DOT.on, state: p.toolCount != null ? `${p.toolCount} tools` : 'reachable', title: p.serverName }
   }
   const setEnabled = async (r: McpServerRow, enabled: boolean) => {

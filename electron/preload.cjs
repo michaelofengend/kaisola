@@ -188,6 +188,11 @@ const bridge = {
     inspectDev: (sourcePath) => ipcRenderer.invoke('extensions:dev-inspect', { sourcePath }),
     registerDev: (sourcePath) => ipcRenderer.invoke('extensions:dev-register', { sourcePath }),
     removeDev: (id) => ipcRenderer.invoke('extensions:dev-remove', { id }),
+    onChanged: (cb) => {
+      const listener = (_event, payload) => cb(payload)
+      ipcRenderer.on('extensions:changed', listener)
+      return () => ipcRenderer.removeListener('extensions:changed', listener)
+    },
   },
 
   // ── git checkpoints + status (tree tinting, diff review) + commit panel ──

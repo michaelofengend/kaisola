@@ -17,6 +17,9 @@ and are not accepted by this loader.
 
 The desktop main process reads and validates the manifest again. Installed
 state lives in the app data directory; renderer storage is only a startup cache.
+Development manifests are watched while Kaisola is running: a valid saved edit
+hot-reloads its language and preview contributions, while an invalid edit keeps
+the last-known-good version active and surfaces a warning in Extensions.
 
 ## Manifest v1
 
@@ -91,8 +94,15 @@ environment-variable names. Every install shows the exact definition before it
 is written. Project `.mcp.json` entries keep their separate hash-based approval
 gate. Registry or publisher identity is metadata, not a safety guarantee.
 
+Remote HTTP servers are handshaken and their tool count is cached briefly.
+Stdio and legacy SSE entries remain labeled **configured** until a new agent
+session actually starts them; Kaisola does not execute an extension command
+merely because the status panel opened.
+
 Do not put literal secrets in a development manifest. Secret-backed MCP inputs
 need the planned keychain reference API before they can be distributed safely.
+`${NAME}` references remain placeholders in the private, atomic Claude handoff
+file and expand only at the consumer boundary.
 
 ## Current boundary and roadmap
 
@@ -102,3 +112,8 @@ digests, atomic staging, rollback, and crash isolation. Language servers belong
 in a supervised main-process LSP host; interactive previews belong in a
 sandboxed guest with a restrictive CSP. Neither should execute inside the main
 React document.
+
+The shipped catalog is data in `src/data/extensions.catalog.json` behind an
+`ExtensionCatalogSource` seam. Local development folders are a second source;
+signed remote or private-team registry caches can be added without changing the
+editor and preview lookup APIs.

@@ -2061,6 +2061,53 @@ a^2 + b^2 = c^2
   })()`)
   console.log('EXTENSIONS=' + JSON.stringify(extensionsUi))
 
+  const devExtensionRoot = path.join(os.tmpdir(), 'kaisola-dev-extension-smoke')
+  fsx.rmSync(devExtensionRoot, { recursive: true, force: true })
+  fsx.mkdirSync(devExtensionRoot, { recursive: true })
+  const devManifestPath = path.join(devExtensionRoot, 'kaisola-extension.json')
+  const devManifest = (version, name) => ({
+    id: 'smoke.hot-reload', name, version, description: 'Smoke-only extension', author: 'Kaisola smoke',
+    contributions: { languages: [{ id: 'probe', name: 'Probe', extensions: ['probe'], grammar: { lineComments: ['#'] } }] },
+  })
+  fsx.writeFileSync(devManifestPath, JSON.stringify(devManifest('1.0.0', 'Hot Reload Extension')))
+  const devRegistered = await win.webContents.executeJavaScript(`window.kaisola.extensions.registerDev(${JSON.stringify(devExtensionRoot)})`)
+  const devManifestTemp = `${devManifestPath}.tmp`
+  fsx.writeFileSync(devManifestTemp, JSON.stringify(devManifest('1.1.0', 'Hot Reloaded Extension')))
+  fsx.renameSync(devManifestTemp, devManifestPath)
+  await new Promise((r) => setTimeout(r, 420))
+  const devExtensionHotReload = await win.webContents.executeJavaScript(`(async () => {
+    const state = await window.kaisola.extensions.state()
+    window.dispatchEvent(new CustomEvent('kaisola:extensions-open'))
+    await new Promise((r) => setTimeout(r, 160))
+    const visible = [...document.querySelectorAll('.ext-card h2')].some((node) => node.textContent === 'Hot Reloaded Extension')
+    window.dispatchEvent(new CustomEvent('kaisola:extensions-open:close'))
+    const current = state.development?.find((item) => item.id === 'smoke.hot-reload')
+    await window.kaisola.extensions.removeDev('smoke.hot-reload')
+    return { registered: !!${JSON.stringify(!!devRegistered?.ok)}, updated: current?.version === '1.1.0', visible }
+  })()`)
+  fsx.rmSync(devExtensionRoot, { recursive: true, force: true })
+  console.log('DEV_EXTENSION_HOT_RELOAD=' + JSON.stringify(devExtensionHotReload))
+
+  // 15c) MCP handoff files are private/atomic and retain ${VAR} references.
+  //      A stdio entry avoids network activity while exercising the same
+  //      generated Claude config path used by real catalog servers.
+  process.env.KAISOLA_SMOKE_MCP_TOKEN = 'must-never-land-on-disk'
+  const mcpConfigSecurity = await win.webContents.executeJavaScript(`(async () => {
+    const added = await window.kaisola.mcp.serverAdd('smoke-private', {
+      command: 'node', args: ['server.js'], env: { API_TOKEN: '\${KAISOLA_SMOKE_MCP_TOKEN}' },
+    })
+    await new Promise((r) => setTimeout(r, 80))
+    const info = await window.kaisola.mcp.info()
+    return { added: !!added?.ok, running: !!info?.ok, tools: info?.toolCount }
+  })()`)
+  const generatedMcpPath = path.join(SMOKE_USERDATA, 'kaisola-mcp.json')
+  const generatedMcp = fsx.existsSync(generatedMcpPath) ? fsx.readFileSync(generatedMcpPath, 'utf8') : ''
+  mcpConfigSecurity.private = !!generatedMcp && (fsx.statSync(generatedMcpPath).mode & 0o777) === 0o600
+  mcpConfigSecurity.placeholder = generatedMcp.includes('${KAISOLA_SMOKE_MCP_TOKEN}')
+  mcpConfigSecurity.notExpanded = !generatedMcp.includes(process.env.KAISOLA_SMOKE_MCP_TOKEN)
+  await win.webContents.executeJavaScript(`window.kaisola.mcp.serverRemove('smoke-private')`)
+  console.log('MCP_CONFIG_SECURITY=' + JSON.stringify(mcpConfigSecurity))
+
   // 16) a dropdown opened from the right-docked pane's foot stays on-screen
   const dropfit = await win.webContents.executeJavaScript(`(async () => {
     const st = window.__kaisola.getState()
@@ -3213,6 +3260,8 @@ a^2 + b^2 = c^2
     !settings.hasAppearance || !settings.hasUsage || !settings.hasDiskResidency || !settings.hasTabLayout || !settings.hasFilesButton || !settings.noSidebarControls || !settings.previewOpened || !settings.previewDismissed || !settings.usagePreviewOpened || !settings.usagePreviewDismissed ||
     !extensionsUi.opened || extensionsUi.cards < 8 || !extensionsUi.hasFilters || !extensionsUi.csvInstalled || !extensionsUi.jsonInstalled ||
     !extensionsUi.persisted || !extensionsUi.defaultUninstallPersisted || !extensionsUi.csvPreview || !extensionsUi.jsonPreview || !extensionsUi.boundedJsonPreview || !extensionsUi.closed ||
+    !devExtensionHotReload.registered || !devExtensionHotReload.updated || !devExtensionHotReload.visible ||
+    !mcpConfigSecurity.added || !mcpConfigSecurity.running || mcpConfigSecurity.tools < 1 || !mcpConfigSecurity.private || !mcpConfigSecurity.placeholder || !mcpConfigSecurity.notExpanded ||
     !dropfit.hasBtn || !dropfit.fits ||
     agentrun.added < 1 || agentrun.agentId !== 'hypothesis' || !agentrun.hasChanges || agentrun.status !== 'pending' ||
     approve.hypAdded < 1 || approve.createStatus !== 'approved' || !approve.patched ||

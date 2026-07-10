@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { bridge } from './bridge'
+import bundledCatalogData from '../data/extensions.catalog.json'
 
 export type ExtensionCategory =
   | 'Languages'
@@ -84,180 +85,28 @@ const CHANGE_EVENT = 'kaisola:extensions-changed'
 const MAX_DEV_EXTENSIONS = 64
 const MAX_CONTRIBUTIONS = 32
 
-const javaKeywords = `abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for goto if implements import instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws transient try void volatile while record sealed permits non-sealed var yield`.split(' ')
-const rustKeywords = `as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while`.split(' ')
-const tomlAtoms = ['true', 'false', 'inf', 'nan']
-
 /**
  * The shipped catalog is deliberately declarative. Installing one of these
  * entries enables code that is already bundled and reviewed with Kaisola, or
  * adds an MCP server through the existing consent-gated user catalog. Remote
  * marketplace JavaScript is never evaluated in the renderer.
  */
-export const BUILTIN_EXTENSIONS: ExtensionManifest[] = [
-  {
-    id: 'kaisola.html',
-    name: 'HTML',
-    version: '1.0.0',
-    description: 'HTML syntax, editing, and a sanitized document preview.',
-    author: 'Kaisola Contributors',
-    categories: ['Languages', 'Grammars', 'Previews'],
-    bundled: true,
-    defaultInstalled: true,
-  },
-  {
-    id: 'kaisola.markdown',
-    name: 'Markdown',
-    version: '1.0.0',
-    description: 'GitHub-flavored Markdown with tables, images, and rendered preview.',
-    author: 'Kaisola Contributors',
-    categories: ['Languages', 'Grammars', 'Previews'],
-    bundled: true,
-    defaultInstalled: true,
-  },
-  {
-    id: 'kaisola.javascript-typescript',
-    name: 'JavaScript & TypeScript',
-    version: '1.0.0',
-    description: 'JavaScript, JSX, TypeScript, and TSX language support.',
-    author: 'Kaisola Contributors',
-    categories: ['Languages', 'Grammars'],
-    bundled: true,
-    defaultInstalled: true,
-  },
-  {
-    id: 'kaisola.json-yaml',
-    name: 'JSON & YAML',
-    version: '1.0.0',
-    description: 'Structured-data editing for JSON, JSONL, YAML, and YML.',
-    author: 'Kaisola Contributors',
-    categories: ['Languages', 'Grammars'],
-    bundled: true,
-    defaultInstalled: true,
-  },
-  {
-    id: 'kaisola.python',
-    name: 'Python',
-    version: '1.0.0',
-    description: 'Python syntax, indentation, and grammar support.',
-    author: 'Kaisola Contributors',
-    categories: ['Languages', 'Grammars'],
-    bundled: true,
-    defaultInstalled: true,
-  },
-  {
-    id: 'kaisola.media-preview',
-    name: 'PDF & Image Preview',
-    version: '1.0.0',
-    description: 'Fast, zoomable previews for PDF, SVG, PNG, JPEG, GIF, WebP, and AVIF.',
-    author: 'Kaisola Contributors',
-    categories: ['Previews'],
-    bundled: true,
-    defaultInstalled: true,
-  },
-  {
-    id: 'kaisola.toml',
-    name: 'TOML',
-    version: '1.1.0',
-    description: 'TOML language and grammar support.',
-    author: 'Kaisola Contributors',
-    categories: ['Languages', 'Grammars'],
-    bundled: true,
-    contributions: {
-      languages: [{
-        id: 'toml', name: 'TOML', extensions: ['toml'],
-        grammar: { type: 'simple', atoms: tomlAtoms, lineComments: ['#'] },
-      }],
-    },
-  },
-  {
-    id: 'kaisola.java',
-    name: 'Java',
-    version: '1.0.0',
-    description: 'Java syntax support with folding-friendly tokenization.',
-    author: 'Kaisola Contributors',
-    categories: ['Languages', 'Grammars'],
-    bundled: true,
-    contributions: {
-      languages: [{
-        id: 'java', name: 'Java', extensions: ['java'],
-        grammar: {
-          type: 'simple', keywords: javaKeywords, atoms: ['true', 'false', 'null'],
-          lineComments: ['//'], blockComments: [['/*', '*/']],
-        },
-      }],
-    },
-  },
-  {
-    id: 'kaisola.rust',
-    name: 'Rust',
-    version: '1.0.0',
-    description: 'Rust source syntax support.',
-    author: 'Kaisola Contributors',
-    categories: ['Languages', 'Grammars'],
-    bundled: true,
-    contributions: {
-      languages: [{
-        id: 'rust', name: 'Rust', extensions: ['rs'],
-        grammar: {
-          type: 'simple', keywords: rustKeywords, atoms: ['true', 'false', 'None', 'Some', 'Ok', 'Err'],
-          lineComments: ['//'], blockComments: [['/*', '*/']],
-        },
-      }],
-    },
-  },
-  {
-    id: 'kaisola.csv-preview',
-    name: 'CSV Table Preview',
-    version: '1.0.0',
-    description: 'Turn CSV and TSV files into a scrollable, searchable data table.',
-    author: 'Kaisola Contributors',
-    categories: ['Previews'],
-    bundled: true,
-    contributions: {
-      previews: [
-        { id: 'csv-table', name: 'CSV Table', extensions: ['csv'], renderer: 'csv' },
-        { id: 'tsv-table', name: 'TSV Table', extensions: ['tsv'], renderer: 'csv' },
-      ],
-    },
-  },
-  {
-    id: 'kaisola.json-preview',
-    name: 'JSON Tree Preview',
-    version: '1.0.0',
-    description: 'Inspect JSON and JSONL as a collapsible, readable tree.',
-    author: 'Kaisola Contributors',
-    categories: ['Previews'],
-    bundled: true,
-    contributions: {
-      previews: [{ id: 'json-tree', name: 'JSON Tree', extensions: ['json', 'jsonl'], renderer: 'json' }],
-    },
-  },
-  {
-    id: 'mcp.context7',
-    name: 'Context7 MCP Server',
-    version: '3.2.0',
-    description: 'Up-to-date documentation context for coding agents.',
-    author: 'Upstash',
-    categories: ['MCP Servers'],
-    repository: 'https://github.com/upstash/context7',
-    bundled: true,
-    // The maintained project recommends its Streamable HTTP endpoint. This
-    // avoids a floating npm package and does not execute package scripts.
-    contributions: { mcpServers: [{ name: 'context7', config: { url: 'https://mcp.context7.com/mcp' } }] },
-  },
-  {
-    id: 'mcp.sequential-thinking',
-    name: 'Sequential Thinking MCP Server',
-    version: '2025.12.18',
-    description: 'A structured thinking tool for dynamic, revisable problem solving.',
-    author: 'Model Context Protocol Contributors',
-    categories: ['MCP Servers'],
-    bundled: true,
-    repository: 'https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking',
-    contributions: { mcpServers: [{ name: 'sequential-thinking', config: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-sequential-thinking@2025.12.18'] } }] },
-  },
-]
+export interface ExtensionCatalogSource {
+  id: string
+  kind: 'bundled' | 'development'
+  entries(): readonly ExtensionManifest[]
+}
+
+/** Bundled entries are data, not renderer behavior. New sources (a signed
+ * registry cache or a private team catalog) can implement the same seam. */
+export const BUILTIN_EXTENSIONS = bundledCatalogData as unknown as ExtensionManifest[]
+
+export function extensionCatalogSources(): ExtensionCatalogSource[] {
+  return [
+    { id: 'kaisola-bundled', kind: 'bundled', entries: () => BUILTIN_EXTENSIONS },
+    { id: 'local-development', kind: 'development', entries: () => state.development },
+  ]
+}
 
 const defaultInstalled = () => Object.fromEntries(
   BUILTIN_EXTENSIONS.filter((extension) => extension.defaultInstalled).map((extension) => [extension.id, {
@@ -322,8 +171,9 @@ export function useExtensionRevision() {
 
 export function extensionCatalog() {
   const byId = new Map<string, ExtensionManifest>()
-  for (const extension of BUILTIN_EXTENSIONS) byId.set(extension.id, extension)
-  for (const extension of state.development) byId.set(extension.id, extension)
+  for (const source of extensionCatalogSources()) {
+    for (const extension of source.entries()) byId.set(extension.id, extension)
+  }
   return [...byId.values()]
 }
 
@@ -377,11 +227,11 @@ export function removeDevelopmentExtension(id: string) {
 }
 
 /** Reconcile the fast renderer cache with main's authoritative desktop state. */
-export async function hydrateExtensions() {
-  if (!bridge.extensions) return
+export async function hydrateExtensions(): Promise<string[]> {
+  if (!bridge.extensions) return []
   try {
     const remote = await bridge.extensions.state()
-    if (!remote.ok) return
+    if (!remote.ok) return [remote.message ?? remote.error ?? 'Could not load extension state.']
     if (!remote.exists) {
       // One-time migration for builds that previously kept this cache only in
       // the renderer. Main validates future development installs itself.
@@ -389,21 +239,26 @@ export async function hydrateExtensions() {
       for (const extension of state.development) {
         if (extension.sourcePath) await bridge.extensions.registerDev(extension.sourcePath).catch(() => {})
       }
-      return
+      return []
     }
-    const development: ExtensionManifest[] = []
-    for (const value of remote.development ?? []) {
-      const sourcePath = value && typeof value === 'object' && 'sourcePath' in value && typeof value.sourcePath === 'string' ? value.sourcePath : undefined
-      const parsed = parseExtensionManifest(value, sourcePath)
-      if (parsed.ok) development.push(parsed.manifest)
-    }
+    // Desktop manifests were already re-read and sanitized by main. Do not run
+    // them through a second, drifting renderer validator; retain only the tiny
+    // structural guard needed at the IPC type boundary.
+    const development = (remote.development ?? []).filter((value): value is ExtensionManifest =>
+      !!value && typeof value === 'object' && 'id' in value && typeof value.id === 'string' &&
+      'version' in value && typeof value.version === 'string' && 'contributions' in value,
+    )
     state = {
       installed: { ...defaultInstalled(), ...(remote.installed ?? {}) },
       development: development.slice(0, MAX_DEV_EXTENSIONS),
       revision: state.revision,
     }
     emit()
-  } catch { /* local cache remains usable when main is unavailable */ }
+    return (remote.warnings ?? []).map((warning) => `${warning.id ?? 'Development extension'}: ${warning.message}`)
+  } catch {
+    // Local cache remains usable when main is unavailable.
+    return ['Desktop extension state is temporarily unavailable; using the local cache.']
+  }
 }
 
 function cleanExtensions(value: unknown) {

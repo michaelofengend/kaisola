@@ -75,32 +75,31 @@ The Extensions service should report its own updates and only share presentation
 
 ## Existing issues to fix before calling the MCP catalog production-ready
 
-1. **The remote health probe is not a protocol-correct MCP client.**
-   `mcpCatalog.cjs:225-263` accepts only `application/json`, sends `initialize`
-   and then `tools/list`, does not send `notifications/initialized`, does not
-   preserve `Mcp-Session-Id`, does not parse SSE event streams, and treats legacy
-   SSE like Streamable HTTP. Valid stateful Streamable HTTP and SSE servers can
-   therefore show as unreachable. Replace this with the official MCP SDK client
-   and transports; do not grow the hand-rolled POST helper.
-2. **Secrets can land in plaintext.** Imported configs and deep-link configs are
-   copied verbatim. Avoiding `${VAR}` expansion prevents one leak, but a literal
-   token in `env` or `headers` still gets written to `mcp-servers.json`. Store
-   secret values in the OS keychain and persist only `secretRef`/input markers.
-3. **Install/update identity is too weak.** `addUserServer` overwrites a same-name
-   entry, keeps any old `disabled` bit, and has no origin, version, digest, or
-   publisher metadata (`:419-429`). A successful modal can consequently claim a
-   server is usable while an earlier disabled bit keeps it off. Same-name
-   project entries are silently hidden when user scope wins (`:146-152`).
+Update, 2026-07-10: the Streamable HTTP probe now sends initialized, preserves
+session IDs, accepts SSE response bodies, and caches probes. Catalog and Claude
+handoff writes are atomic/private; the latter preserves `${NAME}` references
+rather than persisting expanded secrets. Stdio and legacy SSE are now presented
+as configured rather than falsely healthy. Remaining lifecycle, keychain,
+registry, OAuth, update, and rollback work below is still relevant.
+
+1. **Use the official SDK before broad transport support.** The current bounded
+   Streamable HTTP probe handles initialized/session IDs/JSON-or-SSE replies and
+   works against the installed remote, but an official transport should replace
+   it before claiming full redirect, resumability, and legacy SSE coverage.
+2. **Secret references still need a keychain API.** Literal-looking credentials
+   are rejected and `${NAME}` stays a placeholder in private files, but a proper
+   `secretRef`/input model is still needed for OAuth and distributable servers.
+3. **Update identity needs richer metadata.** Extension ownership now protects
+   same-name user servers and user edits, but origin, publisher, version, digest,
+   pin, update, and rollback metadata are not yet modeled.
 4. **No CRUD/lifecycle.** There is add/toggle but no remove, edit, pin, update,
    rollback, OAuth login/logout, or reload of already-running agent sessions.
-5. **Health is optimistic for stdio.** A configured stdio server is painted
-   green as "with session" without spawning or handshaking it. Status should be
-   `configured`, `starting`, `ready`, `auth-needed`, `failed`, or `stopped`, and
-   should be tied to a particular agent session or shared broker.
-6. **Configuration bounds and canonicalization need hardening.** The 24-entry
-   cap is arbitrary; install URLs have no decoded-size cap; spec hashes should
-   sort map keys; workspace approvals should use a canonical/real path; command,
-   URL scheme, header names, env names, and redirect behavior need validation.
+5. **Session-level lifecycle is incomplete.** Stdio and legacy SSE now remain
+   neutral “configured” instead of green, but `starting`, `ready`, `auth-needed`,
+   `failed`, and `stopped` should eventually come from the owning agent/broker.
+6. **Some policy bounds remain product choices.** Specs, decoded install URLs,
+   names, maps, and real workspace paths are bounded/canonicalized; the 24-entry
+   cap and redirect policy still need explicit product decisions.
 7. **The registry is metadata, not a safety verdict.** The official MCP Registry
    authenticates namespaces but explicitly delegates code scanning to package
    registries/downstream aggregators. “Verified publisher” must never render as

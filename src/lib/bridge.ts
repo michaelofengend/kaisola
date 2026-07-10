@@ -408,6 +408,10 @@ export interface McpProbeResult {
   version?: string
   toolCount?: number
   message?: string
+  status?: 'configured' | 'ready' | 'failed'
+  /** False means configured but not handshaken in a live agent session. */
+  verified?: boolean
+  cached?: boolean
 }
 
 /** A row in the shared agent-task ledger (coordination state, never research state). */
@@ -612,7 +616,7 @@ export interface KaisolaBridge {
      * user catalog. Armed servers ride every ACP session and the claude boot. */
     servers?(workspace: string | null): Promise<{ ok: boolean; servers: McpServerRow[]; userError?: string | null; projectError?: string | null; userConfigPath?: string; message?: string }>
     serverSet?(args: { workspace: string | null; scope: 'user' | 'project'; name: string; enabled: boolean }): Promise<{ ok: boolean; message?: string }>
-    serverProbe?(args: { workspace: string | null; name: string }): Promise<McpProbeResult>
+    serverProbe?(args: { workspace: string | null; name: string; force?: boolean }): Promise<McpProbeResult>
     /** Ensure the user config file exists (with a template) and return its path. */
     userConfig?(): Promise<{ ok: boolean; path?: string; message?: string }>
     /** Servers configured in sibling apps (Cursor / Claude Desktop / Claude CLI)
@@ -631,11 +635,12 @@ export interface KaisolaBridge {
   }
   /** Declarative extension registry persisted and validated in main. */
   extensions?: {
-    state(): Promise<{ ok: boolean; exists?: boolean; installed: Record<string, { version: string; installedAt: number; enabled: boolean; source: 'bundled' | 'development' }>; development: unknown[]; error?: string; message?: string }>
+    state(): Promise<{ ok: boolean; exists?: boolean; installed: Record<string, { version: string; installedAt: number; enabled: boolean; source: 'bundled' | 'development' }>; development: unknown[]; warnings?: Array<{ id?: string; sourcePath: string; message: string }>; error?: string; message?: string }>
     set(id: string, record: { version: string; installedAt: number; enabled: boolean; source: 'bundled' | 'development' } | null): Promise<{ ok: boolean; message?: string }>
     inspectDev(sourcePath: string): Promise<{ ok: boolean; manifest?: unknown; message?: string }>
     registerDev(sourcePath: string): Promise<{ ok: boolean; manifest?: unknown; message?: string }>
     removeDev(id: string): Promise<{ ok: boolean; message?: string }>
+    onChanged?(cb: (event: { reason?: string; id?: string }) => void): () => void
   }
   git: {
     status(cwd: string): Promise<{ ok: boolean; notRepo?: boolean; root?: string; branch?: string | null; entries?: GitStatusEntry[] }>

@@ -19,17 +19,6 @@ import { Icon } from './Icon'
 type StatusFilter = 'all' | 'installed' | 'not-installed'
 type CategoryFilter = 'All' | ExtensionCategory
 
-const CATEGORIES: CategoryFilter[] = [
-  'All',
-  'Languages',
-  'Themes',
-  'Icon Themes',
-  'Language Servers',
-  'Debug Adapters',
-  'MCP Servers',
-  'Previews',
-]
-
 const STATUS: Array<{ id: StatusFilter; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'installed', label: 'Installed' },
@@ -179,13 +168,24 @@ export function ExtensionsCenter() {
   const [category, setCategory] = useState<CategoryFilter>('All')
   const [busy, setBusy] = useState<string | null>(null)
   const [pendingInstall, setPendingInstall] = useState<ExtensionManifest | null>(null)
+  const [manifestWarnings, setManifestWarnings] = useState<string[]>([])
   const searchRef = useRef<HTMLInputElement>(null)
   const extensionState = useExtensions()
   const workspace = useKaisola((state) => state.workspacePath)
   const pushToast = useKaisola((state) => state.pushToast)
 
   useEffect(() => onExtensionsOpen(() => setOpen(true), () => setOpen(false)), [])
-  useEffect(() => { void hydrateExtensions() }, [])
+  useEffect(() => {
+    const refresh = () => { void hydrateExtensions().then(setManifestWarnings) }
+    refresh()
+    let timer: number | undefined
+    const onChanged = () => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(refresh, 80)
+    }
+    const off = bridge.extensions?.onChanged?.(onChanged)
+    return () => { off?.(); window.clearTimeout(timer) }
+  }, [])
   useEffect(() => {
     if (!open) return
     const onKey = (event: KeyboardEvent) => {
@@ -200,6 +200,13 @@ export function ExtensionsCenter() {
   }, [open, pendingInstall])
 
   const catalog = useMemo(() => extensionCatalog(), [extensionState.revision])
+  const categories = useMemo<CategoryFilter[]>(() => [
+    'All',
+    ...new Set(catalog.flatMap((extension) => extension.categories)),
+  ], [catalog])
+  useEffect(() => {
+    if (!categories.includes(category)) setCategory('All')
+  }, [categories, category])
   // MCP server names are not extension identities. A same-named user server may
   // have a different command or may be deliberately user-owned; only the
   // extension installation record decides this card's state.
@@ -278,9 +285,9 @@ export function ExtensionsCenter() {
     if (bridge.extensions?.inspectDev) {
       const inspected = await bridge.extensions.inspectDev(picked.path)
       if (!inspected.ok) { pushToast('error', inspected.message ?? 'Could not inspect that extension.'); return }
-      const parsed = parseExtensionManifest(inspected.manifest, picked.path)
-      if (!parsed.ok) { pushToast('error', parsed.message); return }
-      setPendingInstall(parsed.manifest)
+      const manifest = inspected.manifest as ExtensionManifest | undefined
+      if (!manifest?.id || !manifest.contributions) { pushToast('error', 'Main returned an invalid extension manifest.'); return }
+      setPendingInstall(manifest)
       return
     }
     const manifestPath = `${picked.path.replace(/[\\/]$/, '')}/kaisola-extension.json`
@@ -329,9 +336,12 @@ export function ExtensionsCenter() {
         </div>
       </div>
       <nav className="extensions-categories" aria-label="Extension categories">
-        {CATEGORIES.map((item) => <button key={item} data-active={category === item} onClick={() => setCategory(item)}>{item}</button>)}
+        {categories.map((item) => <button key={item} data-active={category === item} onClick={() => setCategory(item)}>{item}</button>)}
       </nav>
       <main className="extensions-list">
+        {manifestWarnings.map((warning) => (
+          <div className="extensions-warning" key={warning}><Icon name="TriangleAlert" size={14} /> {warning}</div>
+        ))}
         {visible.map((extension) => (
           <ExtensionCard
             key={extension.id}

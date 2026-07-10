@@ -91,8 +91,23 @@ test('MCP state writes are atomic and private', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kaisola-mcp-mode-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   const file = path.join(root, 'mcp-servers.json')
-  __test.writeJson(file, { mcpServers: { docs: { url: 'https://example.test/mcp' } } })
+  __test.writePrivateJson(file, { mcpServers: { docs: { url: 'https://example.test/mcp' } } })
   assert.equal(fs.statSync(file).mode & 0o777, 0o600)
   assert.deepEqual(fs.readdirSync(root), ['mcp-servers.json'])
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers.docs.url, 'https://example.test/mcp')
+})
+
+test('Claude handoff preserves secret placeholders instead of expanding them to disk', () => {
+  const config = {
+    mcpServers: {
+      docs: { url: 'https://example.test/mcp', headers: { Authorization: '${AUTH_TOKEN}' } },
+      local: { command: 'node', args: ['server.js'], env: { API_TOKEN: '${API_TOKEN}' } },
+      off: { command: 'node', args: ['off.js'] },
+    },
+    disabled: ['off'],
+  }
+  const entries = __test.claudeEntriesFromConfig(config)
+  assert.equal(entries.docs.headers.Authorization, '${AUTH_TOKEN}')
+  assert.equal(entries.local.env.API_TOKEN, '${API_TOKEN}')
+  assert.equal(entries.off, undefined)
 })

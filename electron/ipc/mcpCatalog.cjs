@@ -26,6 +26,7 @@ const crypto = require('node:crypto')
 const { app, BrowserWindow } = require('electron')
 
 const PROBE_TIMEOUT_MS = 3500
+const PROBE_CACHE_MS = 30_000
 const MAX_SERVERS_PER_SCOPE = 24
 
 // ── config files ─────────────────────────────────────────────────────────────
@@ -41,7 +42,7 @@ function readJson(file) {
     return { data: null, error: missing ? null : `Invalid JSON in ${path.basename(file)}: ${String(err.message || err)}`, exists: !missing }
   }
 }
-function writeJson(file, data) {
+function writePrivateJson(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const json = JSON.stringify(data, null, 2)
   const temp = `${file}.tmp.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}`
@@ -145,7 +146,7 @@ function setApproval(workspace, name, hash) {
   const all = readApprovals()
   if (hash) all[approvalKey(workspace, name)] = hash
   else delete all[approvalKey(workspace, name)]
-  writeJson(approvalsPath(), all)
+  writePrivateJson(approvalsPath(), all)
 }
 
 // ── the assembled catalog ────────────────────────────────────────────────────
@@ -229,19 +230,30 @@ function acpEntries(workspace, caps = {}) {
  * the generated kaisola-mcp.json (mcpServer.cjs). Project .mcp.json is NOT
  * merged — the claude CLI reads it natively with its own approval prompt.
  */
-function claudeUserEntries() {
+function claudeEntriesFromConfig(configData) {
   const entries = {}
-  const userCfg = readJson(userConfigPath())
   const disabled = new Set(
-    userCfg.data && Array.isArray(userCfg.data.disabled) ? userCfg.data.disabled.filter((n) => typeof n === 'string') : [],
+    configData && Array.isArray(configData.disabled) ? configData.disabled.filter((n) => typeof n === 'string') : [],
   )
-  for (const { name, spec } of parseServers(userCfg.data)) {
-    if (disabled.has(name)) continue
-    entries[name] = spec.kind === 'stdio'
-      ? { command: spec.command, args: spec.args, ...(Object.keys(spec.env).length ? { env: spec.env } : {}) }
-      : { type: spec.kind, url: spec.url, ...(Object.keys(spec.headers).length ? { headers: spec.headers } : {}) }
+  const map = configData && typeof configData === 'object' && configData.mcpServers && typeof configData.mcpServers === 'object' && !Array.isArray(configData.mcpServers)
+    ? configData.mcpServers
+    : {}
+  for (const [name, raw] of Object.entries(map).slice(0, MAX_SERVERS_PER_SCOPE)) {
+    if (!name || name === 'kaisola' || disabled.has(name)) continue
+    // Claude understands ${NAME} placeholders itself. Preserve the sanitized
+    // raw form here so its generated --mcp-config never materializes a secret
+    // from Kaisola's process environment onto disk.
+    const spec = sanitizeRaw(raw)
+    if (!spec) continue
+    entries[name] = spec.command
+      ? { command: spec.command, ...(spec.args && spec.args.length ? { args: spec.args } : {}), ...(spec.env && Object.keys(spec.env).length ? { env: spec.env } : {}) }
+      : { type: spec.type === 'sse' ? 'sse' : 'http', url: spec.url, ...(spec.headers && Object.keys(spec.headers).length ? { headers: spec.headers } : {}) }
   }
   return entries
+}
+
+function claudeUserEntries() {
+  return claudeEntriesFromConfig(readJson(userConfigPath()).data)
 }
 
 // ── health probe (remote servers only) ───────────────────────────────────────
@@ -302,8 +314,8 @@ function rpcPost(url, headers, payload, { sessionId, protocolVersion } = {}) {
 async function probeServer(workspace, name) {
   const spec = armedSpecs(workspace).get(name) ?? specByName(workspace, name)
   if (!spec) return { ok: false, message: 'unknown server' }
-  if (spec.kind === 'stdio') return { ok: true, kind: 'stdio', message: 'configured — stdio servers start with the agent session' }
-  if (spec.kind === 'sse') return { ok: true, kind: 'sse', message: 'configured — legacy SSE starts with the agent session' }
+  if (spec.kind === 'stdio') return { ok: true, kind: 'stdio', status: 'configured', verified: false, message: 'configured — starts inside a new agent session' }
+  if (spec.kind === 'sse') return { ok: true, kind: 'sse', status: 'configured', verified: false, message: 'configured — legacy SSE is verified only when an agent session connects' }
   const init = await rpcPost(spec.url, spec.headers, {
     jsonrpc: '2.0', id: 1, method: 'initialize',
     params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'kaisola', version: app.getVersion() } },
@@ -328,7 +340,25 @@ async function probeServer(workspace, name) {
   const toolCount = tools.ok && tools.json && tools.json.result && Array.isArray(tools.json.result.tools)
     ? tools.json.result.tools.length
     : undefined
-  return { ok: true, kind: spec.kind, serverName: serverInfo && serverInfo.name, version: serverInfo && serverInfo.version, toolCount }
+  return { ok: true, kind: spec.kind, status: 'ready', verified: true, serverName: serverInfo && serverInfo.name, version: serverInfo && serverInfo.version, toolCount }
+}
+
+const probeCache = new Map()
+const probeInFlight = new Map()
+let probeRevision = 0
+async function cachedProbeServer(workspace, name, force = false) {
+  const key = `${canonicalWorkspace(workspace || '')}\u0000${name}`
+  const cached = probeCache.get(key)
+  if (!force && cached && Date.now() - cached.at < PROBE_CACHE_MS) return { ...cached.result, cached: true }
+  if (!force && probeInFlight.has(key)) return probeInFlight.get(key)
+  const revision = probeRevision
+  const task = probeServer(workspace, name).then((raw) => {
+    const result = raw.ok ? raw : { ...raw, status: 'failed', verified: true }
+    if (revision === probeRevision) probeCache.set(key, { at: Date.now(), result })
+    return result
+  }).finally(() => { if (probeInFlight.get(key) === task) probeInFlight.delete(key) })
+  probeInFlight.set(key, task)
+  return task
 }
 
 /** Find a spec across both scopes regardless of armed state (probe-before-approve). */
@@ -348,6 +378,9 @@ function specByName(workspace, name) {
 const changeListeners = new Set()
 function onChange(fn) { changeListeners.add(fn); return () => changeListeners.delete(fn) }
 function emitChange() {
+  probeRevision += 1
+  probeCache.clear()
+  probeInFlight.clear()
   for (const fn of changeListeners) { try { fn() } catch { /* listener's problem */ } }
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.webContents.isDestroyed()) w.webContents.send('mcp:servers-changed')
@@ -363,7 +396,7 @@ function setServerEnabled(workspace, scope, name, enabled) {
     const disabled = new Set(Array.isArray(cfg.disabled) ? cfg.disabled : [])
     if (enabled) disabled.delete(name)
     else disabled.add(name)
-    writeJson(userConfigPath(), { ...cfg, mcpServers: cfg.mcpServers ?? {}, disabled: [...disabled] })
+    writePrivateJson(userConfigPath(), { ...cfg, mcpServers: cfg.mcpServers ?? {}, disabled: [...disabled] })
   } else {
     if (!workspace) return { ok: false, message: 'no workspace' }
     const spec = specByName(workspace, name)
@@ -454,7 +487,7 @@ function importDiscovered() {
     mcpServers[name] = spec
     disabled.add(name) // arrives off — arming is an explicit per-server choice
   }
-  writeJson(userConfigPath(), { ...cfg, mcpServers, disabled: [...disabled] })
+  writePrivateJson(userConfigPath(), { ...cfg, mcpServers, disabled: [...disabled] })
   emitChange()
   return { ok: true, imported: found.length }
 }
@@ -464,7 +497,7 @@ function importDiscovered() {
 function ensureUserConfig() {
   const file = userConfigPath()
   if (!fs.existsSync(file)) {
-    writeJson(file, {
+    writePrivateJson(file, {
       mcpServers: {
         // "context7": { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] },
         // "linear": { "type": "http", "url": "https://mcp.linear.app/mcp" },
@@ -610,7 +643,7 @@ function addUserServer(name, config, extensionId) {
   if (loaded.error) return { ok: false, message: loaded.error }
   const planned = planAddUserServer(loaded.data, name, config, extensionId)
   if (!planned.ok) return planned
-  writeJson(userConfigPath(), planned.config)
+  writePrivateJson(userConfigPath(), planned.config)
   emitChange()
   const { config: _config, ...result } = planned
   return result
@@ -657,7 +690,7 @@ function removeUserServer(name, extensionId) {
   if (loaded.error) return { ok: false, message: loaded.error }
   const planned = planRemoveUserServer(loaded.data, name, extensionId)
   if (!planned.ok) return planned
-  if (planned.config) writeJson(userConfigPath(), planned.config)
+  if (planned.config) writePrivateJson(userConfigPath(), planned.config)
   emitChange()
   const { config: _config, ...result } = planned
   return result
@@ -685,9 +718,9 @@ function registerMcpCatalogHandlers(ipcMain) {
       return { ok: false, message: String((err && err.message) || err) }
     }
   })
-  ipcMain.handle('mcp:server-probe', async (_e, { workspace, name } = {}) => {
+  ipcMain.handle('mcp:server-probe', async (_e, { workspace, name, force } = {}) => {
     if (typeof name !== 'string' || !name) return { ok: false, message: 'bad args' }
-    try { return await probeServer(workspace || null, name) } catch (err) {
+    try { return await cachedProbeServer(workspace || null, name, !!force) } catch (err) {
       return { ok: false, message: String((err && err.message) || err) }
     }
   })
@@ -716,5 +749,6 @@ module.exports = {
   parseInstallUrl,
   addUserServer,
   removeUserServer,
-  __test: { normalizeSpec, parseRpcBody, containsLiteralSecret, specHash, sanitizeRaw, storedSpecHash, planAddUserServer, planRemoveUserServer, writeJson },
+  writePrivateJson,
+  __test: { normalizeSpec, parseRpcBody, containsLiteralSecret, specHash, sanitizeRaw, storedSpecHash, planAddUserServer, planRemoveUserServer, writePrivateJson, claudeEntriesFromConfig },
 }

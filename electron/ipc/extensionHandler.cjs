@@ -4,7 +4,8 @@
 // becomes an executable module or an unrestricted contribution.
 const fs = require('node:fs')
 const path = require('node:path')
-const { app } = require('electron')
+const crypto = require('node:crypto')
+const { app, BrowserWindow } = require('electron')
 
 const MAX_STATE_BYTES = 512 * 1024
 const MAX_MANIFEST_BYTES = 128 * 1024
@@ -41,9 +42,16 @@ function writeState(state) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const json = JSON.stringify({ schemaVersion: 1, installed: state.installed, development: state.development }, null, 2)
   if (Buffer.byteLength(json) > MAX_STATE_BYTES) throw new Error('Extension state is too large.')
-  const temp = `${file}.tmp.${process.pid}.${Date.now()}`
-  fs.writeFileSync(temp, json, { mode: 0o600 })
-  fs.renameSync(temp, file)
+  const temp = `${file}.tmp.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}`
+  try {
+    fs.writeFileSync(temp, json, { mode: 0o600 })
+    try { fs.chmodSync(temp, 0o600) } catch { /* Windows / restrictive FS */ }
+    fs.renameSync(temp, file)
+    try { fs.chmodSync(file, 0o600) } catch { /* Windows / restrictive FS */ }
+  } catch (err) {
+    try { fs.unlinkSync(temp) } catch { /* missing / already renamed */ }
+    throw err
+  }
 }
 
 const strings = (value, limit = 128) => Array.isArray(value)
@@ -172,9 +180,78 @@ function cleanRecord(value) {
   }
 }
 
+const watchers = new Map()
+const watchTimers = new Map()
+
+function emitChanged(reason, id) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.webContents.isDestroyed()) win.webContents.send('extensions:changed', { reason, id })
+  }
+}
+
+/** Re-read development sources so the file on disk, not cached renderer data,
+ * remains authoritative. Invalid edits keep the last known-good manifest and
+ * surface a warning instead of silently uninstalling the extension. */
+function refreshDevelopment(state) {
+  const development = []
+  const warnings = []
+  for (const cached of state.development.slice(0, MAX_DEV_EXTENSIONS)) {
+    const sourcePath = cached && typeof cached.sourcePath === 'string' ? cached.sourcePath : null
+    if (!sourcePath) continue
+    try {
+      development.push(inspectDevelopment(sourcePath))
+    } catch (err) {
+      try { development.push(sanitizeManifest(cached, sourcePath)) } catch { /* no valid fallback */ }
+      warnings.push({ id: typeof cached.id === 'string' ? cached.id : undefined, sourcePath, message: String(err.message || err) })
+    }
+  }
+  return { ...state, development, warnings }
+}
+
+function syncWatchers(development) {
+  const wanted = new Map(development.filter((item) => item && item.id && item.sourcePath).map((item) => [item.id, item]))
+  for (const [id, record] of watchers) {
+    if (wanted.get(id)?.sourcePath === record.sourcePath) continue
+    try { record.watcher.close() } catch { /* already closed */ }
+    watchers.delete(id)
+    const timer = watchTimers.get(id)
+    if (timer) clearTimeout(timer)
+    watchTimers.delete(id)
+  }
+  for (const [id, manifest] of wanted) {
+    if (watchers.has(id)) continue
+    try {
+      // Watch the folder, not the file inode: editors commonly save by atomic
+      // rename, which otherwise leaves a watcher attached to the old inode.
+      const watcher = fs.watch(manifest.sourcePath, { persistent: false }, (_event, filename) => {
+        if (filename && String(filename) !== 'kaisola-extension.json') return
+        const previous = watchTimers.get(id)
+        if (previous) clearTimeout(previous)
+        watchTimers.set(id, setTimeout(() => {
+          watchTimers.delete(id)
+          try {
+            const current = readState()
+            const refreshed = refreshDevelopment(current)
+            if (!refreshed.error) writeState(refreshed)
+            syncWatchers(refreshed.development)
+          } catch { /* state endpoint will retain last-known-good + report warning */ }
+          emitChanged('manifest', id)
+        }, 120))
+      })
+      watchers.set(id, { sourcePath: manifest.sourcePath, watcher })
+    } catch { /* source warning is returned by extensions:state */ }
+  }
+}
+
+function authoritativeState() {
+  const state = refreshDevelopment(readState())
+  syncWatchers(state.development)
+  return state
+}
+
 function registerExtensionHandlers(ipcMain) {
   ipcMain.handle('extensions:state', () => {
-    const state = readState()
+    const state = authoritativeState()
     return { ok: !state.error, ...state }
   })
   ipcMain.handle('extensions:set', (_event, { id, record } = {}) => {
@@ -189,6 +266,7 @@ function registerExtensionHandlers(ipcMain) {
         installed[id] = clean
       }
       writeState({ installed, development: state.development })
+      emitChanged('install-state', id)
       return { ok: true }
     } catch (err) { return { ok: false, message: String(err.message || err) } }
   })
@@ -203,6 +281,8 @@ function registerExtensionHandlers(ipcMain) {
       const development = [manifest, ...state.development.filter((item) => item && item.id !== manifest.id)].slice(0, MAX_DEV_EXTENSIONS)
       const installed = { ...state.installed, [manifest.id]: { version: manifest.version, installedAt: Date.now(), enabled: true, source: 'development' } }
       writeState({ installed, development })
+      syncWatchers(development)
+      emitChanged('registered', manifest.id)
       return { ok: true, manifest }
     } catch (err) { return { ok: false, message: String(err.message || err) } }
   })
@@ -213,6 +293,8 @@ function registerExtensionHandlers(ipcMain) {
       const installed = { ...state.installed }
       delete installed[id]
       writeState({ installed, development: state.development.filter((item) => item && item.id !== id) })
+      syncWatchers(state.development.filter((item) => item && item.id !== id))
+      emitChanged('removed', id)
       return { ok: true }
     } catch (err) { return { ok: false, message: String(err.message || err) } }
   })
