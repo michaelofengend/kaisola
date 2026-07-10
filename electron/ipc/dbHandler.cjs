@@ -79,4 +79,8 @@ function registerDbHandlers(ipcMain) {
 }
 
 // main-side read (e.g. picking a free window slot) — same backend, no IPC
-module.exports = { registerDbHandlers, dbGet: (key) => init().get(key) }
+module.exports = {
+  registerDbHandlers,
+  dbGet: (key) => init().get(key),
+  dbDel: (key) => init().del(key),
+}

@@ -95,26 +95,65 @@ app.whenReady().then(async () => {
   ipcMain.handle('shell:window-mode', () => ({ wantSolid: false, liveSolid: false }))
   worktree.registerWorktreeHandlers(ipcMain)
 
-  // tear-off support: a minimal replica of main.cjs's window:detach-project —
-  // spawn a second harness window in adoption mode and hand it the project
+  // Transactional tear-off/recombine replica: delivery waits for the renderer
+  // listener, the source waits for ACK, and a drop over an existing top strip
+  // reuses that BrowserWindow instead of spawning a third one.
   const pendingAdoptions = new Map()
-  ipcMain.handle('window:detach-project', (_e, payload = {}) => {
+  const adoptionReady = new Set()
+  const ackWaiters = new Map()
+  const completedTransfers = new Map()
+  let smokeTransferSeq = 0
+  ipcMain.on('window:adopt-ready', (e) => {
+    adoptionReady.add(e.sender.id)
+    const a = pendingAdoptions.get(e.sender.id)
+    if (a) { pendingAdoptions.delete(e.sender.id); e.sender.send('tab:adopt', a) }
+  })
+  ipcMain.on('window:adopt-complete', (e, { transferId, ok } = {}) => {
+    const p = ackWaiters.get(transferId)
+    if (!p || p.targetId !== e.sender.id) return
+    ackWaiters.delete(transferId)
+    clearTimeout(p.timer)
+    p.resolve(!!ok)
+  })
+  ipcMain.handle('window:detach-project', async (e, payload = {}) => {
     if (!payload.tab || !payload.slice) return { ok: false }
-    const w2 = new BrowserWindow({
-      show: false,
-      width: 900,
-      height: 600,
-      webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, webviewTag: true, plugins: true },
+    const source = BrowserWindow.fromWebContents(e.sender)
+    const point = payload.at && Number.isFinite(payload.at.x) && Number.isFinite(payload.at.y) ? payload.at : null
+    let target = point ? BrowserWindow.getAllWindows().find((candidate) => {
+      if (candidate === source || candidate.isDestroyed() || !adoptionReady.has(candidate.webContents.id)) return false
+      const b = candidate.getBounds()
+      return point.x >= b.x && point.x <= b.x + b.width && point.y >= b.y && point.y <= b.y + 56
+    }) : null
+    const targetKind = target ? 'existing' : 'new'
+    if (!target) {
+      target = new BrowserWindow({
+        show: false,
+        width: 900,
+        height: 600,
+        webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, webviewTag: true, plugins: true },
+      })
+      target.__smokeAdopt = true
+      void target.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: { adopt: '1', win: 'detach-smoke' } })
+    }
+    const transferId = `smoke-transfer-${++smokeTransferSeq}`
+    const b = target.getBounds()
+    const adoption = { tab: payload.tab, slice: payload.slice, globals: payload.globals, popped: payload.popped, transferId, ...(point ? { dropX: point.x - b.x } : {}) }
+    const adopted = await new Promise((resolve) => {
+      const timer = setTimeout(() => { ackWaiters.delete(transferId); resolve(false) }, 15_000)
+      ackWaiters.set(transferId, { targetId: target.webContents.id, resolve, timer })
+      if (adoptionReady.has(target.webContents.id)) target.webContents.send('tab:adopt', adoption)
+      else pendingAdoptions.set(target.webContents.id, adoption)
     })
-    pendingAdoptions.set(w2.webContents.id, { tab: payload.tab, slice: payload.slice })
-    w2.webContents.on('did-finish-load', () => {
-      const a = pendingAdoptions.get(w2.webContents.id)
-      if (a) {
-        pendingAdoptions.delete(w2.webContents.id)
-        w2.webContents.send('tab:adopt', a)
-      }
-    })
-    void w2.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: { adopt: '1', win: 'detach-smoke' } })
+    if (!adopted) return { ok: false }
+    const closeSource = targetKind === 'existing' && source.__smokeAdopt === true && payload.sourceTabCount === 1
+    if (closeSource) completedTransfers.set(transferId, { source, sourceId: e.sender.id })
+    return { ok: true, transferId, target: targetKind, closeSource }
+  })
+  ipcMain.handle('window:finish-transfer', (e, { transferId } = {}) => {
+    const done = completedTransfers.get(transferId)
+    if (!done || done.sourceId !== e.sender.id) return { ok: false }
+    completedTransfers.delete(transferId)
+    setImmediate(() => { if (!done.source.isDestroyed()) done.source.close() })
     return { ok: true }
   })
 
@@ -1291,22 +1330,54 @@ a^2 + b^2 = c^2
   })()`)
   console.log('PROJTABS=' + JSON.stringify(projtabs))
 
-  // 13e-iii) tear-off: detaching a tab ships it to a NEW window that adopts it
-  //          (same terminal ids — the main-process ptys just change homes)
+  // 13e-iii) tear-off + recombine: appearance/drafts travel to the hidden new
+  //           window, then the same project and PTYs merge back into the
+  //           original strip and the empty detached shell closes.
+  const windowsBeforeDetach = BrowserWindow.getAllWindows().length
   const detachInfo = await win.webContents.executeJavaScript(`(async () => {
     const g = () => window.__kaisola.getState()
+    const prefs = {
+      themeMode: g().themeMode, perfMode: g().perfMode, termBackground: g().termBackground,
+      fileTextZoom: g().fileTextZoom, termFontSize: g().termFontSize, termFontFamily: g().termFontFamily,
+      termFontWeight: g().termFontWeight, termCursorColor: g().termCursorColor, wallpaperTint: g().wallpaperTint,
+    }
+    g().setThemeMode('dark')
+    g().setPerfMode('eco')
+    g().setTermBackground('paper')
+    g().setFileTextZoom(1.37)
+    g().setTermFontSize(17)
+    g().setTermFontFamily('SF Mono')
+    g().setTermFontWeight(700)
+    g().setTermCursorColor('#6f5cff')
+    g().setWallpaperTint(false)
     const before = g().projectTabs.length
     const pid = g().newProject({ path: null, focus: true })
+    await new Promise((r) => setTimeout(r, 250))
     const movedTermIds = g().terminals.map((t) => t.id)
+    if (movedTermIds[0]) g().setTermDraft(movedTermIds[0], 'detach-smoke-draft')
+    if (movedTermIds[0]) await window.kaisola.terminal.create(movedTermIds[0], undefined, 80, 24)
+    await new Promise((r) => setTimeout(r, 80))
+    const diagnosticsBefore = await window.kaisola.terminal.diagnostics()
     await g().detachProjectToWindow(pid)
     await new Promise((r) => setTimeout(r, 200))
-    return { pid, movedTermIds, srcTabsAfter: g().projectTabs.length, srcStillHasIt: g().projectTabs.some((t) => t.id === pid), srcTabsBefore: before }
+    return { pid, prefs, movedTermIds, diagnosticsBefore, srcTabsAfter: g().projectTabs.length, srcStillHasIt: g().projectTabs.some((t) => t.id === pid), srcTabsBefore: before }
   })()`)
   const windetach = {
     spawned: false,
     adopted: false,
     termsMoved: false,
+    globalsMoved: false,
+    styleApplied: false,
+    draftMoved: false,
     srcDropped: detachInfo.srcTabsAfter === detachInfo.srcTabsBefore && !detachInfo.srcStillHasIt,
+    recombined: false,
+    insertedAtDrop: false,
+    termsSame: false,
+    pidsSame: false,
+    pidDebug: null,
+    sourceClosed: false,
+    targetReused: false,
+    windowCountRestored: false,
   }
   {
     const started = Date.now()
@@ -1323,14 +1394,64 @@ a^2 + b^2 = c^2
         probe = await adoptWin.webContents.executeJavaScript(`(() => {
           if (!window.__kaisola) return null
           const s = window.__kaisola.getState()
-          return { tabIds: s.projectTabs.map((t) => t.id), active: s.activeProjectId, termIds: s.terminals.map((t) => t.id) }
+          return {
+            tabIds: s.projectTabs.map((t) => t.id), active: s.activeProjectId, termIds: s.terminals.map((t) => t.id),
+            theme: s.theme, themeMode: s.themeMode, perfMode: s.perfMode, termBackground: s.termBackground,
+            fileTextZoom: s.fileTextZoom, termFontSize: s.termFontSize, termFontFamily: s.termFontFamily,
+            termFontWeight: s.termFontWeight, termCursorColor: s.termCursorColor, wallpaperTint: s.wallpaperTint,
+            datasets: { theme: document.documentElement.dataset.theme, perf: document.documentElement.dataset.perf, termbg: document.documentElement.dataset.termbg },
+            draft: s.termDrafts[${JSON.stringify(detachInfo.movedTermIds[0] || '')}],
+          }
         })()`).catch(() => null)
         if (probe && probe.tabIds.includes(detachInfo.pid)) break
         await new Promise((r) => setTimeout(r, 300))
       }
       windetach.adopted = !!probe && probe.tabIds.includes(detachInfo.pid) && probe.active === detachInfo.pid
       windetach.termsMoved = !!probe && detachInfo.movedTermIds.every((id) => probe.termIds.includes(id))
-      adoptWin.destroy()
+      windetach.globalsMoved = !!probe && probe.theme === 'dark' && probe.themeMode === 'dark' && probe.perfMode === 'eco' && probe.termBackground === 'paper' &&
+        probe.fileTextZoom === 1.37 && probe.termFontSize === 17 && probe.termFontFamily === 'SF Mono' && probe.termFontWeight === 700 &&
+        probe.termCursorColor === '#6f5cff' && probe.wallpaperTint === false
+      windetach.styleApplied = !!probe && probe.datasets.theme === 'dark' && probe.datasets.perf === 'eco' && probe.datasets.termbg === 'paper'
+      windetach.draftMoved = !!probe && probe.draft === 'detach-smoke-draft'
+
+      const adoptWcId = adoptWin.webContents.id
+      const firstTabLeft = await win.webContents.executeJavaScript(`document.querySelector('.ptab')?.getBoundingClientRect().left ?? 180`)
+      await adoptWin.webContents.executeJavaScript(`window.__kaisola.getState().detachProjectToWindow(${JSON.stringify(detachInfo.pid)}, { x: ${Math.round(win.getBounds().x)} + ${Number(firstTabLeft) + 2}, y: ${Math.round(win.getBounds().y)} + 20 })`).catch(() => null)
+      const t3 = Date.now()
+      while (Date.now() - t3 < 15000 && !adoptWin.isDestroyed()) await new Promise((r) => setTimeout(r, 120))
+      windetach.sourceClosed = adoptWin.isDestroyed()
+      let merged = null
+      const t4 = Date.now()
+      while (Date.now() - t4 < 15000) {
+        merged = await win.webContents.executeJavaScript(`(async () => {
+          const s = window.__kaisola.getState()
+          return { tabIds: s.projectTabs.map((t) => t.id), active: s.activeProjectId, termIds: s.terminals.map((t) => t.id), draft: s.termDrafts[${JSON.stringify(detachInfo.movedTermIds[0] || '')}], diagnostics: await window.kaisola.terminal.diagnostics() }
+        })()`).catch(() => null)
+        if (merged?.tabIds?.includes(detachInfo.pid)) break
+        await new Promise((r) => setTimeout(r, 150))
+      }
+      windetach.recombined = !!merged && merged.tabIds.filter((id) => id === detachInfo.pid).length === 1 && merged.active === detachInfo.pid && merged.draft === 'detach-smoke-draft'
+      windetach.insertedAtDrop = !!merged && merged.tabIds[0] === detachInfo.pid
+      windetach.termsSame = !!merged && detachInfo.movedTermIds.length === merged.termIds.length && detachInfo.movedTermIds.every((id) => merged.termIds.filter((x) => x === id).length === 1)
+      const beforePids = Object.fromEntries((detachInfo.diagnosticsBefore ?? []).filter((d) => detachInfo.movedTermIds.includes(d.id)).map((d) => [d.id, d.pid]))
+      windetach.pidDebug = { before: beforePids, after: (merged?.diagnostics ?? []).filter((d) => detachInfo.movedTermIds.includes(d.id)).map((d) => ({ id: d.id, pid: d.pid, exited: d.exited })) }
+      windetach.pidsSame = !!merged && detachInfo.movedTermIds.every((id) => {
+        const after = (merged.diagnostics ?? []).find((d) => d.id === id)
+        return !!after && !after.exited && (!beforePids[id] || after.pid === beforePids[id])
+      })
+      windetach.targetReused = !BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.webContents.id === adoptWcId) && BrowserWindow.getAllWindows().includes(win)
+      windetach.windowCountRestored = BrowserWindow.getAllWindows().length === windowsBeforeDetach
+
+      // Restore source preferences and a single project for downstream groups.
+      await win.webContents.executeJavaScript(`(async () => {
+        const g = () => window.__kaisola.getState()
+        const p = ${JSON.stringify(detachInfo.prefs)}
+        g().setThemeMode(p.themeMode); g().setPerfMode(p.perfMode); g().setTermBackground(p.termBackground)
+        g().setFileTextZoom(p.fileTextZoom); g().setTermFontSize(p.termFontSize); g().setTermFontFamily(p.termFontFamily)
+        g().setTermFontWeight(p.termFontWeight); g().setTermCursorColor(p.termCursorColor); g().setWallpaperTint(p.wallpaperTint)
+        g().closeProject(${JSON.stringify(detachInfo.pid)}, { force: true })
+        await new Promise((r) => setTimeout(r, 180))
+      })()`)
     }
   }
   console.log('WINDETACH=' + JSON.stringify(windetach))
@@ -2602,7 +2723,8 @@ a^2 + b^2 = c^2
     !projtabs.backToFirst || !projtabs.firstRestored || !projtabs.parkedSecondOk ||
     !projtabs.domTwoTabs || !projtabs.domActiveOne ||
     !projtabs.closedGone || !projtabs.stackHas || !projtabs.reopened || !projtabs.reopenedTermsOk || !projtabs.reopenedGridOk || !projtabs.backToSingle ||
-    !windetach.spawned || !windetach.adopted || !windetach.termsMoved || !windetach.srcDropped ||
+    !windetach.spawned || !windetach.adopted || !windetach.termsMoved || !windetach.globalsMoved || !windetach.styleApplied || !windetach.draftMoved || !windetach.srcDropped ||
+    !windetach.recombined || !windetach.insertedAtDrop || !windetach.termsSame || !windetach.pidsSame || !windetach.sourceClosed || !windetach.targetReused || !windetach.windowCountRestored ||
     !toggle.hasFig || !toggle.visibleAtRest || !toggle.putAway || !toggle.back || !toggle.hidesAll ||
     !autoname.named || !autoname.rowShows || !autoname.sticky || !autoname.manualWins || !autoname.termNamed ||
     !minimalUi.noSidebar || !minimalUi.noSidebarResize || !minimalUi.noStageNav || !minimalUi.hasRail || !minimalUi.hasPlus || !minimalUi.hasFiles ||

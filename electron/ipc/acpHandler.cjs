@@ -144,6 +144,55 @@ function acpRendererSwapState(sender) {
   return { safe: !busy && !awaitingPermission, busy, connecting, awaitingPermission }
 }
 
+/** A project tab may change renderer owners between turns, but an active ACP
+ * prompt has a request-specific listener in the source renderer and therefore
+ * cannot be moved safely. CLI terminals do not use this path. */
+function acpProjectTransferState(sender, scope) {
+  const owned = [...connections.values()].filter(
+    (entry) => (entry.sender === sender || entry.sender?.id === sender?.id) && entry.meta?.scope === scope,
+  )
+  const connecting = [...connectTasks.entries()].some(
+    ([key, task]) => (task.sender === sender || task.sender?.id === sender?.id) && key.endsWith(`@@${scope}`),
+  )
+  const busy = connecting || owned.some((entry) => (entry.inFlightTurns ?? 0) > 0 || !!entry.current?.channel)
+  const awaitingPermission = [...pendingPermissions.values()].some(
+    (pending) => (pending.entry?.sender === sender || pending.entry?.sender?.id === sender?.id) && pending.entry?.meta?.scope === scope,
+  )
+  return { safe: !busy && !awaitingPermission, busy, connecting, awaitingPermission }
+}
+
+/** Rekey idle ACP connections + leases to a receiving renderer without
+ * restarting their adapter processes. Returns an exact rollback for a failed
+ * renderer adoption. */
+function transferAcpProject(fromSender, toSender, scope) {
+  const state = acpProjectTransferState(fromSender, scope)
+  if (!state.safe) return { ok: false, ...state }
+  const moves = [...connections.entries()].filter(
+    ([, entry]) => (entry.sender === fromSender || entry.sender?.id === fromSender?.id) && entry.meta?.scope === scope,
+  ).map(([oldKey, entry]) => ({ oldKey, newKey: ikey(toSender, entry.meta.key || entry.meta.presetId), entry }))
+  if (moves.some(({ newKey, entry }) => connections.has(newKey) && connections.get(newKey) !== entry)) {
+    return { ok: false, collision: true }
+  }
+  const apply = (forward) => {
+    for (const move of moves) {
+      const fromKey = forward ? move.oldKey : move.newKey
+      const toKey = forward ? move.newKey : move.oldKey
+      const owner = forward ? toSender : fromSender
+      const leases = connectionLeases.get(fromKey)
+      clearIdleTimer(fromKey)
+      clearIdleTimer(toKey)
+      connectionLeases.delete(fromKey)
+      connections.delete(fromKey)
+      move.entry.sender = owner
+      connections.set(toKey, move.entry)
+      if (leases?.size) connectionLeases.set(toKey, new Set(leases))
+      else scheduleIdlePark(toKey)
+    }
+  }
+  apply(true)
+  return { ok: true, moved: moves.length, rollback: () => apply(false) }
+}
+
 /** Renderer destruction is not guaranteed to run React effect cleanup. Clear
  * its leases in main, cancel now-unanswerable approvals, and start the normal
  * conservative idle timer without stopping any live turn. */
@@ -948,4 +997,4 @@ function disposeAcp() {
   connectTasks.clear()
 }
 
-module.exports = { registerAcpHandlers, disposeAcp, acpRendererSwapState, releaseAcpRenderer, cachedNpxAdapter, adapterPreset, claudePreset, codexPreset, newestCodexExecutable, freshenControls, _acpTest: { connections, connectionLeases, idleTimers, scheduleIdlePark, canIdlePark, acpRendererSwapState, releaseAcpRenderer, resolveBundledCodexExecutable, resolveBundledClaudeExecutable } }
+module.exports = { registerAcpHandlers, disposeAcp, acpRendererSwapState, acpProjectTransferState, transferAcpProject, releaseAcpRenderer, cachedNpxAdapter, adapterPreset, claudePreset, codexPreset, newestCodexExecutable, freshenControls, _acpTest: { connections, connectionLeases, idleTimers, scheduleIdlePark, canIdlePark, acpRendererSwapState, acpProjectTransferState, transferAcpProject, releaseAcpRenderer, resolveBundledCodexExecutable, resolveBundledClaudeExecutable } }

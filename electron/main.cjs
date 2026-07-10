@@ -4,14 +4,14 @@
 // the UI is fully usable without Electron. Electron adds the native shell plus
 // the privileged "tools" the research IDE needs (model calls, filesystem,
 // running experiments) — all behind a locked-down preload bridge.
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, shell } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const { registerModelHandlers } = require('./ipc/modelHandler.cjs')
 const { registerToolHandlers } = require('./ipc/toolHandler.cjs')
 const { registerSettingsHandlers } = require('./ipc/settingsHandler.cjs')
 const { registerTerminalHandlers, killAllSessions, setAppFocused, detachRendererOwner } = require('./ipc/terminalHandler.cjs')
-const { registerAcpHandlers, disposeAcp, acpRendererSwapState, releaseAcpRenderer } = require('./ipc/acpHandler.cjs')
+const { registerAcpHandlers, disposeAcp, acpRendererSwapState, acpProjectTransferState, transferAcpProject, releaseAcpRenderer } = require('./ipc/acpHandler.cjs')
 const { registerAuthHandlers, disposeAuth } = require('./ipc/authHandler.cjs')
 const { registerFsHandlers, disposeFs } = require('./ipc/fsHandler.cjs')
 const { registerGrobidHandlers } = require('./ipc/grobidHandler.cjs')
@@ -342,6 +342,7 @@ function createWindow(opts = {}) {
   const solidBgRaw = readShellPrefs().solidBg
   const solidBg = /^#[0-9a-fA-F]{6}$/.test(solidBgRaw || '') ? solidBgRaw : '#0b0d11'
   const win = new BrowserWindow({
+    ...(opts.adopt ? { show: false } : {}),
     width: isPop ? 760 : 1440,
     height: isPop ? 520 : 920,
     minWidth: isPop ? 420 : 1040,
@@ -365,6 +366,13 @@ function createWindow(opts = {}) {
       plugins: true, // Chromium's PDF viewer IS a plugin — without this the PDF iframe is blank
     },
   })
+  win.__kaisolaPop = isPop
+  win.__kaisolaSlot = opts.slot ? String(opts.slot) : null
+  win.__kaisolaAdoptBoot = !!opts.adopt
+  win.__kaisolaPendingAdoption = !!opts.adopt
+  win.__kaisolaPendingTheme = null
+  win.__kaisolaLastFocus = Date.now()
+  win.webContents.on('did-start-loading', () => adoptionReadyWc.delete(win.webContents.id))
   // browser-card guests: popups/target=_blank navigate the SAME webview —
   // never a new Electron window
   win.webContents.on('did-attach-webview', (_event, guest) => {
@@ -382,7 +390,6 @@ function createWindow(opts = {}) {
   if (opts.adopt) query.adopt = '1' // tear-off adoption: boot pristine, never rehydrate the slot
   if (opts.at && Number.isFinite(opts.at.x) && Number.isFinite(opts.at.y)) {
     // land the torn-off window under the drop point, clamped to that display
-    const { screen } = require('electron')
     const disp = screen.getDisplayNearestPoint({ x: Math.round(opts.at.x), y: Math.round(opts.at.y) })
     const [w, h] = win.getSize()
     win.setPosition(
@@ -441,6 +448,7 @@ function createWindow(opts = {}) {
   win.once('ready-to-show', syncMacMaterial)
   win.on('show', syncMacMaterial)
   win.on('focus', () => {
+    win.__kaisolaLastFocus = Date.now()
     syncMacMaterial()
     sendWinState()
     // the app menu is global on macOS — refresh so the Window menu mirrors THIS
@@ -476,6 +484,7 @@ function createWindow(opts = {}) {
     }).finally(() => { win.__kaisolaCloseWarning = false })
   })
   rendererOwner.once('destroyed', () => {
+    adoptionReadyWc.delete(rendererOwner.id)
     // React cleanup does not reliably run on window crashes/closes. Main owns
     // the authoritative fallback: keep processes alive, but release all hot
     // renderer resources and leases for this exact WebContents.
@@ -486,6 +495,8 @@ function createWindow(opts = {}) {
     nativeGlass.active = false
     nativeGlass.fallback = 'closed'
     tabsByWc.delete(wcId)
+    pendingAdoptions.delete(wcId)
+    adoptionReadyWc.delete(wcId)
     if (!isPop) installAppMenu()
   })
 
@@ -510,12 +521,9 @@ function createWindow(opts = {}) {
         win.webContents.send('files:open-external', { path: p })
       }
     }
-    // a torn-off project waiting for this window — hand it over exactly once
-    const adoption = pendingAdoptions.get(win.webContents.id)
-    if (adoption) {
-      pendingAdoptions.delete(win.webContents.id)
-      win.webContents.send('tab:adopt', adoption)
-    }
+    // Adoption is delivered by the renderer's explicit `window:adopt-ready`
+    // handshake, never merely because HTML finished loading: React must have
+    // installed its receiver before main sends the one-shot project payload.
   })
 
   if (isDev) {
@@ -546,11 +554,69 @@ ipcMain.handle('window:new', () => {
   return { ok: true }
 })
 
-// Chrome-style tear-off: a renderer ships a project (tab + persisted slice)
-// here; a fresh-slot window spawns at the drop point and adopts it on load.
-// The ptys are global to the main process, so the project's terminals simply
-// re-attach in the new window — nothing restarts.
-const pendingAdoptions = new Map() // webContents.id → { tab, slice, popped }
+// Transactional Chrome-style project transfers. A drop over another Kaisola
+// tab strip reuses that renderer; any other drag-out creates a HIDDEN window.
+// The source keeps its project until the receiver applies it and ACKs.
+const pendingAdoptions = new Map() // target webContents.id → adoption payload
+const adoptionReadyWc = new Set() // renderer installed onAdoptProject listener
+const pendingTransferAcks = new Map() // transferId → { targetId, resolve, timer }
+const completedTransfers = new Map() // transferId → source window (until finish)
+let transferSeq = 0
+
+function transferPoint(at) {
+  if (!at || !Number.isFinite(at.x) || !Number.isFinite(at.y)) return null
+  return { x: Math.round(at.x), y: Math.round(at.y) }
+}
+
+function existingProjectDropTarget(source, point) {
+  if (!point) return null
+  return BrowserWindow.getAllWindows()
+    .filter((candidate) =>
+      candidate !== source && !candidate.isDestroyed() && !candidate.__kaisolaPop &&
+      candidate.isVisible() && !candidate.isMinimized() && tabsByWc.has(candidate.webContents.id))
+    .filter((candidate) => {
+      const b = candidate.getBounds()
+      // The frameless project strip is 40px; a small tolerance makes high-DPI
+      // and cross-display drops forgiving without accepting the editor body.
+      return point.x >= b.x && point.x <= b.x + b.width && point.y >= b.y && point.y <= b.y + 56
+    })
+    .sort((a, b) => (b.__kaisolaLastFocus || 0) - (a.__kaisolaLastFocus || 0))[0] ?? null
+}
+
+function deliverAdoption(target, adoption) {
+  if (target.isDestroyed() || target.webContents.isDestroyed()) return false
+  if (!adoptionReadyWc.has(target.webContents.id)) {
+    pendingAdoptions.set(target.webContents.id, adoption)
+    return true
+  }
+  target.webContents.send('tab:adopt', adoption)
+  return true
+}
+
+ipcMain.on('window:adopt-ready', (event) => {
+  adoptionReadyWc.add(event.sender.id)
+  const adoption = pendingAdoptions.get(event.sender.id)
+  if (!adoption) return
+  pendingAdoptions.delete(event.sender.id)
+  if (!event.sender.isDestroyed()) event.sender.send('tab:adopt', adoption)
+})
+
+ipcMain.on('window:adopt-complete', (event, { transferId, ok } = {}) => {
+  const pending = pendingTransferAcks.get(transferId)
+  if (!pending || pending.targetId !== event.sender.id) return
+  pendingTransferAcks.delete(transferId)
+  clearTimeout(pending.timer)
+  if (ok) {
+    const target = BrowserWindow.fromWebContents(event.sender)
+    if (target?.__kaisolaPendingAdoption) {
+      target.__kaisolaPendingAdoption = false
+      const theme = target.__kaisolaPendingTheme
+      target.__kaisolaPendingTheme = null
+      if (theme) applyAppTheme(event.sender, theme)
+    }
+  }
+  pending.resolve(!!ok)
+})
 // a torn-off window persists under its slot — NEVER hand it a slot that already
 // holds a saved session, or the first persist silently destroys that session.
 // (window:new keeps plain sequential slots on purpose: reopening slot 2 is how
@@ -565,10 +631,115 @@ function freeSlot() {
   nextSlot = n + 1
   return n
 }
-ipcMain.handle('window:detach-project', (_e, payload = {}) => {
-  if (!payload.tab || !payload.slice) return { ok: false }
-  const win = createWindow({ slot: freeSlot(), adopt: true, at: payload.at })
-  pendingAdoptions.set(win.webContents.id, { tab: payload.tab, slice: payload.slice, popped: payload.popped })
+function destroyDiscardedAdoptionWindow(win) {
+  if (!win) return
+  const slot = win.__kaisolaSlot
+  const discard = () => {
+    if (!slot) return
+    const { dbDel } = require('./ipc/dbHandler.cjs')
+    for (const key of [`kaisola-store-w${slot}`, `kiasola-store-w${slot}`, `pasola-store-w${slot}`]) {
+      try { dbDel(key) } catch { /* best-effort failed-transfer cleanup */ }
+    }
+  }
+  if (win.isDestroyed()) { discard(); return }
+  // Delete AFTER WebContents is gone so a queued persist/pagehide write cannot
+  // recreate the rejected slot behind us.
+  win.once('closed', discard)
+  win.destroy()
+}
+ipcMain.handle('window:detach-project', async (event, payload = {}) => {
+  if (!payload.tab?.id || !payload.slice) return { ok: false, message: 'That project could not be moved.' }
+  const source = BrowserWindow.fromWebContents(event.sender)
+  if (!source || source.isDestroyed()) return { ok: false, message: 'The source window is no longer available.' }
+
+  const point = transferPoint(payload.at)
+  let target = existingProjectDropTarget(source, point)
+  // Chrome does not clone a renderer when its last tab is dragged to empty
+  // desktop: it simply moves that window. This is both more faithful and the
+  // lowest-memory path, and active agents need no ownership handoff at all.
+  if (!target && point && payload.sourceTabCount === 1) {
+    const display = screen.getDisplayNearestPoint(point)
+    const [width, height] = source.getSize()
+    if (source.isMaximized()) source.unmaximize()
+    source.setPosition(
+      Math.round(Math.min(Math.max(point.x - 200, display.workArea.x), display.workArea.x + display.workArea.width - width)),
+      Math.round(Math.min(Math.max(point.y - 20, display.workArea.y), display.workArea.y + display.workArea.height - height)),
+    )
+    source.show()
+    source.focus()
+    return { ok: true, target: 'same' }
+  }
+
+  // ACP prompts stream through a request-specific renderer listener. Moving
+  // between turns is lossless; moving mid-turn would strand that stream.
+  const acpState = acpProjectTransferState(event.sender, payload.tab.id)
+  if (!acpState.safe) {
+    return {
+      ok: false,
+      message: acpState.awaitingPermission
+        ? 'Answer the agent approval before moving this project to another window.'
+        : 'Let the active agent turn finish before moving this project to another window.',
+    }
+  }
+
+  const targetKind = target ? 'existing' : 'new'
+  if (!target) target = createWindow({ slot: freeSlot(), adopt: true, at: point })
+  const acpMove = transferAcpProject(event.sender, target.webContents, payload.tab.id)
+  if (!acpMove.ok) {
+    if (targetKind === 'new') destroyDiscardedAdoptionWindow(target)
+    return { ok: false, message: 'That project already has an agent connection in the destination window.' }
+  }
+
+  const transferId = `project-transfer-${Date.now()}-${++transferSeq}`
+  const targetBounds = target.getBounds()
+  const adoption = {
+    tab: payload.tab,
+    slice: payload.slice,
+    globals: payload.globals,
+    popped: payload.popped,
+    transferId,
+    ...(point ? { dropX: point.x - targetBounds.x } : {}),
+  }
+  const adopted = await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      const pending = pendingTransferAcks.get(transferId)
+      if (!pending) return
+      pendingTransferAcks.delete(transferId)
+      resolve(false)
+    }, 15_000)
+    pendingTransferAcks.set(transferId, { targetId: target.webContents.id, resolve, timer })
+    if (!deliverAdoption(target, adoption)) {
+      clearTimeout(timer)
+      pendingTransferAcks.delete(transferId)
+      resolve(false)
+    }
+  })
+  if (!adopted) {
+    pendingAdoptions.delete(target.webContents.id)
+    acpMove.rollback?.()
+    if (targetKind === 'new') destroyDiscardedAdoptionWindow(target)
+    return { ok: false, message: 'The destination window did not accept the project; everything remains in this window.' }
+  }
+
+  if (!target.isDestroyed()) {
+    target.show()
+    target.focus()
+  }
+  const closeSource = targetKind === 'existing' && source.__kaisolaAdoptBoot === true && payload.sourceTabCount === 1
+  if (closeSource) {
+    completedTransfers.set(transferId, { source, sourceId: event.sender.id })
+    setTimeout(() => completedTransfers.delete(transferId), 30_000).unref?.()
+  }
+  return { ok: true, transferId, target: targetKind, closeSource }
+})
+
+ipcMain.handle('window:finish-transfer', (event, { transferId } = {}) => {
+  const completed = completedTransfers.get(transferId)
+  if (!completed || completed.sourceId !== event.sender.id) return { ok: false }
+  completedTransfers.delete(transferId)
+  setImmediate(() => {
+    if (!completed.source.isDestroyed()) completed.source.close()
+  })
   return { ok: true }
 })
 
@@ -703,21 +874,30 @@ ipcMain.handle('shell:reapply-window', (e) => {
   return { ok: true }
 })
 
-// The app has its own theme toggle; the native under-window material
-// (vibrancy / Liquid Glass) follows the SYSTEM appearance unless told
-// otherwise — sync it, or a dark app sits on a light blur and the
-// transparent rail becomes unreadable. Persisted so startup paints right.
-ipcMain.on('shell:app-theme', (e, theme) => {
+// The app has its own theme toggle; the native under-window material follows
+// it. A hidden adoption renderer initially boots with defaults, so quarantine
+// its theme messages until its transferred globals are applied and ACKed —
+// otherwise merely tearing off a tab briefly resets every visible window.
+function applyAppTheme(sender, theme) {
   if (theme !== 'dark' && theme !== 'light' && theme !== 'system') return
   nativeTheme.themeSource = theme
   writeShellPrefs({ appTheme: theme })
   // theme is app-wide: sync every OTHER open window (incl. torn-off projects
   // and pop-outs) — without this a toggle only repaints the window it came from
   for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.webContents.isDestroyed() && w.webContents.id !== e.sender.id) {
+    if (!w.webContents.isDestroyed() && w.webContents.id !== sender.id) {
       w.webContents.send('shell:theme-changed', theme)
     }
   }
+}
+ipcMain.on('shell:app-theme', (e, theme) => {
+  if (theme !== 'dark' && theme !== 'light' && theme !== 'system') return
+  const win = BrowserWindow.fromWebContents(e.sender)
+  if (win?.__kaisolaPendingAdoption) {
+    win.__kaisolaPendingTheme = theme
+    return
+  }
+  applyAppTheme(e.sender, theme)
 })
 
 if (hasSingleInstanceLock) app.whenReady().then(() => {

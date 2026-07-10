@@ -741,10 +741,29 @@ export interface KaisolaBridge {
     tabsChanged(list: Array<{ id: string; title: string; active: boolean }>): void
     /** Set the native window title to the active project (empty → the app name). */
     setTitle(title: string): void
-    /** Tear-off: ship a project (tab + persisted slice) to a NEW OS window. */
-    detachProject(payload: { tab: unknown; slice: unknown; at?: { x: number; y: number }; popped?: string[] }): Promise<{ ok: boolean }>
-    /** The new window receives the torn-off project here after it boots. */
-    onAdoptProject(cb: (payload: { tab: unknown; slice: unknown; popped?: string[] }) => void): () => void
+    /** Move a project to the existing window under `at`, else tear off a new one. */
+    detachProject(payload: {
+      tab: unknown
+      slice: unknown
+      globals?: Record<string, unknown>
+      at?: { x: number; y: number }
+      popped?: string[]
+      sourceTabCount?: number
+    }): Promise<{ ok: boolean; transferId?: string; target?: 'existing' | 'new' | 'same'; closeSource?: boolean; message?: string }>
+    /** A target receives the project and acknowledges only after atomic adoption. */
+    onAdoptProject(cb: (payload: {
+      tab: unknown
+      slice: unknown
+      globals?: Record<string, unknown>
+      popped?: string[]
+      transferId?: string
+      dropX?: number
+    }) => void): () => void
+    /** Listener is installed; main may now deliver a queued adoption safely. */
+    adoptionReady(): void
+    adoptionComplete(transferId: string, ok: boolean): void
+    /** Source-side commit after removal; closes a now-empty detached window. */
+    finishTransfer(transferId: string): Promise<{ ok: boolean }>
   }
   /** In-app software updates — the GitHub releases feed via electron-updater. */
   update?: {
@@ -1142,6 +1161,15 @@ const webMock: KaisolaBridge = {
     },
     onAdoptProject() {
       return () => {}
+    },
+    adoptionReady() {
+      /* no native windows on web */
+    },
+    adoptionComplete() {
+      /* no native windows on web */
+    },
+    async finishTransfer() {
+      return { ok: false }
     },
   },
   winCtl() {

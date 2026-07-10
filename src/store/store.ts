@@ -615,6 +615,18 @@ export interface ClosedProject {
   tab: ProjectTab
   slice: ProjectSlicePersist
 }
+/** The renderer-to-renderer payload for moving one project between OS windows.
+ * `globals` is a sanitized persisted projection: a pristine tear-off needs the
+ * same appearance/settings, while an existing receiver keeps its own shell. */
+export interface ProjectTransferPayload {
+  tab: ProjectTab
+  slice: ClosedProject['slice']
+  globals?: Record<string, unknown>
+  popped?: string[]
+  transferId?: string
+  beforeId?: string
+  dropX?: number
+}
 /** A recently opened folder (the + menu); persisted, cap 12. */
 export interface RecentProject {
   path: string
@@ -1140,10 +1152,10 @@ interface KaisolaState {
   /** ⌘⌥T — reopen the most recently closed project (cancels its pending pty kills). */
   /** No arg = most recent; a tab id targets that specific closed entry. */
   reopenClosedProject: (tabId?: string) => void
-  /** Tear a tab off into a NEW OS window (Chrome-style drag-out / menu). */
+  /** Move a tab to the window under the drop point, or tear it into a new one. */
   detachProjectToWindow: (id: string, at?: { x: number; y: number }) => Promise<void>
-  /** The receiving side of a tear-off: this window adopts the project. */
-  adoptProject: (payload: { tab: ProjectTab; slice: ClosedProject['slice']; popped?: string[] }) => void
+  /** The receiving side of a window transfer. True acknowledges safe adoption. */
+  adoptProject: (payload: ProjectTransferPayload) => boolean
   /** Rebind a missing folder onto a tab, keeping its sessions/layout. */
   locateProject: (id: string, newPath: string) => void
   pushRecentProject: (path: string) => void
@@ -1276,6 +1288,10 @@ export const POP_WINDOW_HUE = WIN_PARAMS?.get('hue') ?? null
 // slot state must not rehydrate under the adopted project — the first persist
 // then overwrites the slot key with the adopted state.
 const ADOPT_BOOT = WIN_PARAMS?.get('adopt') === '1'
+// Only the FIRST project delivered to a pristine tear-off may replace its
+// global shell preferences. Later recombinations into that same live window
+// keep the receiver's current appearance, just like Chrome.
+let adoptBootGlobalsPending = ADOPT_BOOT
 const STORE_KEY = WIN_SLOT ? `kaisola-store-w${WIN_SLOT}` : 'kaisola-store'
 // keys this store persisted under before the renames (pasola → kiasola-typo →
 // kaisola) — read-only fallbacks so existing sessions survive; writes go to the
@@ -1335,6 +1351,21 @@ const flushPersist = () => {
   if (isDesktop) void bridge.db.set(name, json).catch(() => {})
   else localStorage.setItem(name, json)
 }
+/** Durability barrier for ownership transfers and pagehide. The destination
+ * must have the project on disk before it ACKs and lets the source delete it. */
+const flushPersistSync = () => {
+  if (persistTimer != null) {
+    window.clearTimeout(persistTimer)
+    persistTimer = null
+  }
+  if (!pendingPersist) return
+  const { name, value } = pendingPersist
+  pendingPersist = null
+  const json = JSON.stringify(shapePersist(value))
+  lastPersist = { name, value: json }
+  if (isDesktop) bridge.db.setSync(name, json)
+  else localStorage.setItem(name, json)
+}
 const kaisolaStorage = {
   getItem: (name: string) => {
     if (ADOPT_BOOT) return null // fresh boot for adoption — never rehydrate
@@ -1365,15 +1396,23 @@ const kaisolaStorage = {
     else localStorage.removeItem(name)
   },
 }
+/** A one-project tear-off that was recombined is about to close. Remove its
+ * now-empty slot without pagehide resurrecting the stale adopted project. */
+const discardCurrentWindowStore = async () => {
+  if (persistTimer != null) {
+    window.clearTimeout(persistTimer)
+    persistTimer = null
+  }
+  pendingPersist = null
+  lastPersist = null
+  const keys = [STORE_KEY, ...LEGACY_STORE_KEYS(STORE_KEY)]
+  for (const key of keys) localStorage.removeItem(key)
+  if (isDesktop) await Promise.all(keys.map((key) => bridge.db.del(key).catch(() => ({ ok: false }))))
+}
 if (typeof window !== 'undefined' && !POP_TERMINAL_ID) {
   window.addEventListener('pagehide', () => {
-    if (pendingPersist) {
-      const { name, value } = pendingPersist
-      pendingPersist = null
-      const json = JSON.stringify(shapePersist(value))
-      if (isDesktop) bridge.db.setSync(name, json)
-      else localStorage.setItem(name, json)
-    } else if (isDesktop && lastPersist) {
+    if (pendingPersist) flushPersistSync()
+    else if (isDesktop && lastPersist) {
       bridge.db.setSync(lastPersist.name, lastPersist.value)
     }
   })
@@ -1704,6 +1743,8 @@ function persistSnapshot(s: KaisolaState) {
     railOpen: s.railOpen,
     claudeSessions: s.claudeSessions,
     claudeAccounts: s.claudeAccounts,
+    claudeTerminalModel: s.claudeTerminalModel,
+    claudeFastMode: s.claudeFastMode,
     // drafts survive only as long as a terminal that could replay them exists
     // somewhere (any slice, the live list, or the undo-close stack)
     termDrafts: (() => {
@@ -1728,6 +1769,27 @@ const pickGlobals = (p: Record<string, unknown>): Partial<KaisolaState> => {
   const out: Record<string, unknown> = {}
   for (const k of GLOBAL_KEYS) if (p[k] !== undefined) out[k] = p[k]
   return out as Partial<KaisolaState>
+}
+
+/** Existing windows retain their visual shell, but project-adjacent global
+ * maps must come along so an unsent terminal draft or dirty file is not lost
+ * when a tab joins a different window. A pristine tear-off takes everything. */
+const globalsForAdoption = (
+  current: KaisolaState,
+  incoming: Record<string, unknown> | undefined,
+  pristineBoot: boolean,
+): Partial<KaisolaState> => {
+  const picked = incoming ? pickGlobals(incoming) : {}
+  if (pristineBoot) {
+    if (picked.themeMode === 'system') picked.theme = systemTheme()
+    return picked
+  }
+  return {
+    ...(picked.termDrafts ? { termDrafts: { ...current.termDrafts, ...picked.termDrafts } } : {}),
+    ...(picked.unsavedBuffers ? { unsavedBuffers: { ...current.unsavedBuffers, ...picked.unsavedBuffers } } : {}),
+    ...(picked.claudeSessions ? { claudeSessions: { ...current.claudeSessions, ...picked.claudeSessions } } : {}),
+    ...(picked.latexMain ? { latexMain: { ...current.latexMain, ...picked.latexMain } } : {}),
+  }
 }
 
 /** terminalId → owning projectId across EVERY tab (active flat + all parked
@@ -4547,16 +4609,37 @@ export const useKaisola = create<KaisolaState>()(
     // pop-out immunity must TRAVEL with the project (the new window's
     // closeProject would otherwise reap a pop-out it doesn't know about)
     const popped = slice.terminals.filter((t) => poppedTerms.has(t.id)).map((t) => t.id)
-    const r = await bridge.windows.detachProject({ tab: { ...tab, activity: undefined }, slice: sanitizeSliceForPersist(slice), at, popped }).catch(() => null)
-    if (!r?.ok) return
+    // ADOPT_BOOT deliberately skips rehydrating a possibly stale slot. Carry a
+    // capped/sanitized copy of the real global preferences so its first frame
+    // does not fall back to the default theme, glass mode, or terminal styling.
+    const globals = pickGlobals(persistSnapshot(s) as unknown as Record<string, unknown>) as Record<string, unknown>
+    const r = await bridge.windows.detachProject({
+      tab: { ...tab, activity: undefined },
+      slice: sanitizeSliceForPersist(slice),
+      globals,
+      at,
+      popped,
+      sourceTabCount: s.projectTabs.length,
+    }).catch(() => null)
+    if (!r?.ok) {
+      if (r?.message) get().pushToast('warn', r.message)
+      return
+    }
+    // Dragging the only tab onto empty desktop moves the existing OS window —
+    // no second renderer, no state handoff, and no extra memory.
+    if (r.target === 'same') return
     // remove locally WITHOUT closeProject's grace-kills and WITHOUT the undo
     // stack — the project moved, it didn't close
+    let removed = false
+    let sourceBecameEmpty = false
     set((st) => {
       // the tab may have been switched/closed while the invoke was in flight —
       // recompute everything from CURRENT state, never the pre-await snapshot
       if (!st.projectTabs.some((t) => t.id === id)) return st
+      removed = true
       const nowActive = st.activeProjectId === id
       const projectTabs = st.projectTabs.filter((t) => t.id !== id)
+      sourceBecameEmpty = projectTabs.length === 0
       const projectSlices = { ...st.projectSlices }
       delete projectSlices[id]
       if (!nowActive) return { projectTabs, projectSlices }
@@ -4583,13 +4666,22 @@ export const useKaisola = create<KaisolaState>()(
         ...resetEphemeralCursors(),
       }
     })
+    // Chrome closes a detached one-tab window once that tab lands back in an
+    // existing window. Clear the throwaway slot first so restart cannot revive
+    // a ghost copy; main closes only after this explicit source-side commit.
+    if (removed && sourceBecameEmpty && r.closeSource && ADOPT_BOOT && r.transferId) {
+      await discardCurrentWindowStore()
+      await bridge.windows.finishTransfer(r.transferId).catch(() => {})
+    }
   },
   adoptProject: (payload) => {
     const rawTab = payload?.tab
     const slice = payload?.slice
-    if (!rawTab?.id || !slice) return
+    if (!rawTab?.id || !slice) return false
     // pop-out immunity carried over from the origin window
     for (const tid of payload.popped ?? []) poppedTerms.add(tid)
+    const takeBootGlobals = adoptBootGlobalsPending
+    if (takeBootGlobals) adoptBootGlobalsPending = false
     const pre = get()
     // a pristine boot (this window's lone empty launcher tab) is REPLACED,
     // Chrome-style — but its seeded terminal already spawned a real pty, and
@@ -4597,16 +4689,20 @@ export const useKaisola = create<KaisolaState>()(
     const preLone = pre.projectTabs.length === 1 ? pre.projectTabs[0] : null
     const prePristine = !!preLone && !preLone.workspacePath && !pre.workspacePath && pre.assistantThreads.length <= 1 && pre.terminals.length <= 1
     const doomed = prePristine ? pre.terminals.filter((t) => !poppedTerms.has(t.id)).map((t) => t.id) : []
+    let adopted = false
     set((s) => {
-      if (s.projectTabs.some((t) => t.id === rawTab.id)) return s // double delivery
+      if (s.projectTabs.some((t) => t.id === rawTab.id)) { adopted = true; return s } // idempotent ACK
       // parity with reopen: cancel any pending grace-kills on these ptys
       for (const t of slice.terminals ?? []) termCloseTokens.set(t.id, (termCloseTokens.get(t.id) ?? 0) + 1)
       const tab = { ...rawTab, activity: undefined }
       const target: ProjectSliceMemory = { ...freshSlice(tab.id), ...slice }
+      const globalPatch = globalsForAdoption(s, payload.globals, takeBootGlobals)
       const lone = s.projectTabs.length === 1 ? s.projectTabs[0] : null
       const pristine = !!lone && !lone.workspacePath && !s.workspacePath && s.assistantThreads.length <= 1 && s.terminals.length <= 1
+      adopted = true
       if (pristine) {
         return {
+          ...globalPatch,
           projectTabs: [tab],
           activeProjectId: tab.id,
           projectSlices: {},
@@ -4615,8 +4711,12 @@ export const useKaisola = create<KaisolaState>()(
         }
       }
       const outgoing = pick(s, PROJECT_SLICE_MEMORY_KEYS)
+      const projectTabs = [...s.projectTabs]
+      const before = payload.beforeId ? projectTabs.findIndex((t) => t.id === payload.beforeId) : -1
+      projectTabs.splice(before >= 0 ? before : projectTabs.length, 0, tab)
       return {
-        projectTabs: [...s.projectTabs, tab],
+        ...globalPatch,
+        projectTabs,
         activeProjectId: tab.id,
         projectSlices: { ...s.projectSlices, [s.activeProjectId]: outgoing },
         ...target,
@@ -4624,6 +4724,15 @@ export const useKaisola = create<KaisolaState>()(
       }
     })
     for (const tid of doomed) void bridge.terminal.kill(tid)
+    if (takeBootGlobals && adopted) {
+      const after = get()
+      document.documentElement.dataset.theme = after.theme
+      document.documentElement.dataset.perf = after.perfMode
+      document.documentElement.dataset.termbg = after.termBackground
+      bridge.setAppTheme?.(after.themeMode === 'system' ? 'system' : after.theme)
+    }
+    if (adopted && !POP_TERMINAL_ID) flushPersistSync()
+    return adopted
   },
   locateProject: (id, newPath) => {
     set((s) => {

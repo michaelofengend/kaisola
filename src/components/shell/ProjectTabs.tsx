@@ -91,6 +91,7 @@ export function ProjectTabs() {
               className="ptab"
               role="tab"
               aria-selected={active}
+              data-project-id={tab.id}
               data-active={active}
               data-state={tab.activity ?? (active && activeRunning ? 'running' : undefined)}
               style={{ '--ptab-hue': tab.color ?? tab.hue } as CSSProperties}
@@ -99,8 +100,8 @@ export function ProjectTabs() {
               onDragOver={(e) => e.preventDefault()}
               onDrop={() => { if (dragRef.current) reorderProjects(dragRef.current, tab.id); dragRef.current = null }}
               onDragEnd={(e) => {
-                // dropped OUTSIDE the window (browser-style tear-off) → new OS
-                // window at the drop point; drops inside were reorder targets
+                // Dropped outside THIS window: main hit-tests other Kaisola tab
+                // strips first (recombine), otherwise creates a tear-off there.
                 const out = e.clientX < -8 || e.clientY < -8 || e.clientX > window.innerWidth + 8 || e.clientY > window.innerHeight + 8
                 if (out && dragRef.current === tab.id) void detachProjectToWindow(tab.id, { x: e.screenX, y: e.screenY })
                 dragRef.current = null

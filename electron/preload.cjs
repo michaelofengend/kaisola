@@ -365,13 +365,18 @@ const bridge = {
       ipcRenderer.on('pop:closed', listener)
       return () => ipcRenderer.removeListener('pop:closed', listener)
     },
-    // Chrome-style tear-off: ship a project to a new window / receive one
+    // Chrome-style window transfer: main may reuse a window under the cursor
+    // or create a hidden tear-off; explicit ready/adopted handshakes prevent
+    // listener races and keep the source authoritative until receipt.
     detachProject: (payload) => ipcRenderer.invoke('window:detach-project', payload),
     onAdoptProject: (cb) => {
       const listener = (_e, payload) => cb(payload)
       ipcRenderer.on('tab:adopt', listener)
       return () => ipcRenderer.removeListener('tab:adopt', listener)
     },
+    adoptionReady: () => ipcRenderer.send('window:adopt-ready'),
+    adoptionComplete: (transferId, ok) => ipcRenderer.send('window:adopt-complete', { transferId, ok }),
+    finishTransfer: (transferId) => ipcRenderer.invoke('window:finish-transfer', { transferId }),
     // ── project tabs: native File/Window menu ⇄ the renderer's tab strip ──
     // Listeners mirror the onPopClosed pattern; each returns an unsubscribe.
     onNewTab: (cb) => {

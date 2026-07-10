@@ -252,3 +252,45 @@ test('renderer-window glass swap is blocked during an active ACP turn', () => {
     _acpTest.connections.delete(key)
   }
 })
+
+test('idle project-scoped ACP connection and lease move between renderers without restart', () => {
+  const from = { id: 801 }
+  const to = { id: 802 }
+  const scope = 'proj-transfer'
+  const rendererKey = `codex::thread-1@@${scope}`
+  const oldKey = `${from.id}|${rendererKey}`
+  const newKey = `${to.id}|${rendererKey}`
+  const entry = {
+    sender: from,
+    meta: { key: rendererKey, presetId: 'codex', scope, sessionId: 'sess-transfer' },
+    current: { sender: null, channel: null },
+    inFlightTurns: 0,
+    conn: { alive: true, canLoadSession: true },
+  }
+  _acpTest.connections.set(oldKey, entry)
+  _acpTest.connectionLeases.set(oldKey, new Set(['thread-1']))
+  try {
+    assert.deepEqual(_acpTest.acpProjectTransferState(from, scope), { safe: true, busy: false, connecting: false, awaitingPermission: false })
+    const moved = _acpTest.transferAcpProject(from, to, scope)
+    assert.equal(moved.ok, true)
+    assert.equal(moved.moved, 1)
+    assert.equal(_acpTest.connections.has(oldKey), false)
+    assert.equal(_acpTest.connections.get(newKey), entry)
+    assert.equal(entry.sender, to)
+    assert.deepEqual([..._acpTest.connectionLeases.get(newKey)], ['thread-1'])
+    moved.rollback()
+    assert.equal(_acpTest.connections.get(oldKey), entry)
+    assert.equal(_acpTest.connections.has(newKey), false)
+    assert.equal(entry.sender, from)
+
+    entry.current = { sender: from, channel: 'acp:update:busy' }
+    entry.inFlightTurns = 1
+    assert.deepEqual(_acpTest.acpProjectTransferState(from, scope), { safe: false, busy: true, connecting: false, awaitingPermission: false })
+    assert.equal(_acpTest.transferAcpProject(from, to, scope).ok, false)
+  } finally {
+    _acpTest.connections.delete(oldKey)
+    _acpTest.connections.delete(newKey)
+    _acpTest.connectionLeases.delete(oldKey)
+    _acpTest.connectionLeases.delete(newKey)
+  }
+})

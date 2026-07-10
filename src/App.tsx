@@ -1,5 +1,5 @@
 import { useEffect, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
-import { useKaisola, sessionOrderIds, projectIdForEvent, terminalOwnerMap, POP_TERMINAL_ID, type AgentFeedItem, type ProjectTab, type ClosedProject } from './store/store'
+import { useKaisola, sessionOrderIds, projectIdForEvent, terminalOwnerMap, POP_TERMINAL_ID, type AgentFeedItem, type ProjectTab, type ProjectTransferPayload } from './store/store'
 import { bridge, isDesktop } from './lib/bridge'
 import { uid, nowISO } from './domain/ids'
 import { requestIsSensitive, requestMatchesRules, allowOnceAnswer } from './lib/permissionRules'
@@ -259,9 +259,23 @@ export default function App() {
       w?.onCloseTab?.(() => { const s = useKaisola.getState(); s.closeProject(s.activeProjectId) }),
       w?.onReopenTab?.(() => useKaisola.getState().reopenClosedProject()),
       w?.onActivateTab?.((id) => useKaisola.getState().switchProject(id)),
-      // Chrome-style tear-off: a project shipped from another window lands here
-      w?.onAdoptProject?.((payload) => useKaisola.getState().adoptProject(payload as { tab: ProjectTab; slice: ClosedProject['slice'] })),
+      // Chrome-style transfer: insert at the cursor's tab-strip position, apply
+      // atomically, then ACK. The source keeps its copy until this succeeds.
+      w?.onAdoptProject?.((raw) => {
+        const payload = raw as ProjectTransferPayload
+        let beforeId: string | undefined
+        if (Number.isFinite(payload.dropX)) {
+          const x = Number(payload.dropX)
+          const before = [...document.querySelectorAll<HTMLElement>('.ptab[data-project-id]')]
+            .find((el) => x < el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2)
+          beforeId = before?.dataset.projectId
+        }
+        let ok = false
+        try { ok = useKaisola.getState().adoptProject({ ...payload, beforeId }) } catch { ok = false }
+        if (payload.transferId) w.adoptionComplete(payload.transferId, ok)
+      }),
     ]
+    w?.adoptionReady?.()
     return () => { for (const off of offs) off?.() }
   }, [])
 
