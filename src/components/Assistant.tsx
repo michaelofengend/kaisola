@@ -1824,7 +1824,73 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
         ))}
       </div>
 
-      <div className="composer">
+      <div className="composer-stack">
+        {queuedPrompts.length > 0 && (
+          <div className="composer-queue-preview" aria-label="Queued prompts">
+            {queuedPrompts.map((q) => (
+              <div key={q.id} className="composer-queue-preview-row" title={q.text}>
+                <Icon className="composer-queue-mark" name="CornerDownRight" size={15} aria-hidden="true" />
+                <span className="composer-queue-text">{q.text}</span>
+                <span className="composer-queue-actions">
+                  {busy && (
+                    <button
+                      className="composer-queue-action composer-queue-steer"
+                      onClick={() => {
+                        if (!canSteer) {
+                          setNotice(`${agentName} will receive this next; mid-turn steering is not available for this connection.`)
+                          return
+                        }
+                        removeQueuedAssistantPrompt(active.id, q.id)
+                        void steerText(q)
+                      }}
+                      title={canSteer ? `Steer ${agentName} now` : `${agentName} will receive this next; mid-turn steering is unavailable`}
+                      aria-label={canSteer ? `Steer ${agentName} with queued prompt now` : `Steering ${agentName} is unavailable`}
+                      aria-disabled={!canSteer}
+                    >
+                      <Icon name="CornerDownRight" size={14} />
+                      <span>Steer</span>
+                    </button>
+                  )}
+                  <button
+                    className="composer-queue-action"
+                    onClick={() => removeQueuedAssistantPrompt(active.id, q.id)}
+                    title="Delete queued prompt"
+                    aria-label="Delete queued prompt"
+                  >
+                    <Icon name="Trash2" size={14} />
+                  </button>
+                  <button
+                    className="composer-queue-action"
+                    onClick={() => {
+                      if (input.trim() || attachments.length || mentions.length) {
+                        setNotice('Finish or clear the current draft before editing a queued prompt.')
+                        inputRef.current?.focus()
+                        return
+                      }
+                      removeQueuedAssistantPrompt(active.id, q.id)
+                      setAssistantDraft(active.id, {
+                        text: q.text,
+                        attachments: q.attachments,
+                        mentions: q.mentions,
+                        speed: q.speed,
+                      }, projectId)
+                      requestAnimationFrame(() => {
+                        if (!inputRef.current) return
+                        autoGrow(inputRef.current)
+                        inputRef.current.focus()
+                      })
+                    }}
+                    title="Edit queued prompt"
+                    aria-label="Edit queued prompt"
+                  >
+                    <Icon name="Ellipsis" size={15} />
+                  </button>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="composer">
         {attachments.length > 0 && (
           <div className="composer-attach">
             {attachments.map((f) => (
@@ -1842,20 +1908,6 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
                 <Icon name={mentionIcon(mn.kind)} size={11} /> {mn.label.length > 30 ? `${mn.label.slice(0, 30)}…` : mn.label}
                 <button onClick={() => setAssistantDraft(active.id, { mentions: mentions.filter((x) => x.id !== mn.id) }, projectId)}><Icon name="X" size={10} /></button>
               </span>
-            ))}
-          </div>
-        )}
-        {queuedPrompts.length > 0 && (
-          <div className="composer-queue-preview" aria-label="Queued prompts">
-            {queuedPrompts.map((q, index) => (
-              <div key={q.id} className="composer-queue-preview-row" title={q.text}>
-                <span className="composer-queue-order">{index === 0 ? 'Next' : index + 1}</span>
-                <span className="composer-queue-text">{q.text}</span>
-                {q.speed === 'fast' && <Icon name="Gauge" size={10} />}
-                <button onClick={() => removeQueuedAssistantPrompt(active.id, q.id)} title="Remove queued prompt" aria-label="Remove queued prompt">
-                  <Icon name="X" size={10} />
-                </button>
-              </div>
             ))}
           </div>
         )}
@@ -1916,6 +1968,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
             </button>
           )}
         </div>
+      </div>
       </div>
 
       {/* session identity — which agent, which folder, connection — sits quietly at the bottom */}

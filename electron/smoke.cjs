@@ -994,7 +994,13 @@ app.whenReady().then(async () => {
     await wait(80)
     const queueRows = [...(assistant?.querySelectorAll('.composer-queue-preview-row') || [])]
     const inlinePreview = queueRows.length === 2 && !assistant?.querySelector('.composer-queue-capsule')
-    const aboveComposer = assistant?.querySelector('.composer-queue-preview')?.nextElementSibling?.classList.contains('composer-input') === true
+    const preview = assistant?.querySelector('.composer-queue-preview')
+    const aboveComposer = preview?.nextElementSibling?.classList.contains('composer') === true
+    const attachedComposer = preview?.parentElement?.classList.contains('composer-stack') === true
+    const queueActions = queueRows.every((row) =>
+      !!row.querySelector('.composer-queue-steer') &&
+      !!row.querySelector('[aria-label="Delete queued prompt"]') &&
+      !!row.querySelector('[aria-label="Edit queued prompt"]'))
     const noQueueToast = ![...document.querySelectorAll('.toast')].some((node) => /queued prompt/i.test(node.textContent || ''))
     for (let i = 0; i < 180; i++) {
       const state = get()
@@ -1013,6 +1019,8 @@ app.whenReady().then(async () => {
       queuedTwo,
       inlinePreview,
       aboveComposer,
+      attachedComposer,
+      queueActions,
       noQueueToast,
       drained: !(state.assistantPromptQueues[tid] || []).length && !state.assistantThreads.find((thread) => thread.id === tid)?.busy,
       combinedOnce: users.length === 2 && combined.length === 1 && combined[0].text.indexOf('queue-smoke-second') < combined[0].text.indexOf('queue-smoke-third'),
@@ -3553,7 +3561,7 @@ a^2 + b^2 = c^2
     !attentionUi.running || !attentionUi.pulse || !attentionUi.completed || !attentionUi.still || !attentionUi.cleared || !attentionUi.nativeAttention ||
     !brokerActivity.created || !brokerActivity.began || !brokerActivity.detached || !brokerActivity.settled || !brokerActivity.durable ||
     !transcriptTypography.rendered || !transcriptTypography.normalWhitespace || !transcriptTypography.readableWidth || !transcriptTypography.compactStream || !transcriptTypography.compactList || !transcriptTypography.differentiatedRoles || !transcriptTypography.promptRail || !transcriptTypography.promptRailMinimal || !transcriptTypography.localLink || !transcriptTypography.linkOpenedFiles || !transcriptTypography.lineJump ||
-    !promptQueue.started || !promptQueue.queuedTwo || !promptQueue.inlinePreview || !promptQueue.aboveComposer || !promptQueue.noQueueToast || !promptQueue.drained || !promptQueue.combinedOnce || !promptQueue.deliveredTogether || !promptQueue.newestSpeedWon ||
+    !promptQueue.started || !promptQueue.queuedTwo || !promptQueue.inlinePreview || !promptQueue.aboveComposer || !promptQueue.attachedComposer || !promptQueue.queueActions || !promptQueue.noQueueToast || !promptQueue.drained || !promptQueue.combinedOnce || !promptQueue.deliveredTogether || !promptQueue.newestSpeedWon ||
     !steer.started || !steer.neverQueued || !steer.steeredWhileBusy || !steer.twoUserTurns || !steer.followDelivered || !steer.baseDelivered || !steer.endedIdle ||
     !persist.stored || !persist.hasTheme || !persist.hasAgent || !persist.hasThread || !persist.hasChatTurn || !persist.hasDraft || !persist.draftBounded || !persist.hasCodexEffort || !persist.hasTabLayout ||
     !boot.hasId || !boot.ran ||

@@ -733,9 +733,17 @@ details.assistant-tool.tool-artifacts > summary::-webkit-details-marker { displa
 .drop-item-desc { display: block; font-size: var(--fs-11); color: var(--text-3); line-height: var(--lh-snug); margin-top: 1px; }
 
 /* ── Composer (the input box with mode/model/thinking controls) ──────────── */
+.composer-stack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin: var(--sp-3) var(--sp-5) var(--sp-2);
+  flex-shrink: 0;
+}
 .composer {
   position: relative;
-  margin: var(--sp-3) var(--sp-5) var(--sp-2);
+  margin: 0;
   border: 1px solid var(--border);
   border-radius: var(--r-5);
   background: var(--bg-2);
@@ -743,6 +751,7 @@ details.assistant-tool.tool-artifacts > summary::-webkit-details-marker { displa
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  z-index: 2;
   transition: border-color var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out);
 }
 /* the WHOLE box shines on focus — one seamless surface, no inner seam */
@@ -790,39 +799,60 @@ details.assistant-tool.tool-artifacts > summary::-webkit-details-marker { displa
 .composer-queue-preview {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  max-height: 82px;
-  margin: var(--sp-2) var(--sp-3) 0;
+  max-height: 132px;
+  margin: 0 clamp(12px, 4cqw, 28px) -13px;
+  padding-bottom: 13px;
   overflow-y: auto;
-  opacity: .62;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: var(--r-4) var(--r-4) 0 0;
+  background: color-mix(in srgb, var(--bg-2) 96%, transparent);
+  box-shadow: 0 -5px 24px color-mix(in srgb, var(--shadow-color) 9%, transparent);
+  color: var(--text-1);
+  z-index: 1;
 }
-.composer-queue-preview:hover,
-.composer-queue-preview:focus-within { opacity: .9; }
 .composer-queue-preview-row {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto 20px;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 5px;
-  min-height: 21px;
-  padding: 1px 2px 1px 5px;
-  border-radius: var(--r-1);
-  color: var(--text-2);
-  font-size: var(--fs-10);
-  background: color-mix(in srgb, var(--bg-3) 42%, transparent);
+  gap: var(--sp-2);
+  min-height: 40px;
+  padding: 4px var(--sp-3) 4px var(--sp-4);
+  border-bottom: 1px solid var(--border-faint);
+  font-size: var(--fs-13);
+  background: transparent;
 }
-.composer-queue-preview-row:hover { color: var(--text-1); background: color-mix(in srgb, var(--bg-3) 72%, transparent); }
-.composer-queue-order { color: var(--text-3); font-size: 9px; text-transform: uppercase; letter-spacing: .03em; }
+.composer-queue-preview-row:last-child { border-bottom: 0; }
+.composer-queue-preview-row:hover { color: var(--text-0); background: color-mix(in srgb, var(--bg-3) 48%, transparent); }
+.composer-queue-mark { color: var(--text-3); }
 .composer-queue-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.composer-queue-preview-row > svg { color: var(--accent); }
-.composer-queue-preview-row > button {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
+.composer-queue-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.composer-queue-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
   border-radius: var(--r-1);
   color: var(--text-3);
 }
-.composer-queue-preview-row > button:hover { color: var(--text-0); background: var(--hover-overlay); }
+.composer-queue-action:hover { color: var(--text-0); background: var(--hover-overlay); }
+.composer-queue-steer { padding: 0 8px; font-size: var(--fs-12); }
+.composer-queue-steer:hover { color: var(--accent); }
+.composer-queue-steer[aria-disabled='true'] { opacity: .58; }
+.composer-queue-steer[aria-disabled='true']:hover { color: var(--text-3); }
+@container (max-width: 280px) {
+  .composer-queue-preview { margin-inline: 8px; }
+  .composer-queue-preview-row { padding-inline: 9px; }
+  .composer-queue-steer > span { display: none; }
+  .composer-queue-steer { padding: 0 6px; }
+}
 .composer-bar {
   display: flex;
   align-items: center;
