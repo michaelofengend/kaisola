@@ -24,7 +24,7 @@ test('Firebase refresh only treats explicit credential revocation as a sign-out'
   assert.equal(__test.isTerminalRefreshError('network request failed'), false)
 })
 
-test('Google token exchange sends the desktop client secret and preserves the provider error', async () => {
+test('Google token exchange uses PKCE without requiring a desktop client secret', async () => {
   const previous = global.fetch
   let requestBody
   global.fetch = async (_url, init) => {
@@ -42,14 +42,14 @@ test('Google token exchange sends the desktop client secret and preserves the pr
       __test.exchangeGoogleCode({
         code: 'code',
         clientId: 'client.apps.googleusercontent.com',
-        clientSecret: 'GOCSPX-test-secret',
+        clientSecret: null,
         redirectUri: 'http://127.0.0.1:49152/oauth/callback',
         verifier: 'verifier',
         nonce: 'nonce',
       }),
       /authorization code is invalid/,
     )
-    assert.equal(requestBody.get('client_secret'), 'GOCSPX-test-secret')
+    assert.equal(requestBody.has('client_secret'), false)
     assert.equal(requestBody.get('code_verifier'), 'verifier')
   } finally {
     global.fetch = previous

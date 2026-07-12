@@ -132,9 +132,6 @@ function authConfigIssue() {
   if (!clientId || !cfg.projectId || !cfg.apiKey || !cfg.serverUrl) {
     return 'This build is missing its Firebase public config or Google Desktop OAuth client.'
   }
-  if (!googleClientSecret(clientId)) {
-    return 'Download the matching Desktop OAuth JSON from Google Cloud and save it as electron/google-oauth.json.'
-  }
   return null
 }
 
@@ -389,7 +386,7 @@ function registerAuthHandlers(ipcMain) {
     const clientSecret = googleClientSecret(clientId)
     const firebase = readPublicConfig()
     const configIssue = authConfigIssue()
-    if (configIssue || !clientId || !clientSecret || !firebase.projectId || !firebase.apiKey || !firebase.serverUrl) {
+    if (configIssue || !clientId || !firebase.projectId || !firebase.apiKey || !firebase.serverUrl) {
       return { ok: false, configured: false, message: configIssue || 'This build is missing its Firebase or Google OAuth configuration.' }
     }
     if (googleSession) return { ok: true, configured: true, pending: true }
