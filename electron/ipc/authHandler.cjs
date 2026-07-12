@@ -14,6 +14,7 @@ const sessions = new Map() // id → child
 const ANSI = /\x1b\[[0-9;]*m/g
 const URL_RE = /https?:\/\/[^\s"'<>)\]]+/
 const CODE_RE = /\b[A-Z0-9]{4}-[A-Z0-9]{4,8}\b/
+const GOOGLE_CALLBACK_PORT = 42813
 let googleSession = null
 let firebaseTokenCache = null
 let firebaseRefreshPromise = null
@@ -36,7 +37,6 @@ class FirebaseSessionError extends Error {
 }
 
 const b64url = (value) => Buffer.from(value).toString('base64url')
-const pkceChallenge = (verifier) => b64url(crypto.createHash('sha256').update(verifier).digest())
 
 function decodeIdToken(token) {
   try {
@@ -66,12 +66,6 @@ const firebaseConfigPaths = () => [
   path.join(__dirname, '..', 'firebase-config.json'),
   ...(app.isPackaged ? [path.join(process.resourcesPath, 'firebase-config.json')] : []),
 ]
-const oauthConfigPaths = () => [
-  path.join(app.getPath('userData'), 'google-oauth.json'),
-  path.join(__dirname, '..', 'google-oauth.json'),
-  ...(app.isPackaged ? [path.join(process.resourcesPath, 'google-oauth.json')] : []),
-]
-
 function readPublicConfig() {
   let fileConfig = {}
   for (const file of firebaseConfigPaths()) {
@@ -82,7 +76,6 @@ function readPublicConfig() {
   }
   const projectId = String(process.env.KAISOLA_FIREBASE_PROJECT_ID || fileConfig.projectId || '').trim()
   const apiKey = String(process.env.KAISOLA_FIREBASE_API_KEY || fileConfig.apiKey || '').trim()
-  const googleClientId = String(process.env.KAISOLA_GOOGLE_CLIENT_ID || fileConfig.googleClientId || '').trim()
   const serverUrl = String(
     process.env.KAISOLA_AUTH_SERVER_URL ||
     fileConfig.serverUrl ||
@@ -91,46 +84,14 @@ function readPublicConfig() {
   return {
     projectId: /^[a-z0-9][a-z0-9-]{4,60}$/.test(projectId) ? projectId : null,
     apiKey: /^[a-zA-Z0-9_-]{20,200}$/.test(apiKey) ? apiKey : null,
-    googleClientId: /^[a-zA-Z0-9._-]+\.apps\.googleusercontent\.com$/.test(googleClientId) ? googleClientId : null,
     serverUrl: /^https:\/\//.test(serverUrl) ? serverUrl : null,
   }
 }
 
-function googleClientId() {
-  const firebaseId = readPublicConfig().googleClientId
-  if (firebaseId) return firebaseId
-  const fromEnv = String(process.env.KAISOLA_GOOGLE_CLIENT_ID || '').trim()
-  if (/^[a-zA-Z0-9._-]+\.apps\.googleusercontent\.com$/.test(fromEnv)) return fromEnv
-  for (const file of oauthConfigPaths()) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
-      const id = String(parsed.clientId || parsed.installed?.client_id || '').trim()
-      if (/^[a-zA-Z0-9._-]+\.apps\.googleusercontent\.com$/.test(id)) return id
-    } catch { /* optional config */ }
-  }
-  return null
-}
-
-function googleClientSecret(clientId = googleClientId()) {
-  const fromEnv = String(process.env.KAISOLA_GOOGLE_CLIENT_SECRET || '').trim()
-  if (/^[a-zA-Z0-9._-]{8,256}$/.test(fromEnv)) return fromEnv
-  for (const file of oauthConfigPaths()) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
-      const credentials = parsed.installed || parsed.web || parsed
-      const id = String(credentials?.client_id || credentials?.clientId || '').trim()
-      const secret = String(credentials?.client_secret || credentials?.clientSecret || '').trim()
-      if (id === clientId && /^[a-zA-Z0-9._-]{8,256}$/.test(secret)) return secret
-    } catch { /* optional config */ }
-  }
-  return null
-}
-
 function authConfigIssue() {
   const cfg = readPublicConfig()
-  const clientId = googleClientId()
-  if (!clientId || !cfg.projectId || !cfg.apiKey || !cfg.serverUrl) {
-    return 'This build is missing its Firebase public config or Google Desktop OAuth client.'
+  if (!cfg.projectId || !cfg.apiKey || !cfg.serverUrl) {
+    return 'This build is missing its Firebase public configuration.'
   }
   return null
 }
@@ -190,22 +151,54 @@ function clearFirebaseSession() {
   try { fs.rmSync(firebaseSessionPath(), { force: true }) } catch { /* already signed out */ }
 }
 
-async function firebaseSignInWithGoogle(googleAccessToken, requestUri, cfg = readPublicConfig()) {
+function firebaseAuthMessage(payload, status, stage) {
+  const code = String(payload?.error?.message || '').split(/\s|:/)[0]
+  if (code === 'OPERATION_NOT_ALLOWED') return 'Google sign-in is not enabled for this Firebase project.'
+  if (code === 'INVALID_IDP_RESPONSE' || code === 'INVALID_PENDING_TOKEN') return 'Google returned a sign-in response that Firebase could not verify.'
+  if (code === 'FEDERATED_USER_ID_ALREADY_LINKED') return 'This Google account is already linked to another Kaisola account.'
+  return `${stage} failed${code ? `: ${code.replace(/_/g, ' ').toLowerCase()}` : ` (${status})`}.`
+}
+
+async function createFirebaseAuthUri(continueUri, context, cfg = readPublicConfig()) {
+  const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${encodeURIComponent(cfg.apiKey)}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      providerId: 'google.com',
+      continueUri,
+      oauthScope: 'openid email profile',
+      authFlowType: 'CODE_FLOW',
+      context,
+    }),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(firebaseAuthMessage(payload, response.status, 'Starting Google sign-in'))
+  let authUri
+  try { authUri = new URL(payload.authUri) } catch { /* handled below */ }
+  const sessionId = String(payload.sessionId || '')
+  if (!authUri || authUri.protocol !== 'https:' || authUri.hostname !== 'accounts.google.com' || !sessionId || sessionId.length > 4096) {
+    throw new Error('Firebase returned an invalid Google sign-in session.')
+  }
+  return { authUri: authUri.toString(), sessionId }
+}
+
+async function firebaseSignInWithAuthResponse({ requestUri, postBody, sessionId, context }, cfg = readPublicConfig()) {
   const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=${encodeURIComponent(cfg.apiKey)}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      postBody: new URLSearchParams({ access_token: googleAccessToken, providerId: 'google.com' }).toString(),
+      postBody,
       requestUri,
-      returnIdpCredential: false,
+      sessionId,
+      returnIdpCredential: true,
       returnSecureToken: true,
     }),
   })
   const payload = await response.json().catch(() => ({}))
   if (!response.ok || !payload.idToken || !payload.refreshToken || !payload.localId) {
-    const code = payload?.error?.message
-    throw new Error(code ? `Firebase sign-in failed: ${String(code).replace(/_/g, ' ').toLowerCase()}.` : `Firebase sign-in failed (${response.status}).`)
+    throw new Error(firebaseAuthMessage(payload, response.status, 'Completing Google sign-in'))
   }
+  if (payload.context !== context) throw new Error('Firebase returned a sign-in response for a different session.')
   return payload
 }
 
@@ -262,7 +255,14 @@ async function verifyServerSession(idToken, cfg = readPublicConfig()) {
   return payload.user
 }
 
-const callbackPage = (ok, message) => `<!doctype html><meta charset="utf-8"><title>Kaisola</title><style>body{font:15px -apple-system,BlinkMacSystemFont,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;color:#202124;background:#fff}.card{max-width:420px;padding:32px;text-align:center}h1{font-size:22px;margin:0 0 10px}p{color:#6b7280;line-height:1.5}</style><div class="card"><h1>${ok ? 'Signed in to Kaisola' : 'Sign-in did not finish'}</h1><p>${message}</p></div>`
+const escapeHtml = (value) => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;')
+
+const callbackPage = (ok, message) => `<!doctype html><meta charset="utf-8"><title>Kaisola</title><style>body{font:15px -apple-system,BlinkMacSystemFont,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;color:#202124;background:#fff}.card{max-width:460px;padding:32px;text-align:center}h1{font-size:22px;margin:0 0 10px}p{color:#6b7280;line-height:1.5}</style><div class="card"><h1>${ok ? 'Signed in to Kaisola' : 'Sign-in did not finish'}</h1><p>${escapeHtml(message)}</p></div>`
 
 function closeGoogleSession() {
   const current = googleSession
@@ -270,37 +270,6 @@ function closeGoogleSession() {
   if (!current) return
   clearTimeout(current.timer)
   try { current.server.close() } catch { /* already closed */ }
-}
-
-async function exchangeGoogleCode({ code, clientId, clientSecret, redirectUri, verifier, nonce }) {
-  const body = new URLSearchParams({
-    code,
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    grant_type: 'authorization_code',
-    code_verifier: verifier,
-  })
-  if (clientSecret) body.set('client_secret', clientSecret)
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body,
-  })
-  const tokens = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    const detail = String(tokens.error_description || tokens.error || '')
-      .replace(/[\r\n]+/g, ' ')
-      .slice(0, 240)
-    throw new Error(detail ? `Google token exchange failed: ${detail}` : `Google token exchange failed (${response.status}).`)
-  }
-  const claims = decodeIdToken(tokens.id_token)
-  const issuerOk = claims?.iss === 'https://accounts.google.com' || claims?.iss === 'accounts.google.com'
-  if (!claims || !issuerOk || claims.aud !== clientId || claims.nonce !== nonce || Number(claims.exp) * 1000 <= Date.now()) {
-    throw new Error('Google returned an invalid identity token.')
-  }
-  if (!tokens.access_token) throw new Error('Google did not return an access token for Firebase.')
-  if (!claims.sub || !claims.email) throw new Error('Google did not return an email identity.')
-  return { tokens, claims }
 }
 
 function registerAuthHandlers(ipcMain) {
@@ -382,23 +351,19 @@ function registerAuthHandlers(ipcMain) {
   })
 
   ipcMain.handle('app-auth:google-start', async (event) => {
-    const clientId = googleClientId()
-    const clientSecret = googleClientSecret(clientId)
     const firebase = readPublicConfig()
     const configIssue = authConfigIssue()
-    if (configIssue || !clientId || !firebase.projectId || !firebase.apiKey || !firebase.serverUrl) {
-      return { ok: false, configured: false, message: configIssue || 'This build is missing its Firebase or Google OAuth configuration.' }
+    if (configIssue || !firebase.projectId || !firebase.apiKey || !firebase.serverUrl) {
+      return { ok: false, configured: false, message: configIssue || 'This build is missing its Firebase configuration.' }
     }
     if (googleSession) return { ok: true, configured: true, pending: true }
 
-    const verifier = b64url(crypto.randomBytes(48))
-    const state = b64url(crypto.randomBytes(24))
-    const nonce = b64url(crypto.randomBytes(24))
+    const context = b64url(crypto.randomBytes(24))
     const sender = event.sender
     const server = http.createServer()
     const listening = new Promise((resolve, reject) => {
       server.once('error', reject)
-      server.listen(0, '127.0.0.1', resolve)
+      server.listen(GOOGLE_CALLBACK_PORT, '127.0.0.1', resolve)
     })
     try {
       await listening
@@ -410,7 +375,7 @@ function registerAuthHandlers(ipcMain) {
       server.close()
       return { ok: false, configured: true, message: 'Could not open the secure local OAuth callback.' }
     }
-    const redirectUri = `http://127.0.0.1:${address.port}/oauth/callback`
+    const redirectUri = `http://localhost:${address.port}/oauth/callback`
     const timer = setTimeout(() => {
       if (!sender.isDestroyed()) sender.send('app-auth:changed', { ok: false, message: 'Google sign-in timed out.' })
       closeGoogleSession()
@@ -425,13 +390,11 @@ function registerAuthHandlers(ipcMain) {
           res.writeHead(404).end()
           return
         }
-        const returnedState = url.searchParams.get('state')
-        const code = url.searchParams.get('code')
         const oauthError = url.searchParams.get('error')
         if (oauthError) throw new Error(oauthError === 'access_denied' ? 'Google sign-in was cancelled.' : `Google sign-in failed: ${oauthError}`)
-        if (!code || returnedState !== state) throw new Error('The OAuth callback could not be verified.')
-        const { tokens, claims } = await exchangeGoogleCode({ code, clientId, clientSecret, redirectUri, verifier, nonce })
-        const firebaseSession = await firebaseSignInWithGoogle(tokens.access_token, 'http://localhost', firebase)
+        const postBody = url.search.slice(1)
+        if (!postBody || postBody.length > 20_000) throw new Error('The Google sign-in callback was empty or too large.')
+        const firebaseSession = await firebaseSignInWithAuthResponse({ requestUri: redirectUri, postBody, sessionId: googleSession?.sessionId, context }, firebase)
         firebaseTokenCache = {
           idToken: firebaseSession.idToken,
           expiresAt: Date.now() + Math.max(60, Number(firebaseSession.expiresIn) || 3600) * 1000,
@@ -439,6 +402,7 @@ function registerAuthHandlers(ipcMain) {
         const serverUser = await verifyServerSession(firebaseSession.idToken, firebase)
         firebaseSessionGeneration += 1
         writeFirebaseSession(firebaseSession.refreshToken)
+        const claims = decodeIdToken(firebaseSession.idToken) || {}
         const avatarUrl = safeAvatarUrl(firebaseSession.photoUrl || claims.picture)
         const profile = {
           provider: 'google',
@@ -455,27 +419,18 @@ function registerAuthHandlers(ipcMain) {
       } catch (error) {
         firebaseTokenCache = null
         const message = String(error?.message || error)
-        res.writeHead(400, { 'content-type': 'text/html; charset=utf-8' }).end(callbackPage(false, 'Return to Kaisola and try again.'))
+        res.writeHead(400, { 'content-type': 'text/html; charset=utf-8' }).end(callbackPage(false, `${message} Return to Kaisola and try again.`))
         if (!sender.isDestroyed()) sender.send('app-auth:changed', { ok: false, configured: true, message })
       } finally {
         closeGoogleSession()
       }
     })
 
-    const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
-    authUrl.search = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      response_type: 'code',
-      scope: 'openid email profile',
-      code_challenge: pkceChallenge(verifier),
-      code_challenge_method: 'S256',
-      state,
-      nonce,
-      prompt: 'select_account',
-    }).toString()
     try {
-      await shell.openExternal(authUrl.toString())
+      const { authUri, sessionId } = await createFirebaseAuthUri(redirectUri, context, firebase)
+      if (!googleSession) throw new Error('The local Google sign-in session closed before it could start.')
+      googleSession.sessionId = sessionId
+      await shell.openExternal(authUri)
       return { ok: true, configured: true, pending: true }
     } catch (error) {
       closeGoogleSession()
@@ -502,5 +457,5 @@ function disposeAuth() {
 module.exports = {
   registerAuthHandlers,
   disposeAuth,
-  __test: { pkceChallenge, decodeIdToken, exchangeGoogleCode, firebaseSignInWithGoogle, isTerminalRefreshError, readPublicConfig },
+  __test: { decodeIdToken, createFirebaseAuthUri, firebaseSignInWithAuthResponse, escapeHtml, isTerminalRefreshError, readPublicConfig },
 }

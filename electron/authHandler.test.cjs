@@ -2,11 +2,6 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const { __test } = require('./ipc/authHandler.cjs')
 
-test('Google OAuth uses the RFC 7636 S256 PKCE challenge', () => {
-  const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'
-  assert.equal(__test.pkceChallenge(verifier), 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM')
-})
-
 test('Google ID token payload decoding is bounded to valid JWT structure', () => {
   const token = [
     Buffer.from('{}').toString('base64url'),
@@ -24,39 +19,41 @@ test('Firebase refresh only treats explicit credential revocation as a sign-out'
   assert.equal(__test.isTerminalRefreshError('network request failed'), false)
 })
 
-test('Google token exchange uses PKCE without requiring a desktop client secret', async () => {
+test('Firebase creates a Google authorization URI for the exact loopback callback', async () => {
   const previous = global.fetch
-  let requestBody
-  global.fetch = async (_url, init) => {
-    requestBody = new URLSearchParams(init.body)
+  let request
+  global.fetch = async (url, init) => {
+    request = { url, body: JSON.parse(init.body) }
     return {
-      ok: false,
-      status: 400,
+      ok: true,
+      status: 200,
       async json() {
-        return { error: 'invalid_request', error_description: 'authorization code is invalid' }
+        return { authUri: 'https://accounts.google.com/o/oauth2/auth?state=firebase-state', sessionId: 'firebase-session' }
       },
     }
   }
   try {
-    await assert.rejects(
-      __test.exchangeGoogleCode({
-        code: 'code',
-        clientId: 'client.apps.googleusercontent.com',
-        clientSecret: null,
-        redirectUri: 'http://127.0.0.1:49152/oauth/callback',
-        verifier: 'verifier',
-        nonce: 'nonce',
-      }),
-      /authorization code is invalid/,
+    const result = await __test.createFirebaseAuthUri(
+      'http://127.0.0.1:49152/oauth/callback',
+      'local-context',
+      { apiKey: 'public-api-key' },
     )
-    assert.equal(requestBody.has('client_secret'), false)
-    assert.equal(requestBody.get('code_verifier'), 'verifier')
+    assert.equal(result.sessionId, 'firebase-session')
+    assert.match(result.authUri, /^https:\/\/accounts\.google\.com\//)
+    assert.match(request.url, /accounts:createAuthUri\?key=public-api-key$/)
+    assert.deepEqual(request.body, {
+      providerId: 'google.com',
+      continueUri: 'http://127.0.0.1:49152/oauth/callback',
+      oauthScope: 'openid email profile',
+      authFlowType: 'CODE_FLOW',
+      context: 'local-context',
+    })
   } finally {
     global.fetch = previous
   }
 })
 
-test('Google credential is exchanged for a bounded Firebase session', async () => {
+test('Firebase exchanges the browser callback only for its matching local context', async () => {
   const previous = global.fetch
   let request
   global.fetch = async (url, init) => {
@@ -64,18 +61,52 @@ test('Google credential is exchanged for a bounded Firebase session', async () =
     return {
       ok: true,
       async json() {
-        return { localId: 'firebase-user', idToken: 'firebase-id', refreshToken: 'firebase-refresh', expiresIn: '3600' }
+        return { localId: 'firebase-user', idToken: 'firebase-id', refreshToken: 'firebase-refresh', expiresIn: '3600', context: 'local-context' }
       },
     }
   }
   try {
-    const result = await __test.firebaseSignInWithGoogle('google-id', 'http://localhost', { apiKey: 'public-api-key' })
+    const result = await __test.firebaseSignInWithAuthResponse({
+      requestUri: 'http://127.0.0.1:49152/oauth/callback',
+      postBody: 'code=google-code&state=firebase-state',
+      sessionId: 'firebase-session',
+      context: 'local-context',
+    }, { apiKey: 'public-api-key' })
     assert.equal(result.localId, 'firebase-user')
     assert.match(request.url, /accounts:signInWithIdp\?key=public-api-key$/)
-    assert.equal(request.body.requestUri, 'http://localhost')
-    assert.equal(request.body.postBody, 'access_token=google-id&providerId=google.com')
+    assert.equal(request.body.requestUri, 'http://127.0.0.1:49152/oauth/callback')
+    assert.equal(request.body.postBody, 'code=google-code&state=firebase-state')
+    assert.equal(request.body.sessionId, 'firebase-session')
+    assert.equal(request.body.returnIdpCredential, true)
     assert.equal(request.body.returnSecureToken, true)
   } finally {
     global.fetch = previous
   }
+})
+
+test('Firebase callback context mismatch is rejected', async () => {
+  const previous = global.fetch
+  global.fetch = async () => ({
+    ok: true,
+    async json() {
+      return { localId: 'firebase-user', idToken: 'firebase-id', refreshToken: 'firebase-refresh', context: 'other-context' }
+    },
+  })
+  try {
+    await assert.rejects(
+      __test.firebaseSignInWithAuthResponse({
+        requestUri: 'http://127.0.0.1:49152/oauth/callback',
+        postBody: 'code=google-code&state=firebase-state',
+        sessionId: 'firebase-session',
+        context: 'local-context',
+      }, { apiKey: 'public-api-key' }),
+      /different session/,
+    )
+  } finally {
+    global.fetch = previous
+  }
+})
+
+test('OAuth callback page escapes diagnostic text', () => {
+  assert.equal(__test.escapeHtml('<script>bad()</script>'), '&lt;script&gt;bad()&lt;/script&gt;')
 })
