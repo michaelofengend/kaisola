@@ -1,4 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1024 1024" role="img" aria-label="Kaisola">
   <title>Kaisola</title>
-  <image x="0" y="0" width="1024" height="1024" href="kaisola-icon.png" xlink:href="kaisola-icon.png"/>
+  <defs>
+    <!-- Keep transparent breathing room around the macOS-style rounded tile. -->
+    <clipPath id="app-icon-mask">
+      <rect x="64" y="64" width="896" height="896" rx="196" ry="196"/>
+    </clipPath>
+  </defs>
+  <image
+    x="0"
+    y="0"
+    width="1024"
+    height="1024"
+    href="kaisola-icon-source.png"
+    xlink:href="kaisola-icon-source.png"
+    clip-path="url(#app-icon-mask)"
+  />
 </svg>
