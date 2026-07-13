@@ -81,6 +81,7 @@ export function CommandPalette() {
   const [active, setActive] = useState(0)
   const [files, setFiles] = useState<string[]>([])
   const [filesTruncated, setFilesTruncated] = useState(false)
+  const [backlogPath, setBacklogPath] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -114,6 +115,18 @@ export function CommandPalette() {
       setFiles(r.files ?? [])
       setFilesTruncated(!!r.truncated)
     })
+    return () => { cancelled = true }
+  }, [open, mode, workspacePath])
+
+  // the backlog is a per-project convention — only offer the command where
+  // docs/BACKLOG.md actually exists
+  useEffect(() => {
+    if (!open || mode !== 'commands' || !workspacePath || !isDesktop) return
+    let cancelled = false
+    const p = `${workspacePath}/docs/BACKLOG.md`
+    bridge.fs.read(p)
+      .then((r) => { if (!cancelled) setBacklogPath(r.ok ? p : null) })
+      .catch(() => { if (!cancelled) setBacklogPath(null) })
     return () => { cancelled = true }
   }, [open, mode, workspacePath])
 
@@ -173,6 +186,14 @@ export function CommandPalette() {
     }))]
     const nav: Command[] = [
       { id: 'go-file', group: 'Navigate', label: 'Go to file…', hint: '⌘P', icon: 'FileSearch', run: () => togglePalette('files') },
+      ...(backlogPath ? [{
+        id: 'backlog',
+        group: 'Navigate',
+        label: 'Backlog',
+        hint: 'docs/BACKLOG.md — drop screenshots/videos while editing',
+        icon: 'ListChecks',
+        run: () => { requestFile(backlogPath); close() },
+      } satisfies Command] : []),
       { id: 'extensions', group: 'Navigate', label: 'Extensions', hint: 'Languages, previews, and MCP servers', icon: 'Blocks', run: () => { close(); openExtensionsCenter() } },
       { id: 'new-terminal', group: 'Navigate', label: 'New terminal', icon: 'SquareTerminal', run: () => { requestTerminal(undefined, { cwd: workspacePath ?? undefined }); close() } },
       { id: 'git-panel', group: 'Navigate', label: 'Git: stage & commit', hint: 'Side-by-side diffs, without leaving the window', icon: 'GitCommitHorizontal', run: () => { useKaisola.getState().openGitPanel(); close() } },
@@ -334,7 +355,7 @@ export function CommandPalette() {
     }))
     return [...nav, ...workspace, ...agents, ...wfCmds, ...actions, ...history, ...autonomy]
   // `open` is a dep so each palette-open rebuilds the session-jump entries
-  }, [open, close, togglePalette, requestTerminal, workspacePath, followAgent, toggleFollowAgent, repoCheckpoints, snapshotWorkspace, restoreRepoCheckpoint, pushToast, runAgent, runStageAgents, enqueueStageAgents, workflows, runWorkflow, verifyCitations, buildCitationGraph, ingestAllPdfs, toggleTheme, setLayoutMode, setDock, toggleCanvas, toggleRail, setTabLayout, layoutMode, canvasOpen, railOpen, setAutonomy, loadDemo, clearProject, checkpoints, undoLast, restoreCheckpoint, proposals, focusProposal])
+  }, [open, close, togglePalette, requestTerminal, workspacePath, backlogPath, requestFile, followAgent, toggleFollowAgent, repoCheckpoints, snapshotWorkspace, restoreRepoCheckpoint, pushToast, runAgent, runStageAgents, enqueueStageAgents, workflows, runWorkflow, verifyCitations, buildCitationGraph, ingestAllPdfs, toggleTheme, setLayoutMode, setDock, toggleCanvas, toggleRail, setTabLayout, layoutMode, canvasOpen, railOpen, setAutonomy, loadDemo, clearProject, checkpoints, undoLast, restoreCheckpoint, proposals, focusProposal])
 
   // ── ranked rows for the current mode ──
   const commandRows = useMemo(() => {

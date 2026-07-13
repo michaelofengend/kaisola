@@ -465,6 +465,28 @@ function registerFsHandlers(ipcMain) {
     }
   })
 
+  // ── media import: copy an OS file (by path) into a document's asset folder —
+  // bytes never cross the renderer, so large screen recordings are fine ──
+  ipcMain.handle('fs:importAsset', async (_e, { source, targetDir, name } = {}) => {
+    try {
+      if (typeof source !== 'string' || !source || typeof targetDir !== 'string' || !targetDir) {
+        return { ok: false, message: 'bad paths' }
+      }
+      const stat = await fsp.stat(source)
+      if (!stat.isFile()) return { ok: false, message: 'Not a file.' }
+      await fsp.mkdir(targetDir, { recursive: true })
+      const base = (typeof name === 'string' && name ? name : path.basename(source)).replace(/[/\\]/g, '-')
+      const ext = path.extname(base)
+      const stem = path.basename(base, ext)
+      let target = path.join(targetDir, base)
+      for (let n = 2; fs.existsSync(target); n++) target = path.join(targetDir, `${stem}-${n}${ext}`)
+      await fsp.copyFile(source, target, fs.constants.COPYFILE_EXCL)
+      return { ok: true, path: target, name: path.basename(target) }
+    } catch (err) {
+      return { ok: false, message: String((err && err.message) || err) }
+    }
+  })
+
   ipcMain.handle('fs:rename', async (_e, { from, to } = {}) => {
     try {
       if (typeof from !== 'string' || typeof to !== 'string' || !from || !to) return { ok: false, message: 'bad paths' }

@@ -359,6 +359,7 @@ const bridge = {
     readImage: (path) => ipcRenderer.invoke('fs:readImage', { path }),
     write: (path, content) => ipcRenderer.invoke('fs:write', { path, content }),
     create: (path, dir) => ipcRenderer.invoke('fs:create', { path, dir }),
+    importAsset: (source, targetDir, name) => ipcRenderer.invoke('fs:importAsset', { source, targetDir, name }),
     rename: (from, to) => ipcRenderer.invoke('fs:rename', { from, to }),
     trash: (path) => ipcRenderer.invoke('fs:trash', { path }),
     reveal: (path) => ipcRenderer.invoke('fs:reveal', { path }),

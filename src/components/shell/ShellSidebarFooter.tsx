@@ -27,7 +27,6 @@ export function ShellSidebarFooter({ floating = false }: { floating?: boolean })
         )}
         <ShellTools includeSettings={false} />
         <InboxButton />
-        <span className="grow" />
       </div>
     </div>
   )

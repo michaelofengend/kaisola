@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent,
   type ReactElement,
   type ReactNode,
 } from 'react'
@@ -15,6 +16,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import remarkGfm from 'remark-gfm'
 import TurndownService from 'turndown'
 import { bridge, type FsReadResult } from '../lib/bridge'
+import { useKaisola } from '../store/store'
 
 export type DocumentPreviewKind = 'markdown' | 'html' | 'csv' | 'json'
 
@@ -186,6 +188,47 @@ function resolveMarkdownAsset(sourcePath: string | undefined, src: string | unde
     else out.push(part)
   }
   return `/${out.join('/')}`.replace(/^\/+/, '/')
+}
+
+// ── drop-to-attach: images/videos dropped on a markdown document copy into a
+// sibling `<stem>-media/` folder (BACKLOG.md → backlog-media/) and link at the
+// caret. Non-media drops bubble to the window handler (open as tab). ──
+const IMAGE_DROP = /\.(png|jpe?g|gif|webp|svg|avif|heic)$/i
+const VIDEO_DROP = /\.(mov|mp4|m4v|webm|avi|mkv)$/i
+
+function assetDirFor(sourcePath: string) {
+  const dir = dirname(sourcePath)
+  const stem = sourcePath.slice(dir.length + 1).replace(/\.[^.]+$/, '')
+  const slug = stem.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'doc'
+  return { abs: `${dir}/${slug}-media`, rel: `${slug}-media` }
+}
+
+function droppedMedia(event: DragEvent) {
+  return Array.from(event.dataTransfer?.files ?? [])
+    .map((file) => ({ name: file.name, path: bridge.pathForFile?.(file) ?? '' }))
+    .filter((f) => f.path && (IMAGE_DROP.test(f.path) || VIDEO_DROP.test(f.path)))
+}
+
+function escapeAttr(value: string) {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** Restore the drop-point caret inside the contentEditable surface and insert
+ *  html there — Turndown converts it back to markdown via the onInput sync. */
+function insertHtmlAtPoint(root: HTMLElement | null, range: Range | null, htmlChunk: string) {
+  const surface = root?.querySelector<HTMLElement>('article[contenteditable]')
+  const selection = window.getSelection()
+  if (!surface || !selection) return false
+  surface.focus()
+  selection.removeAllRanges()
+  if (range && surface.contains(range.startContainer)) selection.addRange(range)
+  else {
+    const end = document.createRange()
+    end.selectNodeContents(surface)
+    end.collapse(false)
+    selection.addRange(end)
+  }
+  return document.execCommand('insertHTML', false, htmlChunk)
 }
 
 function sanitizeHtml(raw: string, query: string) {
@@ -517,6 +560,42 @@ export const DocumentPreview = memo(function DocumentPreview({ text, kind, sourc
     )
   }
 
+  const onMediaDragOver = (event: DragEvent) => {
+    if (sourcePath && event.dataTransfer?.types.includes('Files')) event.preventDefault()
+  }
+  const onMediaDrop = (event: DragEvent) => {
+    if (!sourcePath) return
+    const media = droppedMedia(event)
+    if (!media.length) return
+    event.preventDefault()
+    event.stopPropagation()
+    const { pushToast } = useKaisola.getState()
+    if (!editable) {
+      pushToast('info', 'Switch to Edit to attach media to this document.')
+      return
+    }
+    const range = document.caretRangeFromPoint?.(event.clientX, event.clientY) ?? null
+    const root = rootRef.current
+    void (async () => {
+      const { abs, rel } = assetDirFor(sourcePath)
+      const chunks: string[] = []
+      for (const item of media) {
+        const copied = await bridge.fs.importAsset(item.path, abs, item.name)
+        if (!copied?.ok || !copied.name) {
+          pushToast('error', `Could not attach ${item.name}: ${copied?.message ?? 'copy failed'}`)
+          continue
+        }
+        const href = escapeAttr(encodeURI(`${rel}/${copied.name}`))
+        const label = escapeAttr(copied.name.replace(/\.[^.]+$/, ''))
+        chunks.push(IMAGE_DROP.test(copied.name) ? `<img src="${href}" alt="${label}">` : `<a href="${href}">${label}</a>`)
+      }
+      if (!chunks.length) return
+      if (!insertHtmlAtPoint(root, range, chunks.join('<br>'))) {
+        pushToast('warn', `Saved to ${rel}/ — link it manually; the caret was lost.`)
+      }
+    })()
+  }
+
   const rich = (tag: keyof JSX.IntrinsicElements) => markdownComponent(tag, editable ? '' : highlight) as never
   return (
     <div
@@ -524,6 +603,8 @@ export const DocumentPreview = memo(function DocumentPreview({ text, kind, sourc
       className="fx-doc fx-doc-markdown"
       data-editing={editable || undefined}
       onDoubleClick={editable ? undefined : onEdit}
+      onDragOver={onMediaDragOver}
+      onDrop={onMediaDrop}
     >
       {editable && <span className="fx-md-editing"><span /> Editing</span>}
       {editable ? (

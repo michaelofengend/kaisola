@@ -614,6 +614,7 @@
 /* Global controls live with navigation, not in the project tab strip. The
    active left sidebar owns one quiet utility row. */
 .shell-sidebar-footer {
+  position: relative;
   display: flex;
   flex: 0 0 auto;
   padding: var(--sp-2);
@@ -624,6 +625,7 @@
 .shell-sidebar-footer-tools {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: var(--sp-1);
   min-width: 0;
   width: 100%;
@@ -634,12 +636,15 @@
   height: 28px;
   flex: 0 0 28px;
 }
-.shell-sidebar-footer-tools .app-account-trigger { width: 28px; min-width: 28px; padding: 0; }
+/* the popover anchors to the footer itself, spanning its width, so it can
+   never clip at the panel edge no matter where the (centered) bell sits */
+.shell-sidebar-footer .inbox-wrap { position: static; }
 .shell-sidebar-footer .inbox-menu {
   top: auto;
   bottom: calc(100% + 6px);
-  left: 0;
-  right: auto;
+  left: var(--sp-2);
+  right: var(--sp-2);
+  min-width: 0;
 }
 .shell-sidebar-footer[data-floating] {
   position: absolute;
