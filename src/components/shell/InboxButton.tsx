@@ -52,8 +52,11 @@ export function InboxButton() {
       })
     }
     for (const p of pendingPermissions) {
-      // the connection key is `<agent>::<threadId>` — jump reveals the asking session
-      rows.push({ key: `perm:${p.permId}`, sessionId: p.key.split('::')[1], icon: 'ShieldQuestion', label: p.title, detail: `${p.agent} · permission` })
+      // Mesh workers are private tabs; their permission UI is aggregated on the
+      // visible parent, so Inbox must never jump to the clipped child surface.
+      const childId = p.key.split('::')[1]
+      const child = st.assistantThreads.find((thread) => thread.id === childId)
+      rows.push({ key: `perm:${p.permId}`, sessionId: child?.groupParentId ?? childId, icon: 'ShieldQuestion', label: p.title, detail: `${p.agent} · permission` })
     }
     for (const tab of projectTabs) {
       if (tab.id === activeProjectId) continue

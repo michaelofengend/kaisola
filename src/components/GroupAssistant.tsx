@@ -1,5 +1,5 @@
-import { memo, useEffect, useMemo, useState } from 'react'
-import { Assistant } from './Assistant'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { Assistant, PermissionCard } from './Assistant'
 import { Icon } from './Icon'
 import { ProviderIcon } from './ProviderIcon'
 import { bridge, type AcpAgent, type AcpControls, type AcpPreset, type WorktreeFile } from '../lib/bridge'
@@ -7,14 +7,24 @@ import {
   useKaisola,
   type AssistantDraft,
   type AssistantRuntime,
+  type ClaudeEffort,
   type GroupSessionMember,
   type GroupSessionPhase,
+  type GroupSessionState,
   type WorktreeSession,
 } from '../store/store'
 
 const EMPTY_DRAFT: AssistantDraft = { text: '', attachments: [], mentions: [], speed: 'default' }
 const MAX_SHARED_TEXT = 28_000
-type CandidateDiff = { ok: boolean; patch?: string; files?: WorktreeFile[]; message?: string }
+const MAX_GROUP_MEMBERS = 6
+const CLAUDE_EFFORTS: Array<{ value: ClaudeEffort; label: string }> = [
+  { value: 'low', label: 'Low effort' },
+  { value: 'medium', label: 'Medium effort' },
+  { value: 'high', label: 'High effort' },
+  { value: 'xhigh', label: 'Extra-high effort' },
+  { value: 'max', label: 'Maximum effort' },
+]
+type CandidateDiff = { ok: boolean; patch?: string; files?: WorktreeFile[]; sha?: string; message?: string }
 
 const modelControl = (controls?: AcpControls) => {
   if (controls?.models) return {
@@ -64,6 +74,11 @@ const phaseLabel: Record<GroupSessionPhase, string> = {
 }
 
 const runningPhases = new Set<GroupSessionPhase>(['answering', 'negotiating', 'assigning', 'executing', 'reviewing', 'integrating', 'critiquing', 'synthesizing'])
+const newAttemptId = () => `mesh-${Date.now().toString(36)}-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
+
+const effortControl = (controls?: AcpControls) => controls?.configOptions.find((option) =>
+  /reasoning.*effort|effort/i.test(`${option.id} ${option.name} ${option.category ?? ''}`),
+)
 
 function memberText(
   member: GroupSessionMember,
@@ -88,9 +103,15 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
   const thread = useKaisola((state) => state.assistantThreads.find((candidate) => candidate.id === threadId))
   const childThreads = useKaisola((state) => state.assistantThreads.filter((candidate) => candidate.groupParentId === threadId))
   const runtimes = useKaisola((state) => state.assistantRuntimes)
+  const promptQueues = useKaisola((state) => state.assistantPromptQueues)
+  const pendingPermissions = useKaisola((state) => state.pendingPermissions)
   const projectId = useKaisola((state) => state.activeProjectId)
   const workspacePath = useKaisola((state) => state.workspacePath)
+  const autonomy = useKaisola((state) => state.autonomy)
+  const claudeAccounts = useKaisola((state) => state.claudeAccounts)
+  const claudeAccountId = useKaisola((state) => state.claudeAccountId)
   const enqueue = useKaisola((state) => state.enqueueAssistantPrompt)
+  const takeQueue = useKaisola((state) => state.takeAssistantPromptQueue)
   const setGroup = useKaisola((state) => state.setGroupSession)
   const addGroupMember = useKaisola((state) => state.addGroupMember)
   const removeGroupMember = useKaisola((state) => state.removeGroupMember)
@@ -99,28 +120,47 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
   const clearGroupWorktreeSessions = useKaisola((state) => state.clearGroupWorktreeSessions)
   const setThreadCwd = useKaisola((state) => state.setAssistantThreadCwd)
   const setBusy = useKaisola((state) => state.setThreadBusy)
+  const setThreadQueuePaused = useKaisola((state) => state.setThreadQueuePaused)
+  const setThreadClaudeEffort = useKaisola((state) => state.setThreadClaudeEffort)
+  const setThreadAcpSession = useKaisola((state) => state.setThreadAcpSession)
+  const answerPermission = useKaisola((state) => state.answerPermission)
+  const alwaysAllowPermission = useKaisola((state) => state.alwaysAllowPermission)
   const requestNewGroup = useKaisola((state) => state.requestNewGroup)
   const pushToast = useKaisola((state) => state.pushToast)
   const [draft, setDraft] = useState('')
   const [transitioning, setTransitioning] = useState(false)
+  const transitionLock = useRef(false)
+  const beginTransition = () => {
+    if (transitionLock.current) return false
+    transitionLock.current = true
+    setTransitioning(true)
+    return true
+  }
+  const endTransition = () => {
+    transitionLock.current = false
+    setTransitioning(false)
+  }
   const [agents, setAgents] = useState<AcpAgent[]>([])
   const [presets, setPresets] = useState<AcpPreset[]>([])
   const group = thread?.group
   const members = group?.members ?? []
   const phase = group?.phase ?? 'idle'
+  const groupPermissions = pendingPermissions.filter((permission) =>
+    members.some((member) => permission.key === `${member.agentKey}::${member.threadId}`),
+  )
 
   useEffect(() => {
     if (!group || phase !== 'idle') return
     let live = true
     const keys = members.map((member) => `${member.agentKey}::${member.threadId}`)
     const refreshRoster = () => {
-      void bridge.acp.status(keys).then((result) => { if (live) setAgents(result.agents) }).catch(() => {})
+      void bridge.acp.status(keys, projectId).then((result) => { if (live) setAgents(result.agents) }).catch(() => {})
     }
     refreshRoster()
     void bridge.acp.presets().then((rows) => { if (live) setPresets(rows) }).catch(() => {})
     const timer = window.setInterval(refreshRoster, 1_500)
     return () => { live = false; window.clearInterval(timer) }
-  }, [group, members, phase])
+  }, [group, members, phase, projectId])
 
   const liveValues = (saved?: Record<string, string>) => Object.fromEntries(
     members.map((member) => [member.threadId, memberText(member, saved, runtimes, group?.baselines, thread?.lastActivityAt)]),
@@ -146,61 +186,278 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
     [group?.baselines, group?.reviews, members, runtimes],
   )
 
-  const stageSettled = (targets: GroupSessionMember[]) => targets.every((member) => {
+  const addressedMembers = () => {
+    const explicit = new Set(group?.stageTargets ?? [])
+    if (explicit.size) return members.filter((member) => explicit.has(member.threadId))
+    if (phase === 'assigning' || phase === 'synthesizing' || phase === 'integrating') {
+      const lead = members.find((member) => member.threadId === group?.leadThreadId) ?? members[members.length - 1]
+      return lead ? [lead] : []
+    }
+    return members
+  }
+  const runReceipt = (member: GroupSessionMember) => {
+    const receipt = runtimes[member.threadId]?.lastRun
+    if (!receipt || !group?.stageAttemptId || receipt.attemptId !== group.stageAttemptId) return undefined
+    return receipt
+  }
+  const stageValue = (member: GroupSessionMember) => runReceipt(member)?.text?.trim()
+    || responseAfter(runtimes[member.threadId], group?.baselines?.[member.threadId] ?? 0, thread?.lastActivityAt)
+  const memberStatus = (member: GroupSessionMember) => {
+    const receipt = runReceipt(member)
+    if (receipt?.ok && stageValue(member)) return 'succeeded' as const
+    if (receipt?.ok) return 'failed' as const
+    if (receipt?.stopReason === 'cancelled') return 'cancelled' as const
+    if (receipt && !receipt.ok) return 'failed' as const
+    if (childThreads.find((candidate) => candidate.id === member.threadId)?.busy) return 'running' as const
+    if ((promptQueues[member.threadId] ?? []).length) return 'queued' as const
+    if (group?.pausedPending?.includes(member.threadId)) return 'paused' as const
+    if (!group?.stageAttemptId && !runningPhases.has(phase)) return phase === 'done' ? 'complete' as const : 'ready' as const
+    return group?.stageStatus?.[member.threadId] ?? 'queued'
+  }
+  const currentMemberStatuses = Object.fromEntries(members.map((member) => [member.threadId, memberStatus(member)]))
+  const stageSucceeded = (member: GroupSessionMember) => {
     const child = childThreads.find((candidate) => candidate.id === member.threadId)
+    if (!child || child.busy) return false
+    if (group?.stageAttemptId) return !!runReceipt(member)?.ok && !!stageValue(member)
+    // Compatibility for Mesh sessions persisted before terminal receipts.
     const baseline = group?.baselines?.[member.threadId] ?? 0
-    return !!child && !child.busy && !!responseAfter(runtimes[member.threadId], baseline, thread?.lastActivityAt)
-  })
+    return !!responseAfter(runtimes[member.threadId], baseline, thread?.lastActivityAt)
+  }
+  const stageSettled = (targets: GroupSessionMember[]) => targets.every(stageSucceeded)
   const stageValues = (targets: GroupSessionMember[]) => Object.fromEntries(
-    targets.map((member) => [member.threadId, responseAfter(runtimes[member.threadId], group?.baselines?.[member.threadId] ?? 0, thread?.lastActivityAt)]),
+    targets.map((member) => [member.threadId, stageValue(member)]),
   )
+
+  const snapshotPatchFor = (targets: GroupSessionMember[], values: Record<string, string>): Partial<GroupSessionState> => {
+    if (phase === 'answering') return { answers: { ...(group?.answers ?? {}), ...values } }
+    if (phase === 'negotiating' || phase === 'critiquing') return { negotiations: { ...(group?.negotiations ?? group?.critiques ?? {}), ...values } }
+    if (phase === 'executing') return { executions: { ...(group?.executions ?? {}), ...values } }
+    if (phase === 'reviewing') return { reviews: { ...(group?.reviews ?? {}), ...values } }
+    if (phase === 'assigning' || phase === 'synthesizing') {
+      const lead = targets[0]
+      return lead ? { jointPlan: values[lead.threadId] } : {}
+    }
+    if (phase === 'integrating') {
+      const lead = targets[0]
+      const integration = lead ? values[lead.threadId] : ''
+      return integration ? { integration, synthesis: integration } : {}
+    }
+    return {}
+  }
+  const stageSnapshotPatch = (targets: GroupSessionMember[]): Partial<GroupSessionState> =>
+    snapshotPatchFor(targets, stageValues(targets))
+
+  const pauseStage = async (reason?: string) => {
+    if (!group || !runningPhases.has(phase) || group.paused) return
+    const targets = addressedMembers()
+    const completed = targets.filter(stageSucceeded)
+    const pending = targets.filter((member) => !stageSucceeded(member))
+    const status = Object.fromEntries(targets.map((member) => [member.threadId, completed.includes(member) ? 'succeeded' : 'paused'])) as GroupSessionState['stageStatus']
+    setGroup(threadId, {
+      ...stageSnapshotPatch(completed),
+      paused: true,
+      pausedAt: Date.now(),
+      pausedPending: pending.map((member) => member.threadId),
+      stageStatus: status,
+      ...(reason ? { error: reason } : {}),
+    }, projectId)
+    setBusy(threadId, false, projectId)
+    for (const member of pending) {
+      setThreadQueuePaused(member.threadId, true, projectId)
+      takeQueue(member.threadId, projectId)
+    }
+    await Promise.all(pending.map((member) =>
+      bridge.acp.cancel(`${member.agentKey}::${member.threadId}`, projectId).catch(() => ({ ok: false })),
+    ))
+  }
 
   // Promote only after every addressed worker returned a real assistant turn.
   // Snapshots preserve the shared audit trail when private runtimes later page.
   useEffect(() => {
-    if (!group || members.length < 2) return
+    if (!group || members.length < 2 || group.paused) return
+    const targets = addressedMembers()
+    const failed = targets.find((member) => {
+      const receipt = runReceipt(member)
+      return receipt && (!receipt.ok || !stageValue(member))
+    })
+    if (failed) {
+      const receipt = runReceipt(failed)
+      const detail = receipt?.ok
+        ? ' returned no final response'
+        : ` stopped${receipt?.stopReason ? ` (${receipt.stopReason.replaceAll('_', ' ')})` : ''}`
+      void pauseStage(`${failed.label}${detail}. Continue retries only unfinished members.`)
+      return
+    }
     const legacyNegotiating = phase === 'critiquing'
     const legacyAssigning = phase === 'synthesizing'
+    const finished = {
+      baselines: undefined,
+      stageAttemptId: undefined,
+      stagePrompts: undefined,
+      stageTargets: undefined,
+      stageStatus: undefined,
+      paused: undefined,
+      pausedAt: undefined,
+      pausedPending: undefined,
+      error: undefined,
+    }
     if (phase === 'review-ready') {
       setGroup(threadId, { phase: 'plan-ready', negotiations: group.negotiations ?? group.critiques }, projectId)
-    } else if (phase === 'answering' && stageSettled(members)) {
-      setGroup(threadId, { phase: 'ready', answers: stageValues(members), baselines: undefined }, projectId)
+    } else if (phase === 'answering' && stageSettled(targets)) {
+      setGroup(threadId, { ...finished, phase: 'ready', answers: { ...(group.answers ?? {}), ...stageValues(targets) } }, projectId)
       setBusy(threadId, false, projectId)
-    } else if ((phase === 'negotiating' || legacyNegotiating) && stageSettled(members)) {
-      setGroup(threadId, { phase: 'plan-ready', negotiations: stageValues(members), baselines: undefined }, projectId)
+    } else if ((phase === 'negotiating' || legacyNegotiating) && stageSettled(targets)) {
+      setGroup(threadId, { ...finished, phase: 'plan-ready', negotiations: { ...(group.negotiations ?? group.critiques ?? {}), ...stageValues(targets) } }, projectId)
       setBusy(threadId, false, projectId)
     } else if (phase === 'assigning' || legacyAssigning) {
-      const lead = members.find((member) => member.threadId === group.leadThreadId) ?? members[members.length - 1]
+      const lead = targets[0]
       if (lead && stageSettled([lead])) {
-        setGroup(threadId, { phase: 'assigned', jointPlan: responseAfter(runtimes[lead.threadId], group.baselines?.[lead.threadId] ?? 0, thread?.lastActivityAt), baselines: undefined }, projectId)
+        setGroup(threadId, { ...finished, phase: 'assigned', jointPlan: stageValue(lead) }, projectId)
         setBusy(threadId, false, projectId)
       }
-    } else if (phase === 'executing' && stageSettled(members)) {
-      setGroup(threadId, { phase: 'execution-ready', executions: stageValues(members), baselines: undefined }, projectId)
+    } else if (phase === 'executing' && stageSettled(targets)) {
+      setGroup(threadId, { ...finished, phase: 'execution-ready', executions: { ...(group.executions ?? {}), ...stageValues(targets) } }, projectId)
       setBusy(threadId, false, projectId)
-    } else if (phase === 'reviewing' && stageSettled(members)) {
-      setGroup(threadId, { phase: 'merge-ready', reviews: stageValues(members), baselines: undefined }, projectId)
+    } else if (phase === 'reviewing' && stageSettled(targets)) {
+      setGroup(threadId, { ...finished, phase: 'merge-ready', reviews: { ...(group.reviews ?? {}), ...stageValues(targets) } }, projectId)
       setBusy(threadId, false, projectId)
     } else if (phase === 'integrating') {
-      const lead = members.find((member) => member.threadId === group.leadThreadId) ?? members[members.length - 1]
+      const lead = targets[0]
       if (lead && stageSettled([lead])) {
-        const integration = responseAfter(runtimes[lead.threadId], group.baselines?.[lead.threadId] ?? 0, thread?.lastActivityAt)
-        setGroup(threadId, { phase: 'done', integration, synthesis: integration, baselines: undefined }, projectId)
+        const integration = stageValue(lead)
+        setGroup(threadId, { ...finished, phase: 'done', integration, synthesis: integration }, projectId)
         setBusy(threadId, false, projectId)
       }
     }
     // stage helpers are derived from the selected live project slice.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [childThreads, group, members, phase, projectId, runtimes, setBusy, setGroup, threadId])
+  }, [childThreads, group, members, phase, projectId, promptQueues, runtimes, setBusy, setGroup, threadId])
+
+  // A renderer restart clears transient busy bits. If a prompt had already left
+  // the durable outbox but never produced a matching terminal receipt, pause the
+  // stage instead of hanging forever or inferring success from partial text.
+  useEffect(() => {
+    if (!group?.stageAttemptId || group.paused || !runningPhases.has(phase)) return
+    const attemptId = group.stageAttemptId
+    const timer = window.setTimeout(() => {
+      const current = useKaisola.getState().assistantThreads.find((candidate) => candidate.id === threadId)?.group
+      if (!current || current.stageAttemptId !== attemptId || current.paused) return
+      const missing = addressedMembers().filter((member) => {
+        const child = useKaisola.getState().assistantThreads.find((candidate) => candidate.id === member.threadId)
+        const receipt = useKaisola.getState().assistantRuntimes[member.threadId]?.lastRun
+        const queued = useKaisola.getState().assistantPromptQueues[member.threadId]?.length
+        return !child?.busy && !queued && receipt?.attemptId !== attemptId
+      })
+      if (missing.length) void pauseStage(`Mesh recovered an interrupted stage. Continue resumes ${missing.map((member) => member.label).join(', ')} without repeating completed work.`)
+    }, 1_800)
+    return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group?.stageAttemptId, group?.paused, phase, threadId])
 
   const queueStage = (nextPhase: GroupSessionPhase, prompts: Record<string, string>, targets = members) => {
     const startedAt = Date.now()
+    const attemptId = newAttemptId()
     const baselines = Object.fromEntries(targets.map((member) => [member.threadId, startedAt]))
-    setGroup(threadId, { phase: nextPhase, baselines, error: undefined }, projectId)
+    const stagePrompts = Object.fromEntries(targets.flatMap((member) => prompts[member.threadId] ? [[member.threadId, prompts[member.threadId]] as const] : []))
+    setGroup(threadId, {
+      phase: nextPhase,
+      baselines,
+      stageAttemptId: attemptId,
+      stagePrompts,
+      stageTargets: targets.map((member) => member.threadId),
+      stageStatus: Object.fromEntries(targets.map((member) => [member.threadId, 'queued' as const])),
+      paused: undefined,
+      pausedAt: undefined,
+      pausedPending: undefined,
+      error: undefined,
+    }, projectId)
     setBusy(threadId, true, projectId)
     for (const member of targets) {
       const text = prompts[member.threadId]
-      if (text) enqueue(member.threadId, { ...EMPTY_DRAFT, text }, undefined, projectId)
+      takeQueue(member.threadId, projectId)
+      setThreadQueuePaused(member.threadId, false, projectId)
+      if (text) enqueue(member.threadId, {
+        ...EMPTY_DRAFT,
+        text,
+        orchestration: { groupId: threadId, attemptId, phase: nextPhase },
+      }, undefined, projectId)
+    }
+  }
+
+  const continueStage = async () => {
+    if (!group?.paused || !group.stagePrompts || !runningPhases.has(phase)) return
+    const pendingIds = new Set(group.pausedPending?.length ? group.pausedPending : group.stageTargets ?? [])
+    const initialPending = members.filter((member) => pendingIds.has(member.threadId) && !stageSucceeded(member))
+    if (!initialPending.length) {
+      setGroup(threadId, { paused: undefined, pausedAt: undefined, pausedPending: undefined, error: undefined }, projectId)
+      return
+    }
+    if (!beginTransition()) return
+    try {
+      // session/cancel is cooperative: its IPC acknowledgement can precede the
+      // provider turn's terminal receipt. A renderer restart also clears its
+      // transient busy bit while main may adopt the still-running connection.
+      // Check both sources before minting a replacement attempt; if status
+      // cannot prove quiescence, fail closed by recycling the adapter.
+      const keyFor = (member: GroupSessionMember) => `${member.agentKey}::${member.threadId}`
+      const pendingKeys = new Set(initialPending.map(keyFor))
+      const providerState = async () => {
+        try {
+          const status = await bridge.acp.status([...pendingKeys], projectId)
+          return {
+            known: status.ok,
+            busy: new Set(status.agents.filter((agent) => agent.busy && pendingKeys.has(agent.key)).map((agent) => agent.key)),
+          }
+        } catch {
+          return { known: false, busy: new Set<string>() }
+        }
+      }
+      let authoritative = await providerState()
+      const liveBusy = () => new Set(useKaisola.getState().assistantThreads
+        .filter((candidate) => initialPending.some((member) => member.threadId === candidate.id) && candidate.busy)
+        .map((candidate) => candidate.id))
+      const oldTurnMembers = initialPending.filter((member) => liveBusy().has(member.threadId) || authoritative.busy.has(keyFor(member)))
+      if (oldTurnMembers.length) {
+        await Promise.all(oldTurnMembers.map((member) => bridge.acp.cancel(keyFor(member), projectId).catch(() => ({ ok: false }))))
+      }
+      const deadline = Date.now() + 8_000
+      while (Date.now() < deadline) {
+        authoritative = await providerState()
+        if (liveBusy().size === 0 && authoritative.known && authoritative.busy.size === 0) break
+        await new Promise((resolve) => window.setTimeout(resolve, 50))
+      }
+      const rendererBusy = liveBusy()
+      const stuck = initialPending.filter((member) =>
+        !authoritative.known || rendererBusy.has(member.threadId) || authoritative.busy.has(keyFor(member)),
+      )
+      if (stuck.length) {
+        await Promise.all(stuck.map((member) => bridge.acp.disconnect(keyFor(member), projectId).catch(() => ({ ok: false }))))
+        const settleDeadline = Date.now() + 2_000
+        while (Date.now() < settleDeadline && stuck.some((member) => useKaisola.getState().assistantThreads.find((thread) => thread.id === member.threadId)?.busy)) {
+          await new Promise((resolve) => window.setTimeout(resolve, 50))
+        }
+      }
+      const latest = useKaisola.getState().assistantThreads.find((candidate) => candidate.id === threadId)?.group
+      if (!latest?.paused || latest.stageAttemptId !== group.stageAttemptId) return
+      // A worker can finish between Stop's snapshot and cooperative cancel.
+      // Preserve that late terminal receipt before minting the retry attempt so
+      // selective continuation never drops a completed peer result.
+      const freshRuntimes = useKaisola.getState().assistantRuntimes
+      const completed = addressedMembers().filter((member) => {
+        const receipt = freshRuntimes[member.threadId]?.lastRun
+        return !!receipt && receipt.attemptId === group.stageAttemptId && receipt.ok && !!receipt.text?.trim()
+      })
+      if (completed.length) {
+        setGroup(threadId, snapshotPatchFor(completed, Object.fromEntries(completed.map((member) => [member.threadId, freshRuntimes[member.threadId]!.lastRun!.text!.trim()]))), projectId)
+      }
+      const retryPending = initialPending.filter((member) => !completed.some((candidate) => candidate.threadId === member.threadId))
+      if (!retryPending.length) {
+        setGroup(threadId, { paused: undefined, pausedAt: undefined, pausedPending: undefined, error: undefined }, projectId)
+        return
+      }
+      queueStage(phase, group.stagePrompts, retryPending)
+    } finally {
+      endTransition()
     }
   }
 
@@ -211,14 +468,15 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
     setGroup(threadId, {
       task,
       answers: {},
-      negotiations: {},
+      negotiations: undefined,
       jointPlan: undefined,
-      executions: {},
-      reviews: {},
+      executions: undefined,
+      reviews: undefined,
       integration: undefined,
       synthesis: undefined,
       worktrees: undefined,
       changedFiles: undefined,
+      reviewedCommits: undefined,
       leadThreadId: undefined,
       error: undefined,
     }, projectId)
@@ -250,11 +508,11 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
   }
 
   const executeIsolated = async () => {
-    if (!group?.jointPlan || !workspacePath || transitioning) {
+    if (!group?.jointPlan || !workspacePath) {
       if (!workspacePath) setGroup(threadId, { error: 'Open a git workspace before isolated execution.' }, projectId)
       return
     }
-    setTransitioning(true)
+    if (!beginTransition()) return
     try {
       const attempts = await Promise.all(members.map(async (member, index) => {
         const taskId = `group-${Date.now().toString(36)}-${index}`
@@ -274,19 +532,18 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
         repo: workspacePath,
       } satisfies WorktreeSession]))
       setGroupWorktrees(threadId, worktrees, projectId)
-      await Promise.all(members.map((member) => bridge.acp.disconnect(`${member.agentKey}::${member.threadId}`).catch(() => ({ ok: false }))))
-      await new Promise((resolve) => window.setTimeout(resolve, 180))
+      setGroup(threadId, { reviewedCommits: undefined, changedFiles: undefined }, projectId)
+      await Promise.all(members.map((member) => bridge.acp.disconnect(`${member.agentKey}::${member.threadId}`, projectId).catch(() => ({ ok: false }))))
       queueStage('executing', Object.fromEntries(members.map((member) => [member.threadId,
         `Execute only your named assignment from the approved role contract. You are the sole write owner of this isolated worktree: ${worktrees[member.threadId].path}. Do not work on the peer's assignment or main checkout. Honor shared invariants, run relevant tests, and stop if the contract is ambiguous or requires overlapping ownership. Finish with: files changed, tests run, unresolved risks, and integration notes.\n\nMission:\n${group.task ?? ''}\n\nApproved role contract:\n${group.jointPlan}`,
       ])))
     } finally {
-      setTransitioning(false)
+      endTransition()
     }
   }
 
   const crossReview = async () => {
-    if (!group?.worktrees || transitioning) return
-    setTransitioning(true)
+    if (!group?.worktrees || !beginTransition()) return
     try {
       const diffs = await Promise.all(members.map(async (member) => {
         const wt = group.worktrees?.[member.threadId]
@@ -298,8 +555,8 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
           repo: wt.repo,
           message: `kaisola group candidate: ${member.label} assignment`,
         })
-        const result: CandidateDiff = finalized.ok
-          ? await bridge.worktree.diff({ taskId: wt.taskId })
+        const result: CandidateDiff = finalized.ok && finalized.sha
+          ? await bridge.worktree.diff({ taskId: wt.taskId, repo: wt.repo, ref: finalized.sha })
           : { ok: false, message: finalized.message ?? `Could not freeze ${member.label}'s candidate.` }
         return { member, wt, result }
       }))
@@ -309,7 +566,8 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
         return
       }
       const changedFiles = Object.fromEntries(diffs.map((item) => [item.member.threadId, (item.result.files ?? []) as WorktreeFile[]]))
-      setGroup(threadId, { changedFiles }, projectId)
+      const reviewedCommits = Object.fromEntries(diffs.map((item) => [item.member.threadId, item.result.sha!]))
+      setGroup(threadId, { changedFiles, reviewedCommits }, projectId)
       queueStage('reviewing', Object.fromEntries(members.map((reviewer, reviewerIndex) => {
         const peer = members[(reviewerIndex + 1) % members.length]
         const peerDiff = diffs.find((item) => item.member.threadId === peer.threadId)!
@@ -318,37 +576,68 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
         ]
       })))
     } finally {
-      setTransitioning(false)
+      endTransition()
     }
   }
 
   const integrate = async () => {
-    if (!group?.worktrees || !workspacePath || transitioning) return
+    if (!group?.worktrees || !workspacePath) return
     const lead = members.find((member) => member.threadId === group.leadThreadId) ?? members.find((member) => /codex/i.test(member.agentKey)) ?? members[members.length - 1]
     if (!lead) return
-    setTransitioning(true)
+    if (!beginTransition()) return
     try {
-      for (const member of members) {
-        const wt = group.worktrees[member.threadId]
-        const finalized = await bridge.worktree.finalize({ taskId: wt.taskId, repo: wt.repo, message: `kaisola group: ${member.label} assignment` })
-        if (!finalized.ok) {
-          setGroup(threadId, { error: finalized.message ?? `Could not finalize ${member.label}'s work.` }, projectId)
-          return
+      const candidates = members.map((member) => ({
+        member,
+        wt: group.worktrees![member.threadId],
+        reviewedSha: group.reviewedCommits?.[member.threadId],
+      }))
+      const missing = candidates.find((candidate) => !candidate.reviewedSha)
+      if (missing) {
+        setGroup(threadId, { phase: 'execution-ready', reviews: undefined, reviewedCommits: undefined, error: `${missing.member.label}'s reviewed commit is missing. Cross-review the stage again.` }, projectId)
+        return
+      }
+      // Verify the entire frozen set before mutating main. merge() repeats this
+      // immediately before each git merge to close the check/use race.
+      const preflight = await Promise.all(candidates.map(async (candidate) => ({
+        candidate,
+        result: await bridge.worktree.verify({ taskId: candidate.wt.taskId, repo: candidate.wt.repo, ref: candidate.reviewedSha! }),
+      })))
+      const rejected = preflight.find((item) => !item.result.ok)
+      if (rejected) {
+        if (rejected.result.drifted) {
+          setGroup(threadId, {
+            phase: 'execution-ready',
+            reviews: undefined,
+            reviewedCommits: undefined,
+            error: `${rejected.candidate.member.label}'s candidate changed after review. Cross-review every frozen commit again before integration.`,
+          }, projectId)
+        } else {
+          setGroup(threadId, { error: rejected.result.message ?? `Could not verify ${rejected.candidate.member.label}'s reviewed commit.` }, projectId)
         }
+        return
       }
       let conflict = ''
-      const remaining: string[] = []
-      for (let index = 0; index < members.length; index++) {
-        const member = members[index]
-        const wt = group.worktrees[member.threadId]
-        const merged = await bridge.worktree.merge({ taskId: wt.taskId, repo: wt.repo })
+      const manualCommits: string[] = []
+      for (let index = 0; index < candidates.length; index++) {
+        const { member, wt } = candidates[index]
+        const reviewedSha = candidates[index].reviewedSha!
+        const merged = await bridge.worktree.merge({ taskId: wt.taskId, repo: wt.repo, ref: reviewedSha })
         if (!merged.ok) {
           if (!merged.conflicted) {
-            setGroup(threadId, { error: merged.message ?? `Could not merge ${member.label}'s branch.` }, projectId)
+            if (merged.drifted) {
+              setGroup(threadId, {
+                phase: 'execution-ready',
+                reviews: undefined,
+                reviewedCommits: undefined,
+                error: `${member.label}'s candidate changed during integration. Cross-review every frozen commit again before retrying.`,
+              }, projectId)
+            } else {
+              setGroup(threadId, { error: merged.message ?? `Could not merge ${member.label}'s reviewed commit.` }, projectId)
+            }
             return
           }
-          conflict = `A conflict began while merging ${wt.branch}.`
-          remaining.push(...members.slice(index + 1).map((candidate) => group.worktrees![candidate.threadId].branch))
+          conflict = `The automatic merge of ${member.label}'s exact reviewed commit ${reviewedSha} conflicted and was aborted.`
+          manualCommits.push(...candidates.slice(index).map((candidate) => `${candidate.member.label}: ${candidate.reviewedSha!}`))
           break
         }
       }
@@ -366,18 +655,17 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
       }
       setThreadCwd(lead.threadId, workspacePath, projectId)
       setGroup(threadId, { leadThreadId: lead.threadId }, projectId)
-      await bridge.acp.disconnect(`${lead.agentKey}::${lead.threadId}`).catch(() => ({ ok: false }))
-      await new Promise((resolve) => window.setTimeout(resolve, 180))
+      await bridge.acp.disconnect(`${lead.agentKey}::${lead.threadId}`, projectId).catch(() => ({ ok: false }))
       queueStage('integrating', {
-        [lead.threadId]: `You are the sole integration owner in the main workspace: ${workspacePath}. The workers' branches were finalized and merge was attempted. Inspect git status before acting. ${conflict || 'Both branches merged cleanly.'}${remaining.length ? ` Resolve the current conflict, then merge the remaining branches: ${remaining.join(', ')}.` : ''} Reconcile only integration issues, run the approved acceptance tests plus relevant regression checks, and leave the main workspace in a coherent finished state. Finish with a concise implementation summary, exact tests, and any remaining human decision.\n\nMission:\n${group.task ?? ''}\n\nRole contract:\n${group.jointPlan ?? ''}\n\nExecution reports:\n${memberPacket(members, group.executions)}\n\nCross-reviews:\n${memberPacket(members, group.reviews)}`,
+        [lead.threadId]: `You are the sole integration owner in the main workspace: ${workspacePath}. The workers' exact reviewed commits were merged where possible. Inspect git status before acting. ${conflict || 'All reviewed commits merged cleanly.'}${manualCommits.length ? ` Reproduce and resolve the aborted conflict, then merge only these immutable reviewed commit IDs (never their mutable branch names): ${manualCommits.join('; ')}.` : ''} Reconcile only integration issues, run the approved acceptance tests plus relevant regression checks, and leave the main workspace in a coherent finished state. Finish with a concise implementation summary, exact tests, and any remaining human decision.\n\nMission:\n${group.task ?? ''}\n\nRole contract:\n${group.jointPlan ?? ''}\n\nExecution reports:\n${memberPacket(members, group.executions)}\n\nCross-reviews:\n${memberPacket(members, group.reviews)}`,
       }, [lead])
     } finally {
-      setTransitioning(false)
+      endTransition()
     }
   }
 
   if (!thread || !group) return null
-  const running = runningPhases.has(phase)
+  const running = runningPhases.has(phase) && !group.paused
   const negotiated = group.negotiations ?? group.critiques
   const finalText = group.integration ?? group.synthesis
   const participantPresets = presets.filter((preset) => !preset.hidden && !preset.terminalOnly && preset.id !== 'group')
@@ -385,9 +673,54 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
     const key = `${member.agentKey}::${member.threadId}`
     const control = modelControl(agents.find((agent) => agent.key === key)?.controls)
     const label = control?.options.find((option) => option.value === value)?.name ?? value
-    const result = await bridge.acp.setModel(key, value).catch(() => ({ ok: false, message: 'The model selection could not be sent.' }))
+    const result = await bridge.acp.setModel(key, value, projectId).catch(() => ({ ok: false, message: 'The model selection could not be sent.' }))
     if (result.ok) setGroupMemberModel(threadId, member.threadId, value, label, projectId)
     else setGroup(threadId, { error: result.message ?? `Could not select ${label} for ${member.label}.` }, projectId)
+  }
+  const chooseClaudeEffort = async (member: GroupSessionMember, value: ClaudeEffort) => {
+    if (!/claude/i.test(member.agentKey) || phase !== 'idle') return
+    const key = `${member.agentKey}::${member.threadId}`
+    const child = childThreads.find((candidate) => candidate.id === member.threadId)
+    const control = effortControl(agents.find((agent) => agent.key === key)?.controls)
+    if (control) {
+      if (!control.options.some((option) => option.value === value)) {
+        setGroup(threadId, { error: `${member.label}'s current model does not support ${value} effort.` }, projectId)
+        return
+      }
+      const result = await bridge.acp.setConfigOption(key, control.id, value, projectId).catch(() => ({ ok: false, message: 'The effort selection could not be sent.' }))
+      if (!result.ok) {
+        setGroup(threadId, { error: result.message ?? `Could not set ${member.label} effort.` }, projectId)
+        return
+      }
+      setThreadClaudeEffort(member.threadId, value, projectId)
+      setGroup(threadId, { error: undefined }, projectId)
+      return
+    }
+    if (!workspacePath || !child) {
+      setGroup(threadId, { error: `Open a workspace before changing ${member.label}'s effort.` }, projectId)
+      return
+    }
+    setThreadClaudeEffort(member.threadId, value, projectId)
+    const claudeConfigDir = claudeAccounts.find((account) => account.id === claudeAccountId)?.configDir ?? null
+    const result = await bridge.acp.connect({
+      presetId: member.agentKey,
+      clientKey: key,
+      autonomy,
+      cwd: child.cwd ?? workspacePath,
+      scope: projectId,
+      resumeSessionId: child.acpSessionId,
+      claudeEffort: value,
+      claudeConfigDir,
+      forceReconnect: true,
+    }).catch(() => ({ ok: false, message: 'Claude could not reconnect with the selected effort.' }))
+    if (!result.ok) setGroup(threadId, { error: result.message ?? `Could not set ${member.label} effort.` }, projectId)
+    else {
+      if ('agent' in result && result.agent?.sessionId) setThreadAcpSession(member.threadId, result.agent.sessionId, projectId)
+      useKaisola.getState().setAgentProject(key, projectId)
+      setGroup(threadId, { error: undefined }, projectId)
+      const status = await bridge.acp.status([key], projectId).catch(() => ({ ok: false, agents: [] as AcpAgent[] }))
+      setAgents((current) => [...current.filter((agent) => agent.key !== key), ...status.agents])
+    }
   }
 
   return (
@@ -396,7 +729,7 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
         <span className="group-mark"><Icon name="Network" size={14} /></span>
         <div><strong>Kaisola Mesh</strong><small>{members.length} agents · scout · align · divide · verify · integrate</small></div>
         <span className="grow" />
-        <span className="group-phase" data-running={running || undefined}>{phaseLabel[phase]}</span>
+        <span className="group-phase" data-running={running || undefined}>{group.paused ? 'Paused' : phaseLabel[phase]}</span>
       </header>
 
       <div className="group-stream">
@@ -409,12 +742,17 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
             <div className="group-roster" aria-label="Mesh participants">
               {members.map((member) => {
                 const key = `${member.agentKey}::${member.threadId}`
-                const control = modelControl(agents.find((agent) => agent.key === key)?.controls)
+                const agent = agents.find((candidate) => candidate.key === key)
+                const control = modelControl(agent?.controls)
+                const child = childThreads.find((candidate) => candidate.id === member.threadId)
+                const effort = effortControl(agent?.controls)
+                const effortValue = (effort?.currentValue ?? child?.claudeEffort ?? 'high') as ClaudeEffort
                 const value = control?.value ?? member.modelId ?? ''
                 return <div className="group-roster-row" key={member.threadId}>
                   <ProviderIcon provider={member.agentKey} name={member.label} size={14} />
                   <span className="truncate">{member.label}</span>
                   <select
+                    className="group-model-select"
                     value={value}
                     disabled={!control?.options.length}
                     onChange={(event) => { void chooseModel(member, event.target.value) }}
@@ -423,8 +761,19 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
                     {!value && <option value="">Provider default</option>}
                     {(control?.options ?? []).map((option) => <option value={option.value} key={option.value}>{option.name}</option>)}
                   </select>
+                  {/claude/i.test(member.agentKey) && <select
+                    className="group-effort-select"
+                    value={effortValue}
+                    onChange={(event) => { void chooseClaudeEffort(member, event.target.value as ClaudeEffort) }}
+                    title={`Reasoning effort for ${member.label}`}
+                    aria-label={`Reasoning effort for ${member.label}`}
+                  >
+                    {CLAUDE_EFFORTS
+                      .filter((option) => !effort || effort.options.some((providerOption) => providerOption.value === option.value))
+                      .map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+                  </select>}
                   {members.length > 2 && <button className="btn-icon" onClick={() => {
-                    void bridge.acp.disconnect(`${member.agentKey}::${member.threadId}`)
+                    void bridge.acp.disconnect(`${member.agentKey}::${member.threadId}`, projectId)
                     removeGroupMember(threadId, member.threadId, projectId)
                   }} title={`Remove ${member.label}`}><Icon name="X" size={12} /></button>}
                 </div>
@@ -432,25 +781,42 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
               <select
                 className="group-add-member"
                 value=""
+                disabled={members.length >= MAX_GROUP_MEMBERS}
                 onChange={(event) => {
                   const preset = participantPresets.find((row) => row.id === event.target.value)
                   if (preset) addGroupMember(threadId, preset.id, preset.name, projectId)
                 }}
               >
-                <option value="">+ Add another model</option>
+                <option value="">{members.length >= MAX_GROUP_MEMBERS ? `Maximum ${MAX_GROUP_MEMBERS} agents` : '+ Add another model'}</option>
                 {participantPresets.map((preset) => <option value={preset.id} key={preset.id}>{preset.name}</option>)}
               </select>
             </div>
           </div>
         )}
         {group.error && <div className="group-error"><Icon name="AlertTriangle" size={13} />{group.error}</div>}
+        {!group.paused && groupPermissions.length > 0 && <section className="group-permissions" aria-label="Mesh permission requests">
+          <h3><Icon name="ShieldQuestion" size={13} /> Mesh needs your approval</h3>
+          {groupPermissions.map((permission) => <PermissionCard
+            key={permission.permId}
+            perm={permission}
+            onAllow={() => {
+              const option = permission.options.find((candidate) => candidate.kind === 'allow_once') ?? permission.options[0]
+              answerPermission(permission.permId, option ? { optionId: option.optionId } : { decision: 'allow' })
+            }}
+            onAlways={() => alwaysAllowPermission(permission.permId)}
+            onDeny={() => {
+              const option = permission.options.find((candidate) => candidate.kind === 'reject_once')
+              answerPermission(permission.permId, option ? { optionId: option.optionId } : { decision: 'reject' }, { cascadeReject: true })
+            }}
+          />)}
+        </section>}
         {group.task && <section className="group-task"><span>Mission</span><p>{group.task}</p></section>}
 
         {(phase !== 'idle' || group.answers) && (
-          <GroupPair title="Independent scouts" members={members} values={currentAnswers} childThreads={childThreads} active={phase === 'answering'} />
+          <GroupPair title="Independent scouts" members={members} values={currentAnswers} childThreads={childThreads} statuses={currentMemberStatuses} active={phase === 'answering'} />
         )}
         {(negotiated || phase === 'negotiating' || phase === 'critiquing') && (
-          <GroupPair title="Role negotiation" members={members} values={currentNegotiations} childThreads={childThreads} active={phase === 'negotiating' || phase === 'critiquing'} compact />
+          <GroupPair title="Role negotiation" members={members} values={currentNegotiations} childThreads={childThreads} statuses={currentMemberStatuses} active={phase === 'negotiating' || phase === 'critiquing'} compact />
         )}
         {(group.jointPlan || phase === 'assigning' || phase === 'synthesizing') && (
           <section className="group-final group-contract">
@@ -465,7 +831,7 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
               const wt = group.worktrees?.[member.threadId]
               const files = group.changedFiles?.[member.threadId] ?? []
               return <article key={`exec:${member.threadId}`}>
-                <header><ProviderIcon provider={member.agentKey} name={member.label} size={14} /><strong>{member.label}</strong>{wt && <span className="group-branch">{wt.branch}</span>}</header>
+                <header><ProviderIcon provider={member.agentKey} name={member.label} size={14} /><strong>{member.label}</strong>{wt && <span className="group-branch">{wt.branch}</span>}<span className="group-member-status" data-status={currentMemberStatuses[member.threadId]}>{currentMemberStatuses[member.threadId]}</span></header>
                 <p>{currentExecutions[member.threadId] || (phase === 'executing' ? 'Working in an isolated checkout…' : 'Awaiting execution')}</p>
                 {files.length > 0 && <small>{files.map((file) => file.path).join(' · ')}</small>}
               </article>
@@ -473,7 +839,7 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
           </section>
         )}
         {(group.reviews || phase === 'reviewing') && (
-          <GroupPair title="Cross-review" members={members} values={currentReviews} childThreads={childThreads} active={phase === 'reviewing'} compact />
+          <GroupPair title="Cross-review" members={members} values={currentReviews} childThreads={childThreads} statuses={currentMemberStatuses} active={phase === 'reviewing'} compact />
         )}
         {(phase === 'integrating' || finalText) && (
           <section className="group-final">
@@ -491,7 +857,9 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
         {phase === 'execution-ready' && <button className="group-action" onClick={() => void crossReview()} disabled={transitioning}><Icon name="ScanSearch" size={14} /> Cross-review both implementations</button>}
         {phase === 'merge-ready' && <button className="group-action" onClick={() => void integrate()} disabled={transitioning}><Icon name="GitMerge" size={14} /> Approve and integrate reviewed work</button>}
         {phase === 'done' && <button className="group-action" onClick={requestNewGroup}><Icon name="Plus" size={14} /> Start another group session</button>}
+        {group.paused && <button className="group-action" onClick={() => { void continueStage() }} disabled={transitioning}><Icon name="Play" size={14} /> {transitioning ? 'Waiting for agents to stop…' : `Continue ${group.pausedPending?.length ? `${group.pausedPending.length} unfinished ${group.pausedPending.length === 1 ? 'agent' : 'agents'}` : 'stage'}`}</button>}
         {(running || transitioning) && <span className="group-running"><span className="session-busy" /> {transitioning ? 'Preparing safe transition' : phaseLabel[phase]}…</span>}
+        {running && <button className="group-stop" onClick={() => { void pauseStage() }} title="Stop all unfinished Mesh agents and keep this checkpoint"><Icon name="Square" size={11} /> Stop</button>}
       </footer>
 
       <div className="group-workers" aria-hidden="true">
@@ -506,6 +874,7 @@ function GroupPair({
   members,
   values,
   childThreads,
+  statuses,
   active,
   compact = false,
 }: {
@@ -513,6 +882,7 @@ function GroupPair({
   members: GroupSessionMember[]
   values: Record<string, string>
   childThreads: Array<{ id: string; busy: boolean }>
+  statuses: Record<string, string>
   active: boolean
   compact?: boolean
 }) {
@@ -521,8 +891,16 @@ function GroupPair({
     <div className={compact ? undefined : 'group-results'}>
       {members.map((member) => {
         const busy = active && childThreads.find((thread) => thread.id === member.threadId)?.busy
-        return <article className={compact ? undefined : 'group-result'} key={`${title}:${member.threadId}`}>
-          <header><ProviderIcon provider={member.agentKey} name={member.label} size={compact ? 13 : 15} /><strong>{member.label}</strong>{member.modelLabel && <small className="group-model-label truncate">{member.modelLabel}</small>}{busy && <span className="session-busy" />}</header>
+        const status = statuses[member.threadId]
+        if (compact) return <article className="group-review-card" key={`${title}:${member.threadId}`}>
+          <ProviderIcon provider={member.agentKey} name={member.label} size={13} />
+          <div className="group-review-copy">
+            <header><strong>{member.label}</strong>{member.modelLabel && <small className="group-model-label truncate">{member.modelLabel}</small>}<span className="group-member-status" data-status={status}>{status}</span>{busy && <span className="session-busy" />}</header>
+            <p>{values[member.threadId] || (active ? 'Working…' : 'No response recorded')}</p>
+          </div>
+        </article>
+        return <article className="group-result" key={`${title}:${member.threadId}`}>
+          <header><ProviderIcon provider={member.agentKey} name={member.label} size={15} /><strong>{member.label}</strong>{member.modelLabel && <small className="group-model-label truncate">{member.modelLabel}</small>}<span className="group-member-status" data-status={status}>{status}</span>{busy && <span className="session-busy" />}</header>
           <p>{values[member.threadId] || (active ? 'Working…' : 'No response recorded')}</p>
         </article>
       })}

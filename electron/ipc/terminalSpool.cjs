@@ -26,17 +26,30 @@ function atomicJson(file, value) {
   try { fs.chmodSync(file, 0o600) } catch { /* best effort */ }
 }
 
+/** Return at most `bytes` from the end without starting inside a multi-byte
+ * UTF-8 code point. ACP explicitly requires character-boundary truncation. */
+function utf8Tail(value, bytes) {
+  const cap = Number.isFinite(Number(bytes)) ? Math.max(0, Math.floor(Number(bytes))) : 0
+  if (cap === 0) return ''
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(String(value ?? ''), 'utf8')
+  if (buffer.length <= cap) return buffer.toString('utf8')
+  let start = buffer.length - cap
+  while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) start++
+  return buffer.subarray(start).toString('utf8')
+}
+
 function readTail(file, bytes) {
   if (!bytes || !fs.existsSync(file)) return ''
   let fd
   try {
     const size = fs.statSync(file).size
-    const take = Math.min(size, bytes)
+    const cap = Math.max(0, Math.floor(Number(bytes) || 0))
+    const take = Math.min(size, cap + 3)
     if (!take) return ''
     const b = Buffer.allocUnsafe(take)
     fd = fs.openSync(file, 'r')
     fs.readSync(fd, b, 0, take, size - take)
-    return b.toString('utf8')
+    return utf8Tail(b, cap)
   } catch {
     return ''
   } finally {
@@ -45,11 +58,12 @@ function readTail(file, bytes) {
 }
 
 class TerminalSpool {
-  constructor({ dir, id, diskCap = DEFAULT_DISK_CAP, hotCap = DEFAULT_HOT_CAP, queueCap = DEFAULT_QUEUE_CAP }) {
+  constructor({ dir, id, diskCap = DEFAULT_DISK_CAP, hotCap = DEFAULT_HOT_CAP, queueCap = DEFAULT_QUEUE_CAP, retentionCap = null }) {
     this.id = String(id)
     this.diskCap = diskCap
     this.hotCap = hotCap
     this.queueCap = queueCap
+    this.retentionCap = Number.isFinite(retentionCap) ? Math.max(0, Math.floor(retentionCap)) : null
     this.visible = true
     this.chunks = []
     this.chunksLen = 0
@@ -73,6 +87,7 @@ class TerminalSpool {
 
   _queue(text) {
     if (!text) return
+    if (this.retentionCap === 0) { this.truncated = true; return }
     this.queued.push(text)
     this.queuedLen += Buffer.byteLength(text)
     if (this.queuedLen >= this.queueCap) this.flush()
@@ -80,6 +95,7 @@ class TerminalSpool {
 
   _append(text) {
     if (!text) return
+    if (this.retentionCap === 0) { this.truncated = true; return }
     const recovery = this.fallbackChunks.join('')
     const payload = recovery + text
     let appended = false
@@ -135,6 +151,7 @@ class TerminalSpool {
 
   push(data) {
     if (!data) return
+    if (this.retentionCap === 0) { this.truncated = true; return }
     if (!this.visible) {
       this._queue(data)
       return
@@ -166,14 +183,20 @@ class TerminalSpool {
 
   snapshot(outputCap = DEFAULT_HOT_CAP) {
     this.flush()
+    const cap = Number.isFinite(Number(outputCap)) ? Math.max(0, Math.floor(Number(outputCap))) : DEFAULT_HOT_CAP
     const hot = this.chunks.join('')
     const hotBytes = Buffer.byteLength(hot)
     const fallback = this.fallbackChunks.join('')
-    const liveBytes = Math.min(outputCap, hotBytes + Buffer.byteLength(fallback))
-    const old = this._diskTail(Math.max(0, outputCap - liveBytes))
+    const fallbackBytes = Buffer.byteLength(fallback)
+    const liveBytes = Math.min(cap, hotBytes + fallbackBytes)
+    const old = this._diskTail(Math.max(0, cap - liveBytes))
     let output = old + fallback + hot
-    if (Buffer.byteLength(output) > outputCap) output = Buffer.from(output).subarray(-outputCap).toString('utf8')
-    return { output, truncated: this.truncated, viewState: this.viewState }
+    if (Buffer.byteLength(output) > cap) output = utf8Tail(output, cap)
+    let diskBytes = 0
+    for (const file of [this.prevFile, this.file]) {
+      try { diskBytes += fs.statSync(file).size } catch { /* absent */ }
+    }
+    return { output, truncated: this.truncated || diskBytes + hotBytes + fallbackBytes > cap, viewState: this.viewState }
   }
 
   stats() {
@@ -194,4 +217,4 @@ class TerminalSpool {
   }
 }
 
-module.exports = { TerminalSpool, DEFAULT_DISK_CAP, DEFAULT_HOT_CAP, DEFAULT_QUEUE_CAP, readTail }
+module.exports = { TerminalSpool, DEFAULT_DISK_CAP, DEFAULT_HOT_CAP, DEFAULT_QUEUE_CAP, readTail, utf8Tail }

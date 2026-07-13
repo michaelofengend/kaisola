@@ -147,11 +147,17 @@ const mergeQueuedPrompts = (queue: QueuedAssistantPrompt[]): AssistantDraft => {
     }
     if (mergedMentions.length >= 64) break
   }
+  const orchestration = queue[queue.length - 1]?.orchestration
+  const oneAttempt = orchestration && queue.every((prompt) =>
+    prompt.orchestration?.groupId === orchestration.groupId &&
+    prompt.orchestration?.attemptId === orchestration.attemptId,
+  )
   return {
     text: queue.map((prompt) => prompt.text.trim()).filter(Boolean).join('\n\n'),
     attachments: [...new Set(queue.flatMap((prompt) => prompt.attachments))].slice(0, 64),
     mentions: mergedMentions,
     speed: queue[queue.length - 1]?.speed ?? 'default',
+    ...(oneAttempt ? { orchestration } : {}),
   }
 }
 const SPEED_OPTIONS = [
@@ -584,7 +590,7 @@ function PlanStrip({ plan }: { plan: PlanEntry[] }) {
   )
 }
 
-function PermissionCard({
+export function PermissionCard({
   perm,
   onAllow,
   onAlways,
@@ -735,6 +741,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
   const setThreadCodexEffort = useKaisola((s) => s.setThreadCodexEffort)
   const setThreadPreferredModel = useKaisola((s) => s.setThreadPreferredModel)
   const setThreadPermissionMode = useKaisola((s) => s.setThreadPermissionMode)
+  const setThreadQueuePaused = useKaisola((s) => s.setThreadQueuePaused)
   const agentTerminals = useKaisola((s) => s.agentTerminals)
   const terminalMeta = useKaisola((s) => s.terminalMeta)
   const setDockView = useKaisola((s) => s.setDockView)
@@ -768,9 +775,11 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     threads.find((t) => t.id === threadId) ??
     threads[0] ??
     ({ id: threadId, agentKey: 'codex', busy: false } as AssistantThread)
-  const parentGroupPhase = active.groupParentId
-    ? threads.find((thread) => thread.id === active.groupParentId)?.group?.phase
+  const parentGroup = active.groupParentId
+    ? threads.find((thread) => thread.id === active.groupParentId)?.group
     : undefined
+  const parentGroupPhase = parentGroup?.phase
+  const parentGroupPaused = !!parentGroup?.paused
   const sessionCwd = active.cwd ?? workspacePath
   const draft = useKaisola((s) => s.assistantDrafts[active.id] ?? EMPTY_DRAFT)
   const queuedPrompts = useKaisola((s) => s.assistantPromptQueues[active.id] ?? EMPTY_QUEUE)
@@ -786,12 +795,16 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
   // resume ids when hidden adapters park to disk.
   const connectionKey = `${agentKey}::${active.id}`
   const busy = active.busy
+  const queuePaused = !!active.queuePaused
   const input = draft.text
   const attachments = draft.attachments
   const mentions = draft.mentions
   const speed = draft.speed
   useEffect(() => { if (inputRef.current && !input) inputRef.current.style.height = '' }, [input])
   const permsForAgent = pendingPermissions.filter((p) => p.key === connectionKey)
+  const holdAdapterLease = !active.groupParentId || parentGroupPhase === 'idle' || (
+    !!parentGroupPhase && !parentGroupPaused && ['answering', 'negotiating', 'assigning', 'executing', 'reviewing', 'integrating', 'critiquing', 'synthesizing'].includes(parentGroupPhase)
+  ) || permsForAgent.length > 0
   const arun: Runtime = liveRuntime ?? { turns: [], first: true }
   const [archivedPage, setArchivedPage] = useState<Turn[]>([])
   const [archiveBefore, setArchiveBefore] = useState<number | undefined>()
@@ -968,7 +981,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     if (modelApplyRetriesRef.current.count >= 3) return
     if (modelApplyAttemptRef.current === attempt) return
     modelApplyAttemptRef.current = attempt
-    void bridge.acp.setModel(connectionKey, desired).then((result) => {
+    void bridge.acp.setModel(connectionKey, desired, projectId).then((result) => {
       modelApplyAttemptRef.current = null
       if (result.ok) {
         modelApplyRetriesRef.current = { key: attempt, count: 0 }
@@ -986,7 +999,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
   }, [active.preferredModel, connected, connectionKey, providerModelControl])
   useEffect(() => {
     let live = true
-    void Promise.allSettled([bridge.acp.status([connectionKey]), bridge.acp.presets()]).then(([statusResult, presetResult]) => {
+    void Promise.allSettled([bridge.acp.status([connectionKey], projectId), bridge.acp.presets()]).then(([statusResult, presetResult]) => {
       if (!live) return
       if (statusResult.status === 'fulfilled') setAgents(statusResult.value.agents)
       if (presetResult.status === 'fulfilled') setPresets(presetResult.value)
@@ -997,16 +1010,14 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     return () => { live = false }
   }, [connectionKey])
   useEffect(() => {
-    // A mounted transcript is an open user session, so keep its adapter live.
-    // Parking is reserved for sessions that actually leave the rendered
-    // workspace (closed, another project, or otherwise unmounted). Releasing
-    // every idle visible agent stranded externally queued Mesh stages and made
-    // ordinary follow-ups pay an avoidable reconnect cost.
-    void bridge.acp.lease(connectionKey, threadId, true, 30_000, projectId)
+    // Visible transcripts stay warm. Private Mesh workers stay warm only while
+    // setup, work, or a permission ask is active; approval gates, Pause, and
+    // Complete release their lease and become parkable after a short linger.
+    void bridge.acp.lease(connectionKey, threadId, holdAdapterLease, 30_000, projectId)
     return () => {
       void bridge.acp.lease(connectionKey, threadId, false, 30_000, projectId)
     }
-  }, [connectionKey, projectId, threadId])
+  }, [connectionKey, holdAdapterLease, projectId, threadId])
   useEffect(() => { const off = bridge.acp.onControls(() => refresh()); return off }, [connectionKey])
   useEffect(() => {
     const off = bridge.acp.onCommands((info) => {
@@ -1205,7 +1216,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
       if (key === 'codex' && active.codexEffort) {
         const effortControl = controlList(res.controls ?? null).find((control) => /reasoning.*effort|effort/i.test(`${control.id} ${control.name} ${control.category}`))
         if (effortControl?.options.some((option) => option.value === active.codexEffort)) {
-          const applied = await bridge.acp.setConfigOption(`${key}::${active.id}`, effortControl.id, active.codexEffort)
+          const applied = await bridge.acp.setConfigOption(`${key}::${active.id}`, effortControl.id, active.codexEffort, projectId)
           if (!applied.ok) setNotice(applied.message ?? 'Codex effort could not be restored.')
         }
       }
@@ -1214,7 +1225,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
       if (active.permissionMode) {
         const modeControl = controlList(res.controls ?? null).find((control) => control.kind === 'mode')
         if (modeControl && modeControl.value !== active.permissionMode && modeControl.options.some((option) => option.value === active.permissionMode)) {
-          const applied = await bridge.acp.setMode(`${key}::${active.id}`, active.permissionMode)
+          const applied = await bridge.acp.setMode(`${key}::${active.id}`, active.permissionMode, projectId)
           if (!applied.ok) setNotice(applied.message ?? 'The saved permission mode could not be restored.')
           else refresh()
         }
@@ -1275,7 +1286,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
   }, [agentKey, sessionCwd, projectId])
   const authorize = () => {
     setAuthUrl(null)
-    if (busy) { void bridge.acp.cancel(connectionKey); setThreadBusy(active.id, false, projectId) }
+    if (busy) { void bridge.acp.cancel(connectionKey, projectId); setThreadBusy(active.id, false, projectId) }
     awaitingAuthRef.current = true
     setAwaitingAuth(true)
     setNotice('Finish signing in — this thread reconnects when you return, or press Reconnect.')
@@ -1302,18 +1313,18 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     const preset = presets.find((p) => p.id === agentKey)
     const custom = useKaisola.getState().customAgents.find((a) => a.id === agentKey && a.kind === 'acp')
     if ((!preset || preset.terminalOnly) && !custom) return
-    const attempt = `${threadId}|${agentKey}|${sessionCwd}|${agentKey === 'claude-code' ? claudeConfigDir ?? 'default' : ''}`
+    const attempt = `${threadId}|${agentKey}|${sessionCwd}|${agentKey === 'claude-code' ? `${claudeConfigDir ?? 'default'}|${active.claudeEffort ?? 'high'}` : ''}`
     if (autoConnectAttemptRef.current === attempt) return
     autoConnectAttemptRef.current = attempt
     void connect(agentKey)
-  }, [active.groupParentId, agentKey, connected, busy, claudeConfigDir, connectionKey, parentGroupPhase, presets, statusReadyKey, threadId, sessionCwd])
+  }, [active.claudeEffort, active.groupParentId, agentKey, connected, busy, claudeConfigDir, connectionKey, parentGroupPhase, presets, statusReadyKey, threadId, sessionCwd])
   const onControlChange = async (c: UiControl, value: string) => {
     if (!(await ensureAgentConnected())) return
     const result = c.kind === 'mode'
-      ? await bridge.acp.setMode(connectionKey, value)
+      ? await bridge.acp.setMode(connectionKey, value, projectId)
       : c.kind === 'model'
-        ? await bridge.acp.setModel(connectionKey, value)
-        : await bridge.acp.setConfigOption(connectionKey, c.id, value)
+        ? await bridge.acp.setModel(connectionKey, value, projectId)
+        : await bridge.acp.setConfigOption(connectionKey, c.id, value, projectId)
     if (!result.ok) setNotice(result.message ?? `${c.name} could not be changed.`)
     else {
       setNotice(null)
@@ -1332,7 +1343,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     const value = speedOptionValue(speedControl, nextSpeed)
     if (!value) return false
     if (value === speedControl.value) return true
-    const res = await bridge.acp.setConfigOption(connectionKey, speedControl.id, value)
+    const res = await bridge.acp.setConfigOption(connectionKey, speedControl.id, value, projectId)
     if (!res.ok && res.message) setNotice(res.message)
     refresh()
     return res.ok
@@ -1353,7 +1364,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
         setNotice('The selected Claude model does not support that effort level.')
         return
       }
-      const res = await bridge.acp.setConfigOption(connectionKey, providerEffortControl.id, value)
+      const res = await bridge.acp.setConfigOption(connectionKey, providerEffortControl.id, value, projectId)
       if (!res.ok) { setNotice(res.message ?? `Claude rejected ${value} effort.`); return }
       setThreadClaudeEffort(active.id, value, projectId)
       setNotice(`Claude effort: ${CLAUDE_EFFORT_OPTIONS.find((o) => o.value === value)?.name ?? value}.`)
@@ -1375,7 +1386,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
       setNotice('The installed Codex ACP adapter does not support that effort level.')
       return
     }
-    const res = await bridge.acp.setConfigOption(connectionKey, providerEffortControl.id, value)
+    const res = await bridge.acp.setConfigOption(connectionKey, providerEffortControl.id, value, projectId)
     if (!res.ok) {
       setNotice(res.message ?? `Codex rejected ${value} effort.`)
       return
@@ -1515,11 +1526,16 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     speed,
   })
   const drainingQueueRef = useRef(false)
-  const queuePausedRef = useRef(false)
+  const queuePausedRef = useRef(queuePaused)
+  const setQueuePaused = (paused: boolean) => {
+    queuePausedRef.current = paused
+    setThreadQueuePaused(active.id, paused, projectId)
+  }
+  useEffect(() => { queuePausedRef.current = queuePaused }, [queuePaused])
   const queuePrompt = (prompt: AssistantDraft) => {
     if (!prompt.text.trim()) return
     // A fresh user enqueue is an explicit resume after Stop/a delivery error.
-    queuePausedRef.current = false
+    setQueuePaused(false)
     enqueueAssistantPrompt(active.id, prompt, undefined, projectId)
     clearAssistantDraft(active.id, { keepSpeed: true }, projectId)
     resetComposerHeight()
@@ -1533,7 +1549,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     if (busy) {
       queuePrompt(prompt); return
     }
-    queuePausedRef.current = false
+    setQueuePaused(false)
     void sendText(prompt, { clearDraft: true, restoreOnFailure: true })
   }
   /** Deliver a follow-up into the running turn (mid-turn steer). The user turn
@@ -1568,7 +1584,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
       // agent can't queue after all — undo the optimistic turn and enqueue it so
       // the normal drain sends it as the next turn (nothing is lost)
       updateRuntime(threadId, (r) => (r.turns[r.turns.length - 1] === userTurn ? { ...r, turns: r.turns.slice(0, -1) } : r))
-      queuePausedRef.current = false
+      setQueuePaused(false)
       enqueueAssistantPrompt(threadId, prompt, undefined, projectId)
     }
   }
@@ -1586,6 +1602,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     if (!prompt.text) return false
     if (owningSlice()?.assistantThreads.find((t) => t.id === active.id)?.busy) return false
     if (!(await ensureAgentConnected())) return false
+    if (owningSlice()?.assistantThreads.find((t) => t.id === active.id)?.queuePaused) return false
     if (wasTrimmed) setNotice(`Message limited to ${ASSISTANT_DRAFT_TEXT_LIMIT.toLocaleString()} characters to keep the IDE responsive. Attach long material as a file to preserve it in full.`)
     const threadId = active.id
     // Snapshot the live permission mode with every send — the agent itself can
@@ -1662,11 +1679,34 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
       // into the original exchange's span, which is what a reader expects).
       // Only on success: the !res.ok rollback below matches userTurn by
       // IDENTITY, which a remap here would silently break.
-      if (res.ok && userTurn.at != null) {
+      const completed = res.ok && (!res.stopReason || res.stopReason === 'end_turn')
+      if (completed && userTurn.at != null) {
         const startedAt = userTurn.at
         turns = turns.map((x) => (x.kind === 'user' && x.at === startedAt && x.workedMs == null ? { ...x, workedMs: Date.now() - startedAt } : x))
       }
-      return { ...r, thinkStart: undefined, turns }
+      const responseText = turns
+        .filter((turn) => turn.kind === 'assistant' && (turn.at ?? 0) >= (userTurn.at ?? 0) && turn.text.trim())
+        .map((turn) => turn.text.trim())
+        .join('\n\n')
+        .slice(-28_000)
+      return {
+        ...r,
+        thinkStart: undefined,
+        turns,
+        lastRun: {
+          ...(prompt.orchestration ? {
+            attemptId: prompt.orchestration.attemptId,
+            groupId: prompt.orchestration.groupId,
+            phase: prompt.orchestration.phase,
+          } : {}),
+          startedAt: userTurn.at ?? Date.now(),
+          finishedAt: Date.now(),
+          ok: completed,
+          ...(responseText ? { text: responseText } : {}),
+          ...(res.stopReason ? { stopReason: res.stopReason } : {}),
+          ...(res.message ? { message: res.message } : {}),
+        },
+      }
     })
     setThreadBusy(threadId, false, projectId)
     // Working dots pulse; a finished unseen turn becomes a still dot until the
@@ -1683,13 +1723,13 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
         const tab = state.projectTabs.find((project) => project.id === projectId)
         const projectName = tab?.title ?? tab?.workspacePath?.split('/').filter(Boolean).pop() ?? 'Kaisola'
         bridge.attention?.notify({
-          title: res.ok ? `${agentName} finished` : `${agentName} stopped`,
+          title: res.ok && (!res.stopReason || res.stopReason === 'end_turn') ? `${agentName} finished` : `${agentName} stopped`,
           body: projectName,
           projectId,
           sessionId: attentionId,
         })
       }
-      if (state.activeProjectId !== projectId) state.setProjectActivity(projectId, res.ok ? 'completed' : 'failed')
+      if (state.activeProjectId !== projectId) state.setProjectActivity(projectId, res.ok && (!res.stopReason || res.stopReason === 'end_turn') ? 'completed' : 'failed')
     }
     if (!res.ok) {
       // the prompt was rejected — roll back the optimistic user turn so the
@@ -1706,15 +1746,17 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
       }
       return false
     }
+    if (res.stopReason && res.stopReason !== 'end_turn') {
+      setQueuePaused(true)
+      setNotice(res.message ?? `The agent stopped with ${res.stopReason.replaceAll('_', ' ')}. Review the partial response, then resume or retry.`)
+      return false
+    }
     // Wake the queue in the same microtask as turn settlement. Waiting for the
     // busy=false React render made follow-ups feel noticeably sticky on fast
     // Codex/Claude turns even though the queue was already ready in the store.
     queueMicrotask(() => { void drainQueuedPrompts() })
     return true
   }
-  // Queue pause semantics: reconnecting, a new enqueue, or a manual send
-  // resumes; Stop pauses so cancelling never auto-fires the next instruction.
-  useEffect(() => { if (connected) queuePausedRef.current = false }, [connected])
   const drainQueuedPrompts = async () => {
     if (queuePausedRef.current || drainingQueueRef.current) return
     drainingQueueRef.current = true
@@ -1730,7 +1772,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
         const owner = owningSlice()
         const thread = owner?.assistantThreads.find((candidate) => candidate.id === active.id)
         const waiting = owner?.assistantPromptQueues[active.id] ?? EMPTY_QUEUE
-        if (!thread || thread.busy || waiting.length === 0) return
+        if (!thread || thread.busy || thread.queuePaused || waiting.length === 0) return
         const batch = takeAssistantPromptQueue(active.id, projectId)
         if (!batch.length) return
         const combined = mergeQueuedPrompts(batch)
@@ -1738,8 +1780,8 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
         if (!sent) {
           // Pause BEFORE restoring so the queue-length render cannot race an
           // immediate retry. A new user enqueue or reconnect resumes it.
-          queuePausedRef.current = true
-          enqueueAssistantPrompt(active.id, combined, { front: true }, projectId)
+          setQueuePaused(true)
+          enqueueAssistantPrompt(active.id, combined, { front: true, resume: false }, projectId)
           useKaisola.getState().pushToast('warn', `${agentName} queue paused — send or queue a prompt to resume`)
           return
         }
@@ -1751,10 +1793,10 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     }
   }
   useEffect(() => {
-    if (busy || queuePausedRef.current || drainingQueueRef.current || queuedPrompts.length === 0) return
+    if (busy || queuePaused || queuePausedRef.current || drainingQueueRef.current || queuedPrompts.length === 0) return
     void drainQueuedPrompts()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connected, busy, queuedPrompts.length, active.id])
+  }, [connected, busy, queuePaused, queuedPrompts.length, active.id])
   // the ⌘L bar hands prompts to threads through the store — deliver ours once
   const omniPrompt = useKaisola((s) => s.omniPrompt)
   const omniSeqRef = useRef(0)
@@ -1766,7 +1808,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     if (busy) {
       // same rule as the composer: busy → queue; steering is only ever the
       // explicit per-row action on a queued prompt
-      queuePausedRef.current = false
+      setQueuePaused(false)
       enqueueAssistantPrompt(active.id, { ...EMPTY_DRAFT, text: text.trim(), speed }, undefined, projectId)
       return
     }
@@ -1774,7 +1816,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
       // never swallow a ⌘L prompt: a race-y busy flip QUEUES it (review
       // finding #4 — it used to be dropped with a misleading toast)
       if (!sent) {
-        queuePausedRef.current = false
+        setQueuePaused(false)
         enqueueAssistantPrompt(active.id, { ...EMPTY_DRAFT, text: text.trim(), speed }, undefined, projectId)
       }
     })
@@ -1784,10 +1826,10 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     // Stop means STOP: pause the queue too, or flipping busy would auto-fire
     // the next queued prompt the instant the user aborts (review finding #2)
     if (queuedPrompts.length > 0) {
-      queuePausedRef.current = true
+      setQueuePaused(true)
       useKaisola.getState().pushToast('info', 'Queue paused — send or queue a prompt to resume')
     }
-    bridge.acp.cancel(connectionKey)
+    void bridge.acp.cancel(connectionKey, projectId)
     setThreadBusy(active.id, false, projectId)
     updateRuntime(active.id, (r) => ({ ...r, thinkStart: undefined }))
   }

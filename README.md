@@ -5,8 +5,8 @@
 <h1 align="center">Kaisola</h1>
 
 <p align="center">
-  <strong>Files first. Agents alongside.</strong><br />
-  A desktop IDE for source files, Markdown, LaTeX, terminals, Codex, and Claude.
+  <strong>Your agents. One controlled workspace.</strong><br />
+  Direct Codex and Claude, run real terminals, and coordinate cross-provider teams.
 </p>
 
 <p align="center">
@@ -16,27 +16,28 @@
   <a href="docs/">Docs</a>
 </p>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="site/assets/hero-dark.jpg" />
-  <img src="site/assets/hero-light.jpg" alt="Kaisola with a vertical session rail, agent and terminal panels, and a file editor" />
-</picture>
+<img src="site/assets/mesh-control-light.jpg" width="1600" height="1000" alt="A paused Kaisola Mesh where Claude has finished and Codex can continue without repeating completed work" />
 
-Kaisola keeps the project at the center of the workspace. The file tree can sit
-on either side, sessions live in a vertical rail by default, and projects stay
-open as tabs across the top. Resize, split, or move the panels without losing
-the conversation or terminal that belongs to the work.
+Kaisola gives provider-native agent sessions, real CLIs, terminals, and files a
+single inspectable surface. Run one agent directly or give a Kaisola Mesh one
+mission. You can stop the team, preserve completed work, and continue only the
+unfinished participants after a reload or restart.
 
 It is free and open source. The current desktop build targets **macOS 13+ on
 Apple Silicon**.
 
 ## What is inside
 
-- **Files-first workspace.** Browse and search the project, edit source, inspect
-  diffs, and preview documents without leaving the current project tab.
 - **Codex and Claude over ACP.** Structured conversations include tool activity,
-  plans, permission requests, queued follow-ups, and resumable session IDs.
+  plans, permission requests, durable queued follow-ups, provider models and
+  effort, and resumable session IDs.
+- **Kaisola Mesh.** Coordinate bounded cross-provider teams with durable
+  stop/continue, isolated git worktrees, cross-review, and single-owner
+  integration.
 - **Real terminals.** Interactive shells run through `node-pty`, so colors,
   prompts, and terminal programs behave like they do in your normal shell.
+- **Project workspace.** Browse and search files, edit source, inspect diffs,
+  and preview documents without leaving the agent sessions doing the work.
 - **Flexible session layout.** Keep sessions in the default vertical rail, move
   them across the top, split them side by side, and resize the surrounding UI.
 - **Markdown and LaTeX.** Edit GitHub-flavored Markdown in a clean rendered
@@ -50,8 +51,8 @@ Apple Silicon**.
 ## Kaisola Mesh
 
 A Mesh is a bounded multi-agent collaboration protocol, not an unstructured room
-where several models edit the same checkout. Start with Claude and Codex, then
-add participants and choose each agent's live provider model before the mission:
+where several models edit the same checkout. Start with Claude and Codex, add up
+to six participants, and choose each agent's live provider model and effort:
 
 1. Every participant scouts the task independently.
 2. They compare approaches, risks, interfaces, and acceptance criteria.
@@ -61,9 +62,10 @@ add participants and choose each agent's live provider model before the mission:
 6. The agents cross-review the exact candidate changes in a verification ring.
 7. You approve integration, then one owner merges and runs final checks.
 
-Human approval remains at every state-changing boundary. If a role is ambiguous
-or ownership would overlap, the protocol stops instead of silently letting both
-agents write to the same files.
+Human approval remains at every state-changing boundary. Stop snapshots finished
+workers and cancels unfinished ones; Continue retries only that unfinished set.
+Every stage is journaled, and integration rejects work that drifted beyond the
+exact commit reviewed by its peer.
 
 ## Local by default
 

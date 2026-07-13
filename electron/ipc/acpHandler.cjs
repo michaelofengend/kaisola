@@ -5,6 +5,7 @@
 const path = require('node:path')
 const os = require('node:os')
 const fs = require('node:fs')
+const { randomUUID } = require('node:crypto')
 const { execFileSync } = require('node:child_process')
 const { shell, app } = require('electron')
 const { AcpConnection } = require('./acp.cjs')
@@ -85,7 +86,6 @@ function isSensitivePath(p) {
 }
 // inline permission cards: permId → { resolve, timer, entry } for the agent's
 // blocked request (entry lets us clean up a dying connection's cards)
-let permSeq = 0
 const pendingPermissions = new Map()
 const PERMISSION_TIMEOUT_MS = 300_000
 const CANCEL_GRACE_MS = 8_000
@@ -106,6 +106,23 @@ function cancelPendingFor(entry) {
     p.resolve('cancel')
     sendTo(entry, 'acp:permission-resolved', { permId })
   }
+}
+
+/** Decisions that never need a renderer round-trip. Cancellation wins over
+ * even Execute/Sprint autonomy so a late provider callback cannot reopen a
+ * state-changing permission gate after the user pressed Stop. */
+function immediatePermissionDecision(entry) {
+  if (entry?.cancelRequested) return 'cancel'
+  if (entry?.autonomy === 'observe') return 'reject'
+  if (entry?.autonomy === 'execute' || entry?.autonomy === 'sprint') return 'allow'
+  return null
+}
+
+function beginEntryCancellation(entry) {
+  if (!entry) return false
+  entry.cancelRequested = (entry.inFlightTurns ?? 0) > 0 || !!entry.current?.channel
+  cancelPendingFor(entry)
+  return entry.cancelRequested
 }
 
 function clearCancelWatchdog(entry) {
@@ -168,7 +185,7 @@ function scheduleIdlePark(internalKey, requestedMs) {
 
 function canIdlePark(entry) {
   const awaitingPermission = [...pendingPermissions.values()].some((p) => p.entry === entry)
-  return !!entry && (entry.inFlightTurns ?? 0) === 0 && !entry.current?.channel && !awaitingPermission && !!entry.conn?.alive && !!entry.conn.canLoadSession && !!entry.meta?.sessionId
+  return !!entry && (entry.inFlightTurns ?? 0) === 0 && !entry.current?.channel && !awaitingPermission && !!entry.conn?.alive && !!(entry.conn.canResumeSession || entry.conn.canLoadSession) && !!entry.meta?.sessionId
 }
 
 /** A renderer-window swap is safe only while its ACP sessions are between
@@ -673,7 +690,7 @@ function resolveConfig(config) {
 
 function buildTerminalHost(entry, sessionCwd, agentKey, agentName) {
   return {
-    async create({ command, args, env, cwd }) {
+    async create({ command, args, env, cwd, outputByteLimit }) {
       const terminalId = `acp-term-${++acpTermSeq}`
       const created = await sessionBroker().terminal('create', entry.sender, {
         id: terminalId,
@@ -681,6 +698,7 @@ function buildTerminalHost(entry, sessionCwd, agentKey, agentName) {
         args,
         env,
         cwd: cwd || sessionCwd,
+        outputByteLimit,
         cols: 100,
         rows: 30,
       }, { timeoutMs: 20_000 })
@@ -727,7 +745,11 @@ function agentSummary(sender) {
       canLoadSession: !!(e.conn && e.conn.canLoadSession),
       promptImages: !!(e.conn && e.conn.promptImageOk),
       promptQueue: !!(e.conn && e.conn.supportsPromptQueue),
-      busy: !!(e.current && e.current.channel),
+      // cancel clears the renderer stream channel immediately, but the
+      // provider promise can remain alive until its cooperative cancellation
+      // settles (or the watchdog reaps it). Report both so restart recovery
+      // never dispatches a replacement turn into that old connection.
+      busy: !!(e.current && e.current.channel) || (e.inFlightTurns ?? 0) > 0,
       autonomy: e.autonomy,
     }))
 }
@@ -841,7 +863,7 @@ function registerAcpHandlers(ipcMain) {
     // entry.sender tracks the CURRENT window (acp:status rebinds it), so these
     // callbacks keep reaching the renderer after a window close/reopen
     const processToken = processLedger ? processLedger.newToken() : null
-    const entry = { conn: null, meta: null, sender: event.sender, controls: { modes: null, configOptions: [] }, availableCommands: [], current: { sender: null, channel: null }, inFlightTurns: 0, autonomy: config.autonomy || DEFAULT_AUTONOMY, processToken }
+    const entry = { conn: null, meta: null, sender: event.sender, controls: { modes: null, configOptions: [] }, availableCommands: [], current: { sender: null, channel: null }, inFlightTurns: 0, cancelRequested: false, autonomy: config.autonomy || DEFAULT_AUTONOMY, processToken }
     connectTask.entry = entry
 
     // per-connection env on top of the preset's (e.g. CLAUDE_CONFIG_DIR / CODEX_HOME
@@ -908,12 +930,12 @@ function registerAcpHandlers(ipcMain) {
           // per-connection autonomy (NOT a shared global): a window-1 Observe
           // agent stays read-only even after window-2 connects at Sprint, and the
           // live dial (acp:set-autonomy) can lower it mid-turn to stop this agent
-          if (entry.autonomy === 'observe') return 'reject'
-          if (entry.autonomy === 'execute' || entry.autonomy === 'sprint') return 'allow'
+          const immediate = immediatePermissionDecision(entry)
+          if (immediate) return immediate
           // no live window to ask → fail CLOSED, never silently allow
           if (!entry.sender || entry.sender.isDestroyed()) return 'cancel'
           const toolCall = (params && params.toolCall) || {}
-          const permId = `perm-${++permSeq}`
+          const permId = `perm-${randomUUID()}`
           // diff-shaped content (OpenCode sends one diff block per file) —
           // the card renders the ACTUAL change, not just a tool name
           const diffs = (Array.isArray(toolCall.content) ? toolCall.content : [])
@@ -958,11 +980,19 @@ function registerAcpHandlers(ipcMain) {
         await conn.initialize()
         // restart/relaunch continuity: resume the thread's prior session when
         // the agent supports session/load; a stale/pruned id falls back fresh
-        if (config.resumeSessionId && conn.canLoadSession) {
-          try {
-            await conn.loadSession(String(config.resumeSessionId))
-            return { sessionId: String(config.resumeSessionId), resumed: true }
-          } catch { /* fall through to session/new */ }
+        if (config.resumeSessionId) {
+          if (conn.canResumeSession) {
+            try {
+              await conn.resumeSession(String(config.resumeSessionId))
+              return { sessionId: String(config.resumeSessionId), resumed: true }
+            } catch { /* try legacy load or fall through fresh */ }
+          }
+          if (conn.canLoadSession) {
+            try {
+              await conn.loadSession(String(config.resumeSessionId))
+              return { sessionId: String(config.resumeSessionId), resumed: true }
+            } catch { /* fall through to session/new */ }
+          }
         }
         const session = await conn.newSession()
         return session
@@ -992,6 +1022,7 @@ function registerAcpHandlers(ipcMain) {
     const entry = entryFor(event.sender, agentKey)
     if (!entry || !entry.conn.alive) return { ok: false, message: 'Agent not connected.' }
     if (entry.current.channel || (entry.inFlightTurns ?? 0) > 0) return { ok: false, message: 'The previous agent turn is still stopping — send again in a moment.' }
+    entry.cancelRequested = false
     // identity token: acp:cancel may null entry.current to free the composer for a
     // hung agent, so read the __done target from this local turn (not entry.current,
     // which cancel/a newer prompt may have replaced) and clear only if still ours.
@@ -1035,6 +1066,7 @@ function registerAcpHandlers(ipcMain) {
       // unwinds NOTHING is legitimately in flight — force-reset instead of
       // decrementing so an unanswered steer can never strand the counter
       entry.inFlightTurns = 0
+      entry.cancelRequested = false
       clearCancelWatchdog(entry)
     }
   })
@@ -1135,9 +1167,10 @@ function registerAcpHandlers(ipcMain) {
   })
 
   // the inline card's answer — 'allow' | 'reject' | a concrete optionId
-  ipcMain.handle('acp:permission:respond', (_e, { permId, optionId, decision } = {}) => {
+  ipcMain.handle('acp:permission:respond', (event, { permId, optionId, decision } = {}) => {
     const pending = pendingPermissions.get(permId)
     if (!pending) return { ok: false }
+    if (pending.entry?.sender !== event.sender && pending.entry?.sender?.id !== event.sender?.id) return { ok: false }
     pendingPermissions.delete(permId)
     clearTimeout(pending.timer)
     pending.resolve(optionId ? { optionId } : decision === 'reject' ? 'reject' : 'allow')
@@ -1147,6 +1180,11 @@ function registerAcpHandlers(ipcMain) {
   ipcMain.handle('acp:cancel', (event, { agentKey } = {}) => {
     const internalKey = ikey(event.sender, agentKey)
     const entry = entryFor(event.sender, agentKey)
+    // Stop is a fail-closed boundary. A permission prompt must become
+    // unactionable as soon as cancellation is requested, not several seconds
+    // later when the stuck-turn watchdog reaps the adapter. Otherwise a human
+    // can approve a state-changing tool after Mesh has visibly paused.
+    if (entry) beginEntryCancellation(entry)
     entry?.conn.cancel()
     // a hung agent may ACK session/cancel but neither finish nor exit, so the
     // prompt's promise never settles and its finally never clears the lock —
@@ -1173,8 +1211,25 @@ function registerAcpHandlers(ipcMain) {
     return { ok: true }
   })
 
+  ipcMain.handle('acp:close-session', async (event, { agentKey } = {}) => {
+    const entry = entryFor(event.sender, agentKey)
+    if (!entry?.conn?.alive) return { ok: true, closed: false }
+    if (!entry.conn.canCloseSession) return { ok: true, closed: false }
+    try {
+      const result = await entry.conn.closeSession()
+      return { ok: true, closed: !!result.closed }
+    } catch (error) {
+      return { ok: false, closed: false, message: String(error?.message ?? error) }
+    }
+  })
+
   ipcMain.handle('acp:disconnect', (event, { agentKey } = {}) => {
     const internalKey = ikey(event.sender, agentKey)
+    const connecting = connectTasks.get(internalKey)
+    if (connecting) {
+      connecting.cancelled = true
+      connecting.entry?.conn?.dispose()
+    }
     clearIdleTimer(internalKey)
     connectionLeases.delete(internalKey)
     const entry = connections.get(internalKey)
@@ -1224,6 +1279,10 @@ module.exports = {
     idleTimers,
     scheduleIdlePark,
     canIdlePark,
+    cancelPendingFor,
+    immediatePermissionDecision,
+    beginEntryCancellation,
+    agentSummary,
     acpRendererSwapState,
     acpRestartSafetyState,
     waitForAcpRestartSafe,

@@ -40,6 +40,7 @@ const bridge = {
     connect: (config) => ipcRenderer.invoke('acp:connect', config),
     disconnect: (agentKey) => ipcRenderer.invoke('acp:disconnect', { agentKey }),
     cancel: (agentKey) => ipcRenderer.invoke('acp:cancel', { agentKey }),
+    closeSession: (agentKey) => ipcRenderer.invoke('acp:close-session', { agentKey }),
     lease: (agentKey, leaseId, active, idleMs) => ipcRenderer.invoke('acp:lease', { agentKey, leaseId, active, idleMs }),
     diagnostics: () => ipcRenderer.invoke('acp:diagnostics'),
     // live autonomy dial → every connection this window owns (see acpHandler)
@@ -52,17 +53,58 @@ const bridge = {
     prompt: (agentKey, text, onUpdate, images) => {
       const reqId = `p${++seq}`
       const chan = `acp:update:${reqId}`
+      let done = false
+      let settled = false
+      let resultReady = false
+      let result
+      let resolvePrompt
+      let rejectPrompt
+      let safety = null
+      const cleanup = () => {
+        ipcRenderer.removeListener(chan, listener)
+        if (safety) clearTimeout(safety)
+      }
+      const settle = () => {
+        if (settled || !resultReady || (result?.ok && !done)) return
+        settled = true
+        cleanup()
+        resolvePrompt(result)
+      }
       const listener = (_e, update) => {
         if (update && update.__done) {
-          ipcRenderer.removeListener(chan, listener)
+          // IPC invoke completion and streamed events use different channels;
+          // Chromium does not guarantee their relative delivery. Resolve only
+          // after this boundary so the renderer can synchronously flush every
+          // final token into the durable terminal receipt.
+          done = true
+          settle()
           return
         }
         onUpdate(update)
       }
       ipcRenderer.on(chan, listener)
-      const p = ipcRenderer.invoke('acp:prompt', { agentKey, reqId, text, images })
-      p.finally(() => setTimeout(() => ipcRenderer.removeListener(chan, listener), 3000)) // safety net
-      return p
+      const prompt = new Promise((resolve, reject) => { resolvePrompt = resolve; rejectPrompt = reject })
+      ipcRenderer.invoke('acp:prompt', { agentKey, reqId, text, images }).then((value) => {
+        result = value
+        resultReady = true
+        settle()
+        if (!settled && value?.ok) {
+          // Compatibility for a third-party/main-process implementation that
+          // omits __done. The normal path settles immediately on the boundary.
+          safety = setTimeout(() => {
+            if (settled) return
+            settled = true
+            cleanup()
+            resolvePrompt(result)
+          }, 3000)
+        }
+      }, (error) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        rejectPrompt(error)
+      })
+      return prompt
     },
     /** Mid-turn steer: inject a follow-up into the ALREADY-RUNNING turn. No new
      * channel — its output rides the active prompt()'s stream. Rejects (ok:false,
@@ -336,6 +378,7 @@ const bridge = {
     create: (req) => ipcRenderer.invoke('worktree:create', req),
     finalize: (req) => ipcRenderer.invoke('worktree:finalize', req),
     diff: (req) => ipcRenderer.invoke('worktree:diff', req),
+    verify: (req) => ipcRenderer.invoke('worktree:verify', req),
     merge: (req) => ipcRenderer.invoke('worktree:merge', req),
     remove: (req) => ipcRenderer.invoke('worktree:remove', req),
     list: (req) => ipcRenderer.invoke('worktree:list', req),

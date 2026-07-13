@@ -562,17 +562,18 @@ export interface KaisolaBridge {
     presets(): Promise<AcpPreset[]>
     status(clientKeys?: string[], scope?: string): Promise<{ ok: boolean; agents: AcpAgent[] }>
     connect(config: AcpConnectConfig): Promise<{ ok: boolean; key?: string; agent?: AcpMeta; controls?: AcpControls; authMethods?: AcpAuthMethod[]; message?: string; resumed?: boolean }>
-    disconnect(agentKey: string): Promise<{ ok: boolean }>
-    cancel(agentKey: string): Promise<{ ok: boolean }>
+    disconnect(agentKey: string, scope?: string): Promise<{ ok: boolean }>
+    cancel(agentKey: string, scope?: string): Promise<{ ok: boolean }>
+    closeSession(agentKey: string, scope?: string): Promise<{ ok: boolean; closed?: boolean; message?: string }>
     /** Keep/release a mounted-card lease; release parks only resumable idle agents. */
     lease(agentKey: string, leaseId: string, active: boolean, idleMs?: number, scope?: string): Promise<{ ok: boolean; leases?: number }>
     diagnostics?(): Promise<unknown>
     /** Live autonomy dial — update every connection this window owns in main. */
     setAutonomy(autonomy: AutonomyLevel): Promise<{ ok: boolean }>
-    setMode(agentKey: string, modeId: string): Promise<{ ok: boolean; message?: string }>
-    setModel(agentKey: string, modelId: string): Promise<{ ok: boolean; message?: string }>
-    setConfigOption(agentKey: string, configId: string, value: string): Promise<{ ok: boolean; message?: string }>
-    authenticate(agentKey: string, methodId: string): Promise<{ ok: boolean; pending?: boolean; message?: string }>
+    setMode(agentKey: string, modeId: string, scope?: string): Promise<{ ok: boolean; message?: string }>
+    setModel(agentKey: string, modelId: string, scope?: string): Promise<{ ok: boolean; message?: string }>
+    setConfigOption(agentKey: string, configId: string, value: string, scope?: string): Promise<{ ok: boolean; message?: string }>
+    authenticate(agentKey: string, methodId: string, scope?: string): Promise<{ ok: boolean; pending?: boolean; message?: string }>
     prompt(agentKey: string, text: string, onUpdate: (u: AcpUpdate) => void, images?: { mimeType: string; data: string }[], scope?: string): Promise<{ ok: boolean; stopReason?: string; message?: string }>
     /** Inject a follow-up into an agent's already-running turn (mid-turn steer).
      * `unsupported`/`noTurn` signal the caller to fall back to normal enqueue. */
@@ -745,9 +746,10 @@ export interface KaisolaBridge {
   worktree: {
     create(req: { repo: string; taskId: string }): Promise<{ ok: boolean; path?: string; branch?: string; base?: string; message?: string }>
     /** `repo` lets main rehydrate a worktree it forgot across a relaunch. */
-    finalize(req: { taskId: string; message?: string; repo?: string }): Promise<{ ok: boolean; committed?: boolean; message?: string }>
-    diff(req: { taskId: string }): Promise<{ ok: boolean; patch?: string; files?: WorktreeFile[]; message?: string }>
-    merge(req: { taskId: string; repo?: string }): Promise<{ ok: boolean; conflicted?: boolean; message?: string }>
+    finalize(req: { taskId: string; message?: string; repo?: string }): Promise<{ ok: boolean; committed?: boolean; sha?: string; message?: string }>
+    diff(req: { taskId: string; repo?: string; ref?: string }): Promise<{ ok: boolean; patch?: string; files?: WorktreeFile[]; sha?: string; message?: string }>
+    verify(req: { taskId: string; repo?: string; ref: string }): Promise<{ ok: boolean; drifted?: boolean; sha?: string; message?: string }>
+    merge(req: { taskId: string; repo?: string; ref?: string }): Promise<{ ok: boolean; conflicted?: boolean; drifted?: boolean; message?: string }>
     remove(req: { taskId: string; repo?: string }): Promise<{ ok: boolean; message?: string }>
     list(req: { repo: string }): Promise<{ ok: boolean; raw?: string }>
   }
@@ -892,6 +894,9 @@ const webMock: KaisolaBridge = {
     },
     async cancel() {
       return { ok: true }
+    },
+    async closeSession() {
+      return { ok: true, closed: false }
     },
     async lease() {
       return { ok: true }
@@ -1160,6 +1165,7 @@ const webMock: KaisolaBridge = {
     async create() { return { ok: false, message: DESKTOP_ONLY } },
     async finalize() { return { ok: false, message: DESKTOP_ONLY } },
     async diff() { return { ok: false, message: DESKTOP_ONLY } },
+    async verify() { return { ok: false, message: DESKTOP_ONLY } },
     async merge() { return { ok: false, message: DESKTOP_ONLY } },
     async remove() { return { ok: true } },
     async list() { return { ok: false } },
@@ -1317,13 +1323,14 @@ function scopeAcp(acp: KaisolaBridge['acp']): KaisolaBridge['acp'] {
       return { ...res, agents }
     },
     connect: (config) => acp.connect({ ...config, scope: config.scope ?? (acpScope.current || undefined) }),
-    disconnect: (k) => acp.disconnect(scopedKey(k)),
-    cancel: (k) => acp.cancel(scopedKey(k)),
+    disconnect: (k, scope) => acp.disconnect(scopedKeyFor(k, scope)),
+    cancel: (k, scope) => acp.cancel(scopedKeyFor(k, scope)),
+    closeSession: (k, scope) => acp.closeSession(scopedKeyFor(k, scope)),
     lease: (k, leaseId, active, idleMs, scope) => acp.lease(scopedKeyFor(k, scope), leaseId, active, idleMs),
-    setMode: (k, m) => acp.setMode(scopedKey(k), m),
-    setModel: (k, m) => acp.setModel(scopedKey(k), m),
-    setConfigOption: (k, c, v) => acp.setConfigOption(scopedKey(k), c, v),
-    authenticate: (k, m) => acp.authenticate(scopedKey(k), m),
+    setMode: (k, m, scope) => acp.setMode(scopedKeyFor(k, scope), m),
+    setModel: (k, m, scope) => acp.setModel(scopedKeyFor(k, scope), m),
+    setConfigOption: (k, c, v, scope) => acp.setConfigOption(scopedKeyFor(k, scope), c, v),
+    authenticate: (k, m, scope) => acp.authenticate(scopedKeyFor(k, scope), m),
     prompt: (k, text, onUpdate, images, scope) => acp.prompt(scopedKeyFor(k, scope), text, onUpdate, images),
     steer: (k, text, images, scope) => acp.steer(scopedKeyFor(k, scope), text, images),
     onNotice: (cb) =>

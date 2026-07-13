@@ -129,6 +129,9 @@ async function dispatch(client, method, params = {}) {
         args: Array.isArray(params.args) ? params.args.map(String).slice(0, 200) : undefined,
         cwd: typeof params.cwd === 'string' ? params.cwd : os.homedir(),
         env: params.env && typeof params.env === 'object' ? params.env : undefined,
+        outputByteLimit: Number.isFinite(Number(params.outputByteLimit))
+          ? Math.max(0, Math.min(Math.floor(Number(params.outputByteLimit)), 8 * 1024 * 1024))
+          : undefined,
         cols: Number(params.cols) || 80,
         rows: Number(params.rows) || 24,
         sender: owner,

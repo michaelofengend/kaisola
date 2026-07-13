@@ -1,15 +1,10 @@
 # Backlog
 
-- [x] Stop repeated Codex/Claude browser-auth prompts when an account is already authenticated.
-- [x] Remove the green inset bracket that cuts into Markdown titles while editing.
-- [x] Keep a larger byte-bounded live agent history and automatically hydrate recent sessions used within 24 hours.
-- [x] Keep the current agent plan visible in a pinned shelf outside the scrolling transcript.
-- [x] Surface the live slash and dollar commands advertised by each ACP agent; do not invent unsupported commands.
-- [x] Review this batch for minimal implementation, hardcoded assumptions, and failure cases.
-- [x] Reduce live-agent memory with lazy connections, shorter idle parking, bounded transcripts, and explicit disconnects.
-- [x] Refresh the Kaisola website and README for the current files-first desktop experience.
-- [x] Stabilize on the newest available update before installing so multiple missed versions require one restart.
-- [x] Put file tree, search, usage, notifications, avatar, and settings in one quiet bottom-left row.
-- [x] Give agents current usage warnings when an hourly or weekly allowance falls below 50% remaining.
-- [x] Rename group sessions to Kaisola Mesh and expose live per-participant model selection plus additional participants.
-- [x] Verify repository authorship: the Git history contains only Michael Ofengenden identities, not Claude.
+- [x] Put the profile control at the far bottom-left, followed by Settings and the remaining footer controls on one aligned row.
+- [x] Add provider-supported Claude effort controls to each Claude participant in Kaisola Mesh.
+- [x] Review hardware-memory savings for agents and terminal CLIs without reducing capability, measure the important baselines, and document ranked options.
+- [x] Make closing a session reversible, distinguish Continued/Resumed/Restarted recovery, and add a confirmed permanent-delete action that never deletes workspace files or worktrees.
+- [x] Refresh the website with unsqueezed screenshots and an agents, CLI terminals, orchestration, and Mesh-first hierarchy.
+- [x] Perform a thorough code and failure-mode review of the release.
+- [x] Delete the obsolete public `wip-safety-snapshot` tag and verify that it is gone from the remote.
+- [x] Fix narrow Mesh cards so Claude/Codex labels and status metadata never overlap response text.

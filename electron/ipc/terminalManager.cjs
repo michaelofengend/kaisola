@@ -164,7 +164,7 @@ function send(sender, channel, payload) {
  * data to `sender` on terminal:data:<id> and accumulates output for snapshots
  * and ACP terminal/output. Resolves exit via waitForExit().
  */
-function spawn({ id, command, args, cwd, env, cols, rows, sender }) {
+function spawn({ id, command, args, cwd, env, outputByteLimit, cols, rows, sender }) {
   if (!pty) return null
   const prior = terms.get(id)
   if (prior) {
@@ -178,6 +178,7 @@ function spawn({ id, command, args, cwd, env, cols, rows, sender }) {
   // pty.spawn throws uncaught on a missing dir; fall back to home instead
   const missingCwd = !!cwd && !fs.existsSync(cwd)
   const startCwd = missingCwd ? os.homedir() : (cwd || os.homedir())
+  const retainedOutputBytes = Number.isFinite(outputByteLimit) ? Math.max(0, Math.floor(outputByteLimit)) : null
   const p = pty.spawn(command || shell, command ? args || [] : ['-l'], {
     name: 'xterm-256color',
     cols: cols || 80,
@@ -191,7 +192,17 @@ function spawn({ id, command, args, cwd, env, cols, rows, sender }) {
     sender,
     // Hidden renderers leave zero scrollback in RAM. The pty stays alive and
     // writes to this bounded disk spool until an xterm reattaches.
-    spool: new TerminalSpool({ dir: spoolDir, id }),
+    spool: new TerminalSpool({
+      dir: spoolDir,
+      id,
+      ...(retainedOutputBytes == null ? {} : {
+        diskCap: Math.max(1, retainedOutputBytes),
+        hotCap: Math.max(1, Math.min(DEFAULT_HOT_CAP, retainedOutputBytes)),
+        queueCap: Math.max(1, Math.min(256 * 1024, retainedOutputBytes)),
+        retentionCap: retainedOutputBytes,
+      }),
+    }),
+    outputByteLimit: retainedOutputBytes,
     rendererVisible: true,
     pending: '', // coalesced-but-unsent output (already part of the ring)
     flushTimer: null,
@@ -388,7 +399,7 @@ function snapshot(id) {
   const r = terms.get(id)
   if (!r) return { output: '', exited: true, exitStatus: null }
   return {
-    ...r.spool.snapshot(OUTPUT_CAP),
+    ...r.spool.snapshot(r.outputByteLimit ?? OUTPUT_CAP),
     exited: r.exited,
     exitStatus: r.exitStatus,
     agentBusy: r.agentBusy,

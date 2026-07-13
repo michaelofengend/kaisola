@@ -52,6 +52,33 @@ test('terminal spool degrades to bounded RAM instead of throwing on disk failure
   }
 })
 
+test('terminal output caps preserve zero and truncate only at UTF-8 boundaries', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaisola-spool-utf8-test-'))
+  try {
+    const spool = new TerminalSpool({ dir, id: 'term-utf8' })
+    spool.push('A😀B')
+    spool.setVisible(false)
+    const fourBytes = spool.snapshot(4)
+    assert.equal(fourBytes.output, 'B')
+    assert.equal(fourBytes.output.includes('\uFFFD'), false)
+    assert.ok(Buffer.byteLength(fourBytes.output, 'utf8') <= 4)
+    assert.equal(fourBytes.truncated, true)
+    const zero = spool.snapshot(0)
+    assert.equal(zero.output, '')
+    assert.equal(zero.truncated, true)
+
+    const discard = new TerminalSpool({ dir, id: 'term-zero-retention', retentionCap: 0 })
+    discard.push('sensitive output must never land')
+    discard.setVisible(false)
+    const discardedStats = discard.stats()
+    assert.equal(discardedStats.ramBytes, 0)
+    assert.equal(discardedStats.diskBytes, 0)
+    assert.deepEqual(discard.snapshot(0), { output: '', truncated: true, viewState: null })
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('assistant archive preserves evicted turns in order and pages them without hydration', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaisola-assistant-archive-test-'))
   const archive = new AssistantArchive(dir)
@@ -237,6 +264,7 @@ test('idle ACP park gate refuses running, non-resumable, or unsaved sessions', (
   assert.equal(_acpTest.canIdlePark({ ...base, conn: { alive: true, canLoadSession: false } }), false)
   assert.equal(_acpTest.canIdlePark({ ...base, meta: {} }), false)
   assert.equal(_acpTest.canIdlePark({ ...base, inFlightTurns: 1 }), false)
+  assert.equal(_acpTest.canIdlePark({ ...base, conn: { alive: true, canLoadSession: false, canResumeSession: true } }), true)
 })
 
 test('renderer-window glass swap is blocked during an active ACP turn', () => {
@@ -284,6 +312,51 @@ test('process-wide ACP restart gate fails closed for connections, turns, and per
     _acpTest.connections.delete(key)
     _acpTest.connectTasks.delete('751|claude')
     _acpTest.pendingPermissions.delete('perm-restart')
+  }
+})
+
+test('cancelling an ACP entry immediately fails closed every pending permission', () => {
+  const sent = []
+  const sender = { isDestroyed: () => false, send: (channel, payload) => sent.push([channel, payload]) }
+  const entry = { sender, current: { channel: null }, inFlightTurns: 1, autonomy: 'sprint', cancelRequested: false }
+  const decisions = []
+  const timer = setTimeout(() => {}, 60_000)
+  timer.unref?.()
+  _acpTest.pendingPermissions.set('perm-stop', { entry, timer, resolve: (decision) => decisions.push(decision) })
+  try {
+    assert.equal(_acpTest.beginEntryCancellation(entry), true)
+    assert.deepEqual(decisions, ['cancel'])
+    assert.equal(_acpTest.pendingPermissions.has('perm-stop'), false)
+    assert.deepEqual(sent, [['acp:permission-resolved', { permId: 'perm-stop' }]])
+    // A new provider permission arriving after Stop is still rejected, even
+    // though Sprint would otherwise auto-allow it.
+    assert.equal(_acpTest.immediatePermissionDecision(entry), 'cancel')
+    entry.inFlightTurns = 0
+    entry.cancelRequested = false
+    assert.equal(_acpTest.immediatePermissionDecision(entry), 'allow')
+  } finally {
+    clearTimeout(timer)
+    _acpTest.pendingPermissions.delete('perm-stop')
+  }
+})
+
+test('ACP status remains busy until a cancelled provider turn actually settles', () => {
+  const sender = { id: 799 }
+  const key = '799|codex::thread-cancelled'
+  const entry = {
+    sender,
+    meta: { key: 'codex::thread-cancelled', name: 'Codex', presetId: 'codex' },
+    current: { sender: null, channel: null },
+    inFlightTurns: 1,
+    conn: { alive: true, authMethods: [], sessionMcpServers: () => [] },
+  }
+  _acpTest.connections.set(key, entry)
+  try {
+    assert.equal(_acpTest.agentSummary(sender)[0].busy, true)
+    entry.inFlightTurns = 0
+    assert.equal(_acpTest.agentSummary(sender)[0].busy, false)
+  } finally {
+    _acpTest.connections.delete(key)
   }
 })
 

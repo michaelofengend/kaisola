@@ -16,6 +16,10 @@ export function ShellSidebarFooter({ floating = false }: { floating?: boolean })
   return (
     <div className="shell-sidebar-footer" data-floating={floating || undefined} aria-label="Workspace controls">
       <div className="shell-sidebar-footer-tools">
+        <AppAccountButton />
+        <button className="btn-icon shell-settings-trigger" onClick={() => openSettings(true)} title="Settings  ⌘," aria-label="Open settings">
+          <Icon name="Settings" size={15} />
+        </button>
         {!railOpen && (
           <button className="btn-icon" onClick={toggleRail} title="Show file tree  ⌘B" aria-label="Show file tree">
             <Icon name="FolderTree" size={15} />
@@ -24,10 +28,6 @@ export function ShellSidebarFooter({ floating = false }: { floating?: boolean })
         <ShellTools includeSettings={false} />
         <InboxButton />
         <span className="grow" />
-        <AppAccountButton />
-        <button className="btn-icon shell-settings-trigger" onClick={() => openSettings(true)} title="Settings  ⌘," aria-label="Open settings">
-          <Icon name="Settings" size={15} />
-        </button>
       </div>
     </div>
   )

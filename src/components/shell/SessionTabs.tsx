@@ -58,6 +58,8 @@ export function SessionTabs({ orientation = 'horizontal' }: { orientation?: 'hor
   const closeTerminal = useKaisola((s) => s.closeTerminal)
   const closeAgentTerminal = useKaisola((s) => s.closeAgentTerminal)
   const closePanel = useKaisola((s) => s.closePanel)
+  const forgetClosedSession = useKaisola((s) => s.forgetClosedSession)
+  const pushToast = useKaisola((s) => s.pushToast)
   const renameThread = useKaisola((s) => s.renameAssistantThread)
   const renameTerminal = useKaisola((s) => s.renameTerminal)
   const togglePinSession = useKaisola((s) => s.togglePinSession)
@@ -87,13 +89,16 @@ export function SessionTabs({ orientation = 'horizontal' }: { orientation?: 'hor
   const tabs = new Map<string, STab>()
   threads.filter((thread) => !thread.groupParentId).forEach((t, i) => {
     const label = threadLabel(t, agents, threads, i)
+    const permissionKeys = t.group
+      ? new Set(t.group.members.map((member) => `${member.agentKey}::${member.threadId}`))
+      : new Set([`${t.agentKey}::${t.id}`])
     tabs.set(t.id, {
       id: t.id,
       icon: t.group ? 'Network' : 'Sparkles',
       agentKey: t.group ? undefined : t.agentKey,
       label,
       hue: sessionHue({ agentKey: t.agentKey }),
-      state: pendingPermissions.some((permission) => permission.key === `${t.agentKey}::${t.id}`)
+      state: pendingPermissions.some((permission) => permissionKeys.has(permission.key))
         ? 'needs-you'
         : t.busy ? 'running' : needsYou[t.id] ? 'completed' : undefined,
       kind: 'thread',
@@ -173,7 +178,10 @@ export function SessionTabs({ orientation = 'horizontal' }: { orientation?: 'hor
       const owned = thread?.group
         ? thread.group.members
         : thread ? [{ threadId: thread.id, agentKey: thread.agentKey }] : []
-      for (const member of owned) void bridge.acp.disconnect(`${member.agentKey}::${member.threadId}`)
+      for (const member of owned) void (async () => {
+        await bridge.acp.cancel(`${member.agentKey}::${member.threadId}`, activeProjectId).catch(() => ({ ok: false }))
+        await bridge.acp.disconnect(`${member.agentKey}::${member.threadId}`, activeProjectId).catch(() => ({ ok: false }))
+      })()
       closeThread(t.id)
     }
     else if (t.kind === 'term') closeTerminal(t.id)
@@ -181,6 +189,51 @@ export function SessionTabs({ orientation = 'horizontal' }: { orientation?: 'hor
       closeAgentTerminal(t.id)
       bridge.terminal.kill(t.id)
     } else closePanel(t.id)
+  }
+  const deleteTab = async (t: STab) => {
+    const thread = t.kind === 'thread' ? threads.find((candidate) => candidate.id === t.id) : undefined
+    const label = thread?.group ? 'Mesh session' : t.kind === 'term' || t.kind === 'agentTerm' ? 'terminal session' : t.kind === 'panel' ? 'panel' : 'agent session'
+    if (!window.confirm(`Permanently delete this ${label}? This removes its saved conversation/session state. Workspace files and git worktrees are never deleted.`)) return
+    setMenu(null)
+    const owned = thread?.group
+      ? threads.filter((candidate) => candidate.groupParentId === thread.id)
+      : thread ? [thread] : []
+    // Capture archive epochs before the first await. The user can switch tabs
+    // while a provider's session/close is pending; afterward the store's flat
+    // runtime map belongs to a different project.
+    const archiveScopes = owned.map((candidate) => {
+      const runtime = useKaisola.getState().assistantRuntimes[candidate.id]
+      return {
+        projectId: activeProjectId,
+        threadId: candidate.id,
+        ...(runtime?.archiveEpoch ? { epoch: runtime.archiveEpoch } : {}),
+      }
+    })
+    // Resolve renderer cards first, then perform exactly one ordered provider
+    // teardown per owned thread. Calling closeTab here used to launch a second
+    // cancel→disconnect path that could win the race and prevent session/close.
+    for (const permission of pendingPermissions.filter((candidate) => owned.some((owner) => candidate.key === `${owner.agentKey}::${owner.id}`))) {
+      useKaisola.getState().answerPermission(permission.permId, { decision: 'reject' }, { cascadeReject: true })
+    }
+    const teardown = await Promise.all(owned.map(async (candidate) => {
+      const key = `${candidate.agentKey}::${candidate.id}`
+      const cancelled = await bridge.acp.cancel(key, activeProjectId).catch(() => ({ ok: false }))
+      const closed = await bridge.acp.closeSession(key, activeProjectId).catch(() => ({ ok: false, closed: false }))
+      const disconnected = await bridge.acp.disconnect(key, activeProjectId).catch(() => ({ ok: false }))
+      return { cancelled, closed, disconnected }
+    }))
+    const archives = await Promise.all(archiveScopes.map((scope) =>
+      bridge.assistantArchive?.clear(scope).catch(() => ({ ok: false })) ?? Promise.resolve({ ok: true }),
+    ))
+    if (t.kind === 'thread') closeThread(t.id, activeProjectId)
+    else if (t.kind === 'term') closeTerminal(t.id, activeProjectId)
+    else if (t.kind === 'agentTerm') closeAgentTerminal(t.id, activeProjectId)
+    else closePanel(t.id, activeProjectId)
+    forgetClosedSession(t.id, activeProjectId)
+    if (t.kind === 'term' || t.kind === 'agentTerm') void bridge.terminal.kill(t.id)
+    const teardownFailed = teardown.some((result) => !result.cancelled.ok || !result.closed.ok || result.closed.closed !== true || !result.disconnected.ok)
+    const archiveFailed = archives.some((result) => !result.ok)
+    pushToast(teardownFailed || archiveFailed ? 'warn' : 'info', `${t.label} deleted. Workspace files were left untouched.${teardownFailed || archiveFailed ? ' Some provider history could not be confirmed removed.' : ''}`)
   }
   const commitRename = () => {
     if (editing) {
@@ -275,7 +328,7 @@ export function SessionTabs({ orientation = 'horizontal' }: { orientation?: 'hor
                   <Icon name="Columns2" size={11} />
                 </button>
                 {t.closable && (
-                  <button className="stab-close" onClick={(e) => { e.stopPropagation(); closeTab(t) }} title="Close session">
+                  <button className="stab-close" onClick={(e) => { e.stopPropagation(); closeTab(t) }} title="Close session — reopen from + or ⇧⌘T">
                     <Icon name="X" size={10} />
                   </button>
                 )}
@@ -367,6 +420,12 @@ export function SessionTabs({ orientation = 'horizontal' }: { orientation?: 'hor
                 </button>
               </>
             )}
+            {menuTab && <>
+              <div className="tree-menu-sep" />
+              <button className="tree-menu-item tree-menu-danger" onClick={() => { void deleteTab(menuTab) }}>
+                <Icon name="Trash2" size={13} /> Delete permanently…
+              </button>
+            </>}
           </div>
         </div>
       )}

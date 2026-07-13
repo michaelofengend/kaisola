@@ -9,7 +9,9 @@ const path = require('node:path')
 
 process.env.KAISOLA_SMOKE = '1'
 app.disableHardwareAcceleration()
-const userData = path.join(os.tmpdir(), 'kaisola-group-ui-probe')
+// Per-process isolation lets CI/reviewers run the probe concurrently without
+// deleting or pre-populating each other's git fixture midway through a stage.
+const userData = path.join(os.tmpdir(), `kaisola-group-ui-probe-${process.pid}`)
 const workspace = path.join(userData, 'workspace')
 fs.rmSync(userData, { recursive: true, force: true })
 fs.mkdirSync(workspace, { recursive: true })
@@ -38,15 +40,28 @@ const { registerWorktreeHandlers } = require('./ipc/worktreeHandler.cjs')
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const connected = new Set()
+const cancelled = new Set()
+const adoptedBusy = new Set()
+const lifecycleEvents = []
+let delayCloseSessions = false
 let connectCalls = 0
 const selectedModels = new Map()
+const selectedEfforts = new Map()
+const promptCounts = new Map()
 const bareAgentKey = (key) => String(key ?? '').split('@@')[0]
 const controlsFor = (key) => {
   const provider = key.startsWith('claude') ? 'claude' : 'codex'
   const options = provider === 'claude'
     ? [{ modelId: 'claude-default', name: 'Claude Default' }, { modelId: 'claude-fast', name: 'Claude Fast' }]
     : [{ modelId: 'codex-default', name: 'Codex Default' }, { modelId: 'codex-deep', name: 'Codex Deep' }]
-  return { modes: null, configOptions: [], models: { currentModelId: selectedModels.get(key) ?? options[0].modelId, availableModels: options } }
+  const configOptions = provider === 'claude' ? [{
+    id: 'reasoning_effort',
+    name: 'Reasoning effort',
+    category: 'thought_level',
+    currentValue: selectedEfforts.get(key) ?? 'high',
+    options: ['low', 'medium', 'high', 'xhigh', 'max'].map((value) => ({ value, name: value })),
+  }] : []
+  return { modes: null, configOptions, models: { currentModelId: selectedModels.get(key) ?? options[0].modelId, availableModels: options } }
 }
 
 app.whenReady().then(async () => {
@@ -63,7 +78,7 @@ app.whenReady().then(async () => {
   ])
   ipcMain.handle('acp:status', (_event, { clientKeys } = {}) => ({
     ok: true,
-    agents: (clientKeys ?? []).map((key) => ({ key, presetId: key.split('::')[0], name: key.startsWith('claude') ? 'Claude' : 'Codex', connected: connected.has(key), controls: controlsFor(key) })),
+    agents: (clientKeys ?? []).map((key) => ({ key, presetId: key.split('::')[0], name: key.startsWith('claude') ? 'Claude' : 'Codex', connected: connected.has(key), busy: adoptedBusy.has(key), controls: controlsFor(key) })),
   }))
   ipcMain.handle('acp:connect', (_event, config) => {
     const key = bareAgentKey(config.clientKey)
@@ -72,12 +87,18 @@ app.whenReady().then(async () => {
     return { ok: true, agent: { key, connected: true, sessionId: `session-${key}` }, controls: controlsFor(key) }
   })
   ipcMain.handle('acp:disconnect', (_event, { agentKey } = {}) => {
-    connected.delete(bareAgentKey(agentKey))
+    const key = bareAgentKey(agentKey)
+    lifecycleEvents.push(['disconnect', key])
+    connected.delete(key)
+    adoptedBusy.delete(key)
     return { ok: true }
   })
   ipcMain.handle('acp:prompt', async (event, { agentKey, reqId, text }) => {
-    if (!connected.has(bareAgentKey(agentKey))) return { ok: false, message: 'Probe adapter is parked.' }
+    const key = bareAgentKey(agentKey)
+    if (!connected.has(key)) return { ok: false, message: 'Probe adapter is parked.' }
     const provider = agentKey.startsWith('claude') ? 'Claude' : 'Codex'
+    const count = (promptCounts.get(key) ?? 0) + 1
+    promptCounts.set(key, count)
     let reply = `${provider} independent proposal with an ownership boundary and acceptance tests.`
     if (/only role-negotiation round/.test(text)) {
       reply = `${provider} accepts the peer constraint and proposes an orthogonal role split.`
@@ -92,7 +113,9 @@ app.whenReady().then(async () => {
     } else if (/Cross-review/.test(text)) {
       reply = `${provider} verifier verdict: pass; ownership and integration checks are satisfied.`
     }
-    await wait(35)
+    const firstScout = /scouting independently/.test(text) && count === 1
+    await wait(firstScout ? (provider === 'Claude' ? 55 : 520) : 35)
+    if (cancelled.delete(key)) return { ok: true, stopReason: 'cancelled' }
     event.sender.send(`acp:update:${reqId}`, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } })
     event.sender.send(`acp:update:${reqId}`, { __done: true })
     return { ok: true, stopReason: 'end_turn' }
@@ -101,7 +124,23 @@ app.whenReady().then(async () => {
     selectedModels.set(String(agentKey).split('@@')[0], modelId)
     return { ok: true }
   })
-  for (const channel of ['acp:lease', 'acp:setMode', 'acp:setConfigOption', 'acp:set-autonomy', 'acp:cancel']) {
+  ipcMain.handle('acp:setConfigOption', (_event, { agentKey, value }) => {
+    selectedEfforts.set(String(agentKey).split('@@')[0], value)
+    return { ok: true }
+  })
+  ipcMain.handle('acp:cancel', (_event, { agentKey }) => {
+    const key = bareAgentKey(agentKey)
+    lifecycleEvents.push(['cancel', key])
+    if (adoptedBusy.has(key)) setTimeout(() => adoptedBusy.delete(key), 80)
+    else cancelled.add(key)
+    return { ok: true }
+  })
+  ipcMain.handle('acp:close-session', async (_event, { agentKey }) => {
+    lifecycleEvents.push(['close', bareAgentKey(agentKey)])
+    if (delayCloseSessions) await wait(180)
+    return { ok: true, closed: true }
+  })
+  for (const channel of ['acp:lease', 'acp:setMode', 'acp:set-autonomy']) {
     ipcMain.handle(channel, () => ({ ok: true }))
   }
   ipcMain.handle('acp:diagnostics', () => ({}))
@@ -116,6 +155,29 @@ app.whenReady().then(async () => {
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: false },
   })
   await win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: { solidwin: '1' } })
+  const captureAsset = async (name, selector) => {
+    const assetDir = process.env.KAISOLA_SITE_ASSETS
+    if (!assetDir) return null
+    win.setSize(1440, 900)
+    await wait(180)
+    await win.webContents.executeJavaScript(`(() => {
+      const state = window.__kaisola.getState()
+      const group = state.assistantThreads.find((thread) => thread.group)
+      if (!group) return
+      for (const id of [...state.dockViews]) if (id !== group.id) state.removeDockView(id)
+      state.setDockView(group.id)
+      if (window.__kaisola.getState().canvasOpen) state.toggleCanvas()
+      const stream = document.querySelector('.group-stream')
+      const target = document.querySelector(${JSON.stringify(selector)})
+      if (stream) stream.scrollTop = target ? Math.max(0, target.offsetTop - 72) : 0
+    })()`)
+    await wait(320)
+    const image = await win.webContents.capturePage()
+    const target = path.resolve(assetDir, name)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, image.resize({ width: 1600 }).toJPEG(91))
+    return target
+  }
   await wait(800)
   await win.webContents.executeJavaScript(`(() => {
     const state = window.__kaisola.getState()
@@ -142,16 +204,26 @@ app.whenReady().then(async () => {
     return (group?.group?.members ?? []).every((member) => after.assistantRuntimes[member.threadId]?.turns.length === 40)
   })()`)
 
-  const configured = await win.webContents.executeJavaScript(`(() => {
-    const selects = [...document.querySelectorAll('.group-roster-row select')]
-    if (selects.length !== 2 || selects.some((select) => select.options.length < 2)) return false
+  const configuredControls = await win.webContents.executeJavaScript(`(() => {
+    const selects = [...document.querySelectorAll('.group-model-select')]
+    const effort = document.querySelector('.group-effort-select')
+    if (selects.length !== 2 || selects.some((select) => select.options.length < 2) || !effort) return false
     selects.forEach((select) => {
       select.value = select.options[select.options.length - 1].value
       select.dispatchEvent(new Event('change', { bubbles: true }))
     })
+    effort.value = 'xhigh'
+    effort.dispatchEvent(new Event('change', { bubbles: true }))
     return !!document.querySelector('.group-add-member')
   })()`)
-  await wait(180)
+  await wait(240)
+  const configured = configuredControls && await win.webContents.executeJavaScript(`(() => {
+    const state = window.__kaisola.getState()
+    const group = state.assistantThreads.find((thread) => thread.group)
+    const claude = group?.group?.members.find((member) => member.agentKey === 'claude-code')
+    const child = state.assistantThreads.find((thread) => thread.id === claude?.threadId)
+    return child?.claudeEffort === 'xhigh' && group?.group?.members.map((member) => member.modelLabel).join(',') === 'Claude Fast,Codex Deep'
+  })()`)
 
   const asked = await win.webContents.executeJavaScript(`(() => {
     const input = document.querySelector('.group-composer textarea')
@@ -172,6 +244,14 @@ app.whenReady().then(async () => {
     }
     return false
   }
+  const waitForPaused = async () => {
+    for (let i = 0; i < 120; i++) {
+      const paused = await win.webContents.executeJavaScript(`window.__kaisola.getState().assistantThreads.find((thread) => thread.group)?.group?.paused === true`)
+      if (paused) return true
+      await wait(50)
+    }
+    return false
+  }
   const clickAction = async () => {
     for (let i = 0; i < 120; i++) {
       const clicked = await win.webContents.executeJavaScript(`(() => {
@@ -185,7 +265,46 @@ app.whenReady().then(async () => {
     }
     return false
   }
+  await wait(150)
+  const stopped = await win.webContents.executeJavaScript(`(() => { const stop = document.querySelector('.group-stop'); if (!stop) return false; stop.click(); return true })()`)
+  const paused = await waitForPaused()
+  await wait(700)
+  // Simulate a renderer restart that adopts a provider connection whose old
+  // prompt is still busy even though the renderer's transient thread.busy bit
+  // was reset. Continue must consult authoritative ACP status and cancel it
+  // before dispatching a replacement attempt.
+  const adoptedKey = [...promptCounts.keys()].find((key) => key.startsWith('codex'))
+  if (adoptedKey) adoptedBusy.add(adoptedKey)
+  win.webContents.reload()
+  await wait(900)
+  const pausedPersisted = await win.webContents.executeJavaScript(`(() => {
+    const state = window.__kaisola.getState()
+    const group = state.assistantThreads.find((thread) => thread.group)
+    return group?.group?.paused === true && group.group.pausedPending?.length === 1 && group.group.stagePrompts && group.group.stageAttemptId
+  })()`)
+  const pausedScreenshot = await captureAsset('mesh-control-light.jpg', '.group-task')
+  const pausedCloseReopen = await win.webContents.executeJavaScript(`(() => {
+    const before = window.__kaisola.getState()
+    const parent = before.assistantThreads.find((thread) => thread.group)
+    if (!parent) return { ok: false }
+    const memberIds = parent.group.members.map((member) => member.threadId)
+    before.closeAssistantThread(parent.id)
+    const closed = window.__kaisola.getState()
+    const bundle = closed.closedStack.find((entry) => entry.kind === 'group' && entry.thread?.id === parent.id)
+    closed.reopenClosedSession(parent.id)
+    const reopened = window.__kaisola.getState()
+    const restored = reopened.assistantThreads.find((thread) => thread.id === parent.id)
+    return {
+      ok: bundle?.thread?.group?.paused === true && bundle.thread.group.pausedPending?.length === 1 && restored?.group?.paused === true && restored.group.pausedPending?.length === 1 && memberIds.every((id) => reopened.assistantThreads.some((thread) => thread.id === id)),
+      pending: restored?.group?.pausedPending?.length ?? 0,
+      bundledThreads: bundle?.groupThreads?.length ?? 0,
+    }
+  })()`)
+  await wait(300)
+  const continued = await clickAction()
   const ready = await waitForPhase('ready')
+  const adoptedBusyRecovered = !!adoptedKey && !adoptedBusy.has(adoptedKey)
+  const selectiveResume = [...promptCounts.entries()].filter(([key]) => key.includes('::')).sort().map(([key, count]) => [key.split('::')[0], count])
   // Reproduce the production failure: both scouts are finished, their adapter
   // processes park, and the renderer still has an optimistic connected badge.
   // Negotiation must probe, reconnect, and drain its durable prompts.
@@ -211,6 +330,7 @@ app.whenReady().then(async () => {
     visibleGroupTabs: group && document.querySelector('.stab[data-sid="' + group.id + '"]') ? 1 : 0,
     leakedWorkerTabs: workerIds.filter((id) => document.querySelector('.stab[data-sid="' + id + '"]')).length,
     answers: [...document.querySelectorAll('.group-result p')].map((node) => node.textContent.trim()),
+    answerMap: group?.group?.answers,
     negotiations: [...document.querySelectorAll('.group-review')][0]?.querySelectorAll('p').length ?? 0,
     reviews: [...document.querySelectorAll('.group-review')].at(-1)?.querySelectorAll('p').length ?? 0,
     roleContract: group?.group?.jointPlan,
@@ -219,8 +339,19 @@ app.whenReady().then(async () => {
     changedFiles: Object.values(group?.group?.changedFiles ?? {}).flat().map((file) => file.path).sort(),
     integration: group?.group?.integration,
     error: group?.group?.error,
+    workerReceipts: Object.fromEntries(workerIds.map((id) => [id, state.assistantRuntimes[id]?.lastRun])),
+    workerTails: Object.fromEntries(workerIds.map((id) => [id, (state.assistantRuntimes[id]?.turns ?? []).slice(-4).map((turn) => ({ kind: turn.kind, at: turn.at, text: turn.text?.slice(0, 120) }))])),
     memberModels: group?.group?.members.map((member) => member.modelLabel),
     workerCount: document.querySelectorAll('.group-workers .assistant').length,
+    compactGeometry: [...document.querySelectorAll('.group-review-card')].every((card) => {
+      const copy = card.querySelector('.group-review-copy')
+      const header = copy?.querySelector('header')
+      const body = copy?.querySelector('p')
+      if (!copy || !header || !body) return false
+      const h = header.getBoundingClientRect()
+      const b = body.getBoundingClientRect()
+      return h.right <= copy.getBoundingClientRect().right + 1 && h.bottom <= b.top + 1 && card.scrollWidth <= card.clientWidth + 1
+    }),
     }
   })()`)
   await wait(700)
@@ -237,15 +368,102 @@ app.whenReady().then(async () => {
       visible: !!(group && document.querySelector('.group-assistant[data-phase="done"]')),
     }
   })()`)
+  const siteScreenshot = await captureAsset('mesh-light.jpg', '.group-execution')
   const image = await win.webContents.capturePage()
   const screenshot = path.join(os.tmpdir(), 'kaisola-group-session.png')
   fs.writeFileSync(screenshot, image.toPNG())
-  const result = { configured, saturated, asked, ready, parkedBeforeNegotiation, connectCalls, negotiated, assigned, executed, reviewed, done, ...facts, persisted, screenshot }
+  const closeReopen = await win.webContents.executeJavaScript(`(() => {
+    const before = window.__kaisola.getState()
+    const parent = before.assistantThreads.find((thread) => thread.group)
+    if (!parent) return { ok: false }
+    const parentId = parent.id
+    const memberIds = parent.group.members.map((member) => member.threadId)
+    before.closeAssistantThread(parentId)
+    const closed = window.__kaisola.getState()
+    const bundled = closed.closedStack.find((entry) => entry.kind === 'group' && entry.thread?.id === parentId)
+    const removedTogether = !closed.assistantThreads.some((thread) => thread.id === parentId || memberIds.includes(thread.id))
+    closed.reopenClosedSession(parentId)
+    const reopened = window.__kaisola.getState()
+    const restoredParent = reopened.assistantThreads.find((thread) => thread.id === parentId)
+    const restoredMembers = memberIds.every((id) => reopened.assistantThreads.some((thread) => thread.id === id && thread.queuePaused))
+    return {
+      ok: !!bundled && removedTogether && restoredParent?.group?.phase === 'done' && restoredMembers,
+      bundledThreads: bundled?.groupThreads?.length ?? 0,
+      restoredPhase: restoredParent?.group?.phase,
+      restoredMembers,
+    }
+  })()`)
+  const deleteArchiveScopes = await win.webContents.executeJavaScript(`(async () => {
+    const state = window.__kaisola.getState()
+    const parent = state.assistantThreads.find((thread) => thread.group)
+    if (!parent) return []
+    const scopes = parent.group.members.map((member) => ({
+      projectId: state.activeProjectId,
+      threadId: member.threadId,
+      epoch: 'delete-switch-' + member.threadId,
+    }))
+    for (const scope of scopes) {
+      state.updateAssistantRuntime(scope.threadId, (runtime) => ({ ...runtime, archiveEpoch: scope.epoch }))
+      const written = await window.kaisola.assistantArchive.append(scope, 'delete-fixture-' + scope.threadId, [{ kind: 'user', text: 'archive deletion fixture', at: Date.now() }])
+      if (!written?.ok) return []
+    }
+    return scopes
+  })()`)
+  const deleteLifecycleStart = lifecycleEvents.length
+  delayCloseSessions = true
+  const openedDeleteMenu = await win.webContents.executeJavaScript(`(() => {
+    window.confirm = () => true
+    const state = window.__kaisola.getState()
+    const group = state.assistantThreads.find((thread) => thread.group)
+    const tab = group && document.querySelector('.stab[data-sid="' + group.id + '"]')
+    if (!tab) return { opened: false }
+    tab.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 140, clientY: 120 }))
+    return { opened: true, originProjectId: state.activeProjectId, groupId: group.id }
+  })()`)
+  await wait(120)
+  const clickedDelete = openedDeleteMenu.opened && await win.webContents.executeJavaScript(`(() => {
+    const action = [...document.querySelectorAll('.tree-menu-danger')].find((button) => /Delete permanently/.test(button.textContent))
+    if (!action) return false
+    action.click()
+    return true
+  })()`)
+  await wait(25)
+  const switchedProjectId = clickedDelete && await win.webContents.executeJavaScript(`window.__kaisola.getState().newProject({ focus: true })`)
+  let deleted = false
+  for (let i = 0; i < 80; i++) {
+    deleted = await win.webContents.executeJavaScript(`(() => {
+      const state = window.__kaisola.getState()
+      const origin = state.projectSlices[${JSON.stringify(openedDeleteMenu.originProjectId)}]
+      return !!origin && !origin.assistantThreads.some((thread) => thread.id === ${JSON.stringify(openedDeleteMenu.groupId)}) && !origin.closedStack.some((entry) => entry.thread?.id === ${JSON.stringify(openedDeleteMenu.groupId)})
+    })()`)
+    if (deleted) break
+    await wait(50)
+  }
+  delayCloseSessions = false
+  const projectSwitchSafe = !!switchedProjectId && await win.webContents.executeJavaScript(`window.__kaisola.getState().activeProjectId === ${JSON.stringify(switchedProjectId)}`)
+  const archiveDeleteVerified = deleteArchiveScopes.length === 2 && await win.webContents.executeJavaScript(`(async () => {
+    const scopes = ${JSON.stringify(deleteArchiveScopes)}
+    const results = await Promise.all(scopes.map((scope) => window.kaisola.assistantArchive.info(scope)))
+    return results.every((result) => result?.ok && result.total === 0)
+  })()`)
+  const deleteLifecycle = lifecycleEvents.slice(deleteLifecycleStart)
+  const deleteKeys = [...promptCounts.keys()].filter((key) => key.includes('::'))
+  const deleteTeardownOrdered = deleteKeys.length === 2 && deleteKeys.every((key) =>
+    deleteLifecycle.filter((event) => event[1] === key).map((event) => event[0]).join(',') === 'cancel,close,disconnect')
+  const result = { configured, saturated, asked, stopped, paused, pausedPersisted: !!pausedPersisted, pausedScreenshot, pausedCloseReopen, continued, adoptedBusyRecovered, selectiveResume, ready, parkedBeforeNegotiation, connectCalls, negotiated, assigned, executed, reviewed, done, ...facts, persisted, siteScreenshot, screenshot, closeReopen, clickedDelete, switchedProjectId, deleted, projectSwitchSafe, archiveDeleteVerified, deleteTeardownOrdered, deleteLifecycle }
   console.log('GROUP_UI=' + JSON.stringify(result))
   app.exit(
     configured
     && saturated
     && asked
+    && stopped
+    && paused
+    && pausedPersisted
+    && pausedCloseReopen.ok
+    && pausedCloseReopen.bundledThreads === 3
+    && continued
+    && adoptedBusyRecovered
+    && selectiveResume.map((entry) => entry.join(':')).join(',') === 'claude-code:1,codex:2'
     && ready
     && parkedBeforeNegotiation
     && connectCalls >= 4
@@ -267,11 +485,19 @@ app.whenReady().then(async () => {
     && facts.roleContract.startsWith('Mission intent')
     && facts.integration === 'Integrated both reviewed branches and verified the shared acceptance tests.'
     && facts.workerCount === 2
+    && facts.compactGeometry
     && persisted.phase === 'done'
     && persisted.members === 2
     && persisted.integration === 'Integrated both reviewed branches and verified the shared acceptance tests.'
     && persisted.worktrees === 2
     && persisted.visible
+    && closeReopen.ok
+    && closeReopen.bundledThreads === 3
+    && clickedDelete
+    && deleted
+    && projectSwitchSafe
+    && archiveDeleteVerified
+    && deleteTeardownOrdered
       ? 0
       : 1,
   )

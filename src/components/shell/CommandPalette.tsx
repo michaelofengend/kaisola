@@ -197,7 +197,11 @@ export function CommandPalette() {
           hint: wt.path,
           icon: 'Trash2',
           run: () => {
-            void bridge.worktree.remove({ taskId: wt.taskId, repo: wt.repo }).then(() => {
+            void bridge.worktree.remove({ taskId: wt.taskId, repo: wt.repo }).then((result) => {
+              if (!result.ok) {
+                useKaisola.getState().pushToast('error', result.message ?? `Could not remove the ${wt.branch} worktree.`)
+                return
+              }
               useKaisola.setState((s) => {
                 const worktreeSessions = { ...s.worktreeSessions }
                 delete worktreeSessions[sid]

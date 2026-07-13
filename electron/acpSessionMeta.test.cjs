@@ -37,3 +37,24 @@ test('ACP MCP compatibility retry preserves provider metadata', async () => {
   assert.deepEqual(calls[1].mcpServers, [])
   assert.deepEqual(calls[1]._meta, meta)
 })
+
+test('ACP stable resume and close lifecycle use the advertised methods', async () => {
+  const conn = new AcpConnection({ cwd: '/tmp', mcpServers: [] })
+  const calls = []
+  conn.request = async (method, params) => {
+    calls.push({ method, params })
+    if (method === 'initialize') return { agentCapabilities: { sessionCapabilities: { resume: {}, close: {} } } }
+    return {}
+  }
+  await conn.initialize()
+  assert.equal(conn.canResumeSession, true)
+  assert.equal(conn.canCloseSession, true)
+  await conn.resumeSession('session-stable')
+  assert.equal(conn.sessionId, 'session-stable')
+  const closed = await conn.closeSession()
+  assert.equal(closed.closed, true)
+  assert.equal(conn.sessionId, null)
+  assert.deepEqual(calls.map((call) => call.method), ['initialize', 'session/resume', 'session/close'])
+  assert.equal(calls[1].params.cwd, '/tmp')
+  assert.equal(calls[2].params.sessionId, 'session-stable')
+})

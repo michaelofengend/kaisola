@@ -8,9 +8,44 @@
 const { spawn } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
+const { StringDecoder } = require('node:string_decoder')
 const { agentEnv } = require('./shellEnv.cjs')
 
 const PROTOCOL_VERSION = 1
+const MAX_JSON_LINE_BYTES = 16 * 1024 * 1024
+const MAX_TEXT_FILE_BYTES = 8 * 1024 * 1024
+const REQUEST_TIMEOUT_MS = 120_000
+const MAX_TERMINAL_ENV_VARS = 256
+const MAX_TERMINAL_ENV_VALUE_BYTES = 1024 * 1024
+
+/** ACP models terminal env as [{name,value}], while older adapters sometimes
+ * sent an object. Normalize both into the object node-pty expects, with bounded
+ * portable names and values; invalid schema items are skipped as ACP directs. */
+const terminalEnvObject = (input) => {
+  const rows = Array.isArray(input)
+    ? input.map((item) => [item?.name, item?.value])
+    : input && typeof input === 'object' ? Object.entries(input) : []
+  const env = Object.create(null)
+  for (const [rawName, rawValue] of rows.slice(0, MAX_TERMINAL_ENV_VARS)) {
+    if (typeof rawName !== 'string' || typeof rawValue !== 'string') continue
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(rawName)) continue
+    if (Buffer.byteLength(rawValue, 'utf8') > MAX_TERMINAL_ENV_VALUE_BYTES) continue
+    env[rawName] = rawValue
+  }
+  return env
+}
+
+const terminalOutputLimit = (input) => {
+  if (input == null) return MAX_TEXT_FILE_BYTES
+  const n = Number(input)
+  if (!Number.isFinite(n)) return MAX_TEXT_FILE_BYTES
+  return Math.max(0, Math.min(Math.floor(n), MAX_TEXT_FILE_BYTES))
+}
+
+const isInside = (root, candidate) => {
+  const relative = path.relative(root, candidate)
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+}
 
 class AcpConnection {
   constructor(config, hooks = {}) {
@@ -19,6 +54,7 @@ class AcpConnection {
     this.mcpServers = Array.isArray(config.mcpServers) ? config.mcpServers : null
     this.proc = null
     this.buffer = ''
+    this.decoder = new StringDecoder('utf8')
     this.nextId = 1
     this.pending = new Map() // id → {resolve, reject}
     this.sessionId = null
@@ -30,6 +66,13 @@ class AcpConnection {
     this.configOptions = [] // [{id,name,category,type,currentValue,options:[{value,name,description}]}]  (set_config_option)
     this.authMethods = [] // [{id,name,description}] from initialize — drives the login buttons
     this.supportsPromptQueue = false // set from initialize — enables mid-turn steering
+    this.canResumeSession = false
+    this.canCloseSession = false
+    // Terminal broker ownership is window-scoped, but one window can host many
+    // mutually untrusted Mesh adapters. Keep a second, per-connection boundary
+    // so one provider cannot guess another provider's acp-term-N identifier and
+    // read, kill, wait on, or release its terminal.
+    this.ownedTerminalIds = new Set()
   }
 
   getControls() {
@@ -60,22 +103,35 @@ class AcpConnection {
     this.proc.on('exit', (code) => {
       this.alive = false
       this.hooks.onProcessExit?.({ pid: this.proc && this.proc.pid, code })
-      for (const { reject } of this.pending.values()) reject(new Error(`agent exited (${code})`))
+      for (const { reject, timer } of this.pending.values()) {
+        if (timer) clearTimeout(timer)
+        reject(new Error(`agent exited (${code})`))
+      }
       this.pending.clear()
       this.hooks.onNotice?.({ kind: 'exit', code })
     })
     this.proc.on('error', (err) => {
       this.alive = false
+      for (const { reject, timer } of this.pending.values()) {
+        if (timer) clearTimeout(timer)
+        reject(err)
+      }
+      this.pending.clear()
       this.hooks.onNotice?.({ kind: 'error', text: err.message })
     })
   }
 
   _onData(chunk) {
-    this.buffer += chunk.toString('utf8')
+    this.buffer += this.decoder.write(chunk)
     let nl
     while ((nl = this.buffer.indexOf('\n')) >= 0) {
-      const line = this.buffer.slice(0, nl).trim()
+      const raw = this.buffer.slice(0, nl)
       this.buffer = this.buffer.slice(nl + 1)
+      if (Buffer.byteLength(raw, 'utf8') > MAX_JSON_LINE_BYTES) {
+        this._fatalProtocol(`ACP frame exceeded ${MAX_JSON_LINE_BYTES} bytes`)
+        return
+      }
+      const line = raw.trim()
       if (!line) continue
       let msg
       try {
@@ -87,6 +143,19 @@ class AcpConnection {
       }
       this._dispatch(msg)
     }
+    if (Buffer.byteLength(this.buffer, 'utf8') > MAX_JSON_LINE_BYTES) {
+      this._fatalProtocol(`ACP frame exceeded ${MAX_JSON_LINE_BYTES} bytes`)
+    }
+  }
+
+  _fatalProtocol(message) {
+    this.hooks.onNotice?.({ kind: 'error', text: message })
+    for (const { reject, timer } of this.pending.values()) {
+      if (timer) clearTimeout(timer)
+      reject(new Error(message))
+    }
+    this.pending.clear()
+    this.dispose()
   }
 
   _dispatch(msg) {
@@ -95,6 +164,7 @@ class AcpConnection {
       const p = this.pending.get(msg.id)
       if (!p) return
       this.pending.delete(msg.id)
+      if (p.timer) clearTimeout(p.timer)
       if (msg.error) p.reject(new Error(msg.error.message || 'agent error'))
       else p.resolve(msg.result)
       return
@@ -127,14 +197,30 @@ class AcpConnection {
   }
 
   _write(obj) {
-    if (this.proc && this.proc.stdin.writable) this.proc.stdin.write(JSON.stringify(obj) + '\n')
+    if (!this.proc || !this.proc.stdin.writable) return false
+    try {
+      this.proc.stdin.write(JSON.stringify(obj) + '\n')
+      return true
+    } catch (err) {
+      this.hooks.onNotice?.({ kind: 'error', text: err.message })
+      return false
+    }
   }
 
-  request(method, params) {
+  request(method, params, timeoutMs = (method === 'session/prompt' || method === 'authenticate') ? 0 : REQUEST_TIMEOUT_MS) {
     const id = this.nextId++
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
-      this._write({ jsonrpc: '2.0', id, method, params })
+      const timer = timeoutMs > 0 ? setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`${method} timed out after ${timeoutMs}ms`))
+      }, timeoutMs) : null
+      timer?.unref?.()
+      this.pending.set(id, { resolve, reject, timer })
+      if (!this._write({ jsonrpc: '2.0', id, method, params })) {
+        if (timer) clearTimeout(timer)
+        this.pending.delete(id)
+        reject(new Error(`cannot send ${method}: agent is not connected`))
+      }
     })
   }
 
@@ -150,6 +236,43 @@ class AcpConnection {
     this._write({ jsonrpc: '2.0', id, error: { code, message } })
   }
 
+  /** Resolve a provider-supplied path inside the selected workspace. Both the
+   * lexical path and its nearest existing real parent are checked so `..` and
+   * symlink hops cannot escape the project before Kaisola's sensitive-file
+   * guard gets a chance to run. */
+  _workspacePath(input, { mustExist = false, directory = false } = {}) {
+    if (typeof input !== 'string' || !input.trim()) throw new Error('A workspace-relative path is required')
+    const root = path.resolve(this.cwd)
+    const candidate = path.resolve(root, input)
+    if (!isInside(root, candidate)) throw new Error('Blocked: path is outside the active workspace')
+    const realRoot = fs.realpathSync.native(root)
+    let probe = candidate
+    while (!fs.existsSync(probe)) {
+      const parent = path.dirname(probe)
+      if (parent === probe) break
+      probe = parent
+    }
+    const realProbe = fs.realpathSync.native(probe)
+    if (!isInside(realRoot, realProbe)) throw new Error('Blocked: path resolves outside the active workspace')
+    if (mustExist && !fs.existsSync(candidate)) throw new Error('Path does not exist')
+    if (fs.existsSync(candidate)) {
+      const realCandidate = fs.realpathSync.native(candidate)
+      if (!isInside(realRoot, realCandidate)) throw new Error('Blocked: path resolves outside the active workspace')
+      if (directory && !fs.statSync(realCandidate).isDirectory()) throw new Error('Terminal cwd must be a directory')
+      return realCandidate
+    }
+    if (directory) throw new Error('Terminal cwd does not exist')
+    return candidate
+  }
+
+  _ownedTerminalId(input) {
+    const terminalId = typeof input === 'string' ? input : ''
+    if (!terminalId || !this.ownedTerminalIds.has(terminalId)) {
+      throw new Error('Blocked: terminal is not owned by this agent connection')
+    }
+    return terminalId
+  }
+
   // ── agent → client requests ──
   async _handleRequest(msg) {
     const { id, method, params } = msg
@@ -158,19 +281,29 @@ class AcpConnection {
         const outcome = await this._decidePermission(params)
         this.respond(id, outcome)
       } else if (method === 'fs/read_text_file') {
-        const p = path.resolve(this.cwd, params.path)
+        const p = this._workspacePath(params.path, { mustExist: true })
         if (this.hooks.fsGuard && !this.hooks.fsGuard(p)) {
           return this.respondError(id, -32000, 'Blocked: sensitive file (Kaisola guardrails — Settings → Agents)')
         }
-        const content = fs.readFileSync(p, 'utf8')
+        const stat = await fs.promises.stat(p)
+        if (!stat.isFile()) return this.respondError(id, -32000, 'Only regular text files can be read')
+        if (stat.size > MAX_TEXT_FILE_BYTES) return this.respondError(id, -32000, `Text file exceeds the ${MAX_TEXT_FILE_BYTES}-byte ACP limit`)
+        const content = await fs.promises.readFile(p, 'utf8')
         this.respond(id, { content })
       } else if (method === 'fs/write_text_file') {
-        const p = path.resolve(this.cwd, params.path)
+        const content = typeof params.content === 'string' ? params.content : ''
+        if (Buffer.byteLength(content, 'utf8') > MAX_TEXT_FILE_BYTES) {
+          return this.respondError(id, -32000, `Text file exceeds the ${MAX_TEXT_FILE_BYTES}-byte ACP limit`)
+        }
+        const p = this._workspacePath(params.path)
         if (this.hooks.fsGuard && !this.hooks.fsGuard(p)) {
           return this.respondError(id, -32000, 'Blocked: sensitive file (Kaisola guardrails — Settings → Agents)')
         }
-        fs.mkdirSync(path.dirname(p), { recursive: true })
-        fs.writeFileSync(p, params.content ?? '', 'utf8')
+        await fs.promises.mkdir(path.dirname(p), { recursive: true })
+        // Re-check after mkdir so a concurrently replaced parent symlink cannot
+        // turn the write into an escape between validation and creation.
+        const checked = this._workspacePath(p)
+        await fs.promises.writeFile(checked, content, 'utf8')
         this.respond(id, {})
       } else if (method === 'terminal/create') {
         // run the agent's command in a real, visible pty
@@ -179,22 +312,26 @@ class AcpConnection {
         const { terminalId } = await host.create({
           command: params.command,
           args: params.args,
-          env: params.env,
-          cwd: params.cwd || this.cwd,
-          outputByteLimit: params.outputByteLimit,
+          env: terminalEnvObject(params.env),
+          cwd: this._workspacePath(params.cwd || this.cwd, { mustExist: true, directory: true }),
+          outputByteLimit: terminalOutputLimit(params.outputByteLimit),
         })
+        if (typeof terminalId !== 'string' || !terminalId) throw new Error('Terminal host returned an invalid terminal id')
+        this.ownedTerminalIds.add(terminalId)
         this.respond(id, { terminalId })
       } else if (method === 'terminal/output') {
-        const o = await this.hooks.terminalHost.output(params.terminalId)
+        const o = await this.hooks.terminalHost.output(this._ownedTerminalId(params.terminalId))
         this.respond(id, o)
       } else if (method === 'terminal/wait_for_exit') {
-        const r = await this.hooks.terminalHost.waitForExit(params.terminalId)
+        const r = await this.hooks.terminalHost.waitForExit(this._ownedTerminalId(params.terminalId))
         this.respond(id, { exitStatus: r })
       } else if (method === 'terminal/kill') {
-        await this.hooks.terminalHost.kill(params.terminalId)
+        await this.hooks.terminalHost.kill(this._ownedTerminalId(params.terminalId))
         this.respond(id, {})
       } else if (method === 'terminal/release') {
-        await this.hooks.terminalHost.release(params.terminalId)
+        const terminalId = this._ownedTerminalId(params.terminalId)
+        await this.hooks.terminalHost.release(terminalId)
+        this.ownedTerminalIds.delete(terminalId)
         this.respond(id, {})
       } else {
         this.respondError(id, -32601, `Method not handled: ${method}`)
@@ -257,6 +394,9 @@ class AcpConnection {
     // promptQueueing). This is what powers mid-turn STEERING — a follow-up that
     // reaches the agent between tool calls instead of waiting out the turn.
     const caps = (res && res.agentCapabilities) || {}
+    const sessionCaps = caps.sessionCapabilities || {}
+    this.canResumeSession = !!sessionCaps.resume
+    this.canCloseSession = !!sessionCaps.close
     this.supportsPromptQueue = !!(caps._meta && caps._meta.claudeCode && caps._meta.claudeCode.promptQueueing)
     // agents that accept HTTP/SSE MCP servers get remote entries at session/new
     this.mcpHttpOk = !!(res && res.agentCapabilities && res.agentCapabilities.mcpCapabilities && res.agentCapabilities.mcpCapabilities.http)
@@ -324,6 +464,26 @@ class AcpConnection {
     return res
   }
 
+  /** Stable ACP lifecycle: resume without replaying history. Prefer this over
+   * legacy session/load when advertised; the renderer already owns its durable
+   * transcript and needs only the provider's internal conversation state. */
+  async resumeSession(sessionId) {
+    const res = await this._session('session/resume', { sessionId, cwd: this.cwd })
+    this.sessionId = sessionId
+    this.modes = (res && res.modes) || this.modes || null
+    this.models = (res && res.models) || this.models || null
+    this.configOptions = (res && res.configOptions) || this.configOptions || []
+    this.hooks.onControls?.(this.getControls())
+    return res
+  }
+
+  async closeSession() {
+    if (!this.sessionId || !this.canCloseSession) return { closed: false }
+    const res = await this.request('session/close', { sessionId: this.sessionId })
+    this.sessionId = null
+    return { ...res, closed: true }
+  }
+
   // ── session controls (the composer dropdowns) ──
   async setMode(modeId) {
     const r = await this.request('session/set_mode', { sessionId: this.sessionId, modeId })
@@ -370,6 +530,23 @@ class AcpConnection {
   }
 
   dispose() {
+    for (const { reject, timer } of this.pending.values()) {
+      if (timer) clearTimeout(timer)
+      reject(new Error('agent connection disposed'))
+    }
+    this.pending.clear()
+    // Adapter parking/reconnect must not strand broker PTYs that the new ACP
+    // connection cannot own. terminal/release is the protocol cleanup point;
+    // the host implementation also kills a still-running command.
+    for (const terminalId of this.ownedTerminalIds) {
+      try {
+        Promise.resolve(this.hooks.terminalHost?.release(terminalId)).catch(() => {
+          try { return this.hooks.terminalHost?.kill(terminalId) } catch { return undefined }
+        }).catch(() => {})
+      } catch {
+        try { this.hooks.terminalHost?.kill(terminalId) } catch { /* best effort */ }
+      }
+    }
     try {
       if (this.proc && this.proc.pid && process.platform !== 'win32') {
         const pgid = this.proc.pid
@@ -387,7 +564,8 @@ class AcpConnection {
       /* noop */
     }
     this.alive = false
+    this.ownedTerminalIds.clear()
   }
 }
 
-module.exports = { AcpConnection, PROTOCOL_VERSION }
+module.exports = { AcpConnection, PROTOCOL_VERSION, terminalEnvObject, terminalOutputLimit }
