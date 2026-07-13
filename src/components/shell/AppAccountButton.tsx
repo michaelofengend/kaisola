@@ -63,6 +63,10 @@ export function AppAccountButton({ showLabel = false }: { showLabel?: boolean })
         {showLabel && <span className="app-account-name truncate">{profile.name || profile.email}</span>}
       </button>
       {open && createPortal(
+        <>
+        {/* Frameless-window drag regions do not always emit document pointer
+            events. This no-drag dismiss layer makes click-away deterministic. */}
+        <div className="app-account-dismiss" onPointerDown={close} aria-hidden="true" />
         <div ref={panel} className="app-account-menu" style={{ position: 'fixed', ...pos }}>
           <div className="app-account-card">
             <div className="app-account-avatar app-account-avatar-large" aria-hidden>
@@ -88,7 +92,8 @@ export function AppAccountButton({ showLabel = false }: { showLabel?: boolean })
           <button onClick={() => { void signOut() }}>
             <Icon name="LogOut" size={13} /> Sign out
           </button>
-        </div>,
+        </div>
+        </>,
         document.body,
       )}
     </>

@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react'
+import { useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
 import { useKaisola, sessionOrderIds } from '../../store/store'
 import { bridge } from '../../lib/bridge'
 import { sessionHue, terminalAgentKey } from '../../lib/sessionHue'
@@ -85,12 +85,12 @@ export function SessionTabs({ orientation = 'horizontal' }: { orientation?: 'hor
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null)
 
   const tabs = new Map<string, STab>()
-  threads.forEach((t, i) => {
+  threads.filter((thread) => !thread.groupParentId).forEach((t, i) => {
     const label = threadLabel(t, agents, threads, i)
     tabs.set(t.id, {
       id: t.id,
-      icon: 'Sparkles',
-      agentKey: t.agentKey,
+      icon: t.group ? 'Network' : 'Sparkles',
+      agentKey: t.group ? undefined : t.agentKey,
       label,
       hue: sessionHue({ agentKey: t.agentKey }),
       state: pendingPermissions.some((permission) => permission.key === `${t.agentKey}::${t.id}`)
@@ -230,7 +230,7 @@ export function SessionTabs({ orientation = 'horizontal' }: { orientation?: 'hor
                 title={t.title}
               >
                 <span className="stab-badge" />
-                {t.kind === 'thread'
+                {t.kind === 'thread' && t.agentKey
                   ? <ProviderIcon provider={t.agentKey} name={t.label} size={12} className="stab-icon" />
                   : <Icon name={t.icon} size={12} className="stab-icon" />}
                 {editing === t.id ? (
@@ -370,6 +370,22 @@ export function SessionTabs({ orientation = 'horizontal' }: { orientation?: 'hor
 /** The default session navigator: one slim, persistent rail on the left. */
 export function SessionSidebar() {
   const setTabLayout = useKaisola((s) => s.setTabLayout)
+  const setSessionRailWidth = useKaisola((s) => s.setSessionRailWidth)
+  const startResize = (event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    document.body.setAttribute('data-shell-drag', '1')
+    const sidebar = event.currentTarget.parentElement
+    const startX = event.clientX
+    const startWidth = sidebar?.getBoundingClientRect().width ?? 188
+    const onMove = (move: MouseEvent) => setSessionRailWidth(startWidth + move.clientX - startX)
+    const onUp = () => {
+      document.body.removeAttribute('data-shell-drag')
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
   return (
     <aside className="session-sidebar" aria-label="Session sidebar">
       <div className="session-sidebar-head">
@@ -380,6 +396,12 @@ export function SessionSidebar() {
       </div>
       <SessionTabs orientation="vertical" />
       <ShellSidebarFooter />
+      <div
+        className="session-sidebar-resize"
+        onMouseDown={startResize}
+        onDoubleClick={() => setSessionRailWidth(null)}
+        title="Drag to resize sessions · double-click to reset"
+      />
     </aside>
   )
 }
@@ -402,6 +424,7 @@ function NewSessionButton({ orientation }: { orientation: 'horizontal' | 'vertic
   const closedStack = useKaisola((s) => s.closedStack)
   const reopenClosedSession = useKaisola((s) => s.reopenClosedSession)
   const openSession = (value: string) => {
+    if (value === 'group') { useKaisola.getState().requestNewGroup(); return }
     if (value === 'terminal') { requestTerminal(); return }
     if (value === 'git') { openGitPanel(); return }
     if (value === 'ledger') { openLedgerPanel(); return }
@@ -425,16 +448,22 @@ function NewSessionButton({ orientation }: { orientation: 'horizontal' | 'vertic
         : c.panel?.title ?? c.panel?.kind ?? 'Panel'
     return { value: `closed:${id}`, name: `↩ ${label}` }
   }).filter((option) => option.value !== 'closed:')
+  const codex = menu.find((agent) => agent.id === 'codex')
+  const claude = menu.find((agent) => agent.id === 'claude-code')
+  const otherAgents = menu.filter((agent) => agent.id !== 'codex' && agent.id !== 'claude-code')
   return (
     <Dropdown
       icon="Plus"
       value=""
       placeholder=""
       options={[
-        ...menu.map((a) => ({ value: `agent:${a.id}`, name: a.name })),
+        { value: 'terminal', name: 'New terminal' },
+        ...(codex ? [{ value: `agent:${codex.id}`, name: codex.name }] : []),
+        ...(claude ? [{ value: `agent:${claude.id}`, name: claude.name }] : []),
+        { value: 'group', name: 'Claude + Codex group' },
+        ...otherAgents.map((a) => ({ value: `agent:${a.id}`, name: a.name })),
         ...sessionTemplates.map((t) => ({ value: `tpl:${t.id}`, name: `▸ ${t.name}` })),
         { value: 'worktree', name: 'Agent in a worktree' },
-        { value: 'terminal', name: 'New terminal' },
         { value: 'git', name: 'Git commit' },
         { value: 'ledger', name: 'Agent tasks' },
         { value: 'browser', name: 'Browser' },

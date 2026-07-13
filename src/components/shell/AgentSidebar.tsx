@@ -30,7 +30,7 @@ export function ShellTools({ includeSettings = true }: { includeSettings?: boole
         </button>
       )}
       {includeSettings && (
-        <button className="btn-icon shell-settings-trigger" onClick={() => openSettings(true, 'interface')} title="Settings  ⌘," aria-label="Open settings">
+        <button className="btn-icon shell-settings-trigger" onClick={() => openSettings(true)} title="Settings  ⌘," aria-label="Open settings">
           <Icon name="Settings" size={15} />
         </button>
       )}

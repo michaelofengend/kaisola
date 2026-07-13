@@ -748,6 +748,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     threads.find((t) => t.id === threadId) ??
     threads[0] ??
     ({ id: threadId, agentKey: 'codex', busy: false } as AssistantThread)
+  const sessionCwd = active.cwd ?? workspacePath
   const draft = useKaisola((s) => s.assistantDrafts[active.id] ?? EMPTY_DRAFT)
   const queuedPrompts = useKaisola((s) => s.assistantPromptQueues[active.id] ?? EMPTY_QUEUE)
   const setAssistantDraft = useKaisola((s) => s.setAssistantDraft)
@@ -1096,7 +1097,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
       return false
     }
     // the agent MUST work inside a real folder you choose — never Kaisola's own dir
-    let cwd = workspacePath
+    let cwd = sessionCwd
     if (!cwd) {
       setNotice('Pick a folder for the agent to work in…')
       cwd = await pickWorkspace()
@@ -1185,7 +1186,7 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     const ok = await connect(agentKey, { forceReconnect: true })
     if (ok) { awaitingAuthRef.current = false; setAwaitingAuth(false); setAuthUrl(null); setNotice(null) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentKey, workspacePath, projectId])
+  }, [agentKey, sessionCwd, projectId])
   const authorize = () => {
     setAuthUrl(null)
     if (busy) { void bridge.acp.cancel(connectionKey); setThreadBusy(active.id, false, projectId) }
@@ -1214,15 +1215,15 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
   // (connect() would pop the folder picker); failures land in the notice line
   // and the explicit Sign in button remains.
   useEffect(() => {
-    if (statusReadyKey !== connectionKey || connected || busy || !workspacePath) return
+    if (statusReadyKey !== connectionKey || connected || busy || !sessionCwd) return
     const preset = presets.find((p) => p.id === agentKey)
     const custom = useKaisola.getState().customAgents.find((a) => a.id === agentKey && a.kind === 'acp')
     if ((!preset || preset.terminalOnly) && !custom) return
-    const attempt = `${threadId}|${agentKey}|${workspacePath}`
+    const attempt = `${threadId}|${agentKey}|${sessionCwd}`
     if (autoConnectAttemptRef.current === attempt) return
     autoConnectAttemptRef.current = attempt
     void connect(agentKey)
-  }, [agentKey, connected, busy, connectionKey, presets, statusReadyKey, threadId, workspacePath])
+  }, [agentKey, connected, busy, connectionKey, presets, statusReadyKey, threadId, sessionCwd])
   const onControlChange = async (c: UiControl, value: string) => {
     if (!(await ensureAgentConnected())) return
     const result = c.kind === 'mode'
@@ -1586,16 +1587,19 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
     {
       const state = useKaisola.getState()
       const owner = owningSlice()
-      const seen = state.activeProjectId === projectId && !!owner?.dockOpen && !!owner?.dockViews.includes(threadId) && !document.hidden && document.hasFocus()
+      // Private group workers report completion through their visible parent;
+      // otherwise the inbox would point at an intentionally hidden child tab.
+      const attentionId = active.groupParentId ?? threadId
+      const seen = state.activeProjectId === projectId && !!owner?.dockOpen && !!owner?.dockViews.includes(attentionId) && !document.hidden && document.hasFocus()
       if (!seen) {
-        state.markNeedsYou(threadId, projectId)
+        state.markNeedsYou(attentionId, projectId)
         const tab = state.projectTabs.find((project) => project.id === projectId)
         const projectName = tab?.title ?? tab?.workspacePath?.split('/').filter(Boolean).pop() ?? 'Kaisola'
         bridge.attention?.notify({
           title: res.ok ? `${agentName} finished` : `${agentName} stopped`,
           body: projectName,
           projectId,
-          sessionId: threadId,
+          sessionId: attentionId,
         })
       }
       if (state.activeProjectId !== projectId) state.setProjectActivity(projectId, res.ok ? 'completed' : 'failed')
@@ -2131,9 +2135,9 @@ export const Assistant = memo(function Assistant({ threadId }: { threadId: strin
           title="Agent for this thread"
           align="left"
         />
-        <button className="foot-ws drop-btn" onClick={pickWorkspace} title={workspacePath ?? 'Choose a workspace folder for the agent'}>
+        <button className="foot-ws drop-btn" onClick={pickWorkspace} title={sessionCwd ?? 'Choose a workspace folder for the agent'}>
           <Icon name="Folder" size={12} className="drop-btn-icon" />
-          <span className="drop-btn-label">{workspacePath ? workspacePath.split('/').filter(Boolean).pop() : 'Workspace'}</span>
+          <span className="drop-btn-label">{sessionCwd ? sessionCwd.split('/').filter(Boolean).pop() : 'Workspace'}</span>
         </button>
         <span className="grow" />
         <span className="foot-conn" data-on={connected}>

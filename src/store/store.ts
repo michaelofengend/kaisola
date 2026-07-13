@@ -37,7 +37,7 @@ import { verifyCitation } from '../lib/verify'
 import { recomputeProvenanced, sectionTrust } from '../domain/trust'
 import { extractDoi, lookupOpenAlex, lookupOpenAlexByArxiv, resolveReferences } from '../lib/openalex'
 import { parseTei, locateQuote } from '../lib/grobid'
-import { bridge, isDesktop, acpScope, type AcpPermissionRequest, type McpProposalEvent } from '../lib/bridge'
+import { bridge, isDesktop, acpScope, type AcpPermissionRequest, type McpProposalEvent, type WorktreeFile } from '../lib/bridge'
 import { folderHue } from '../lib/sessionHue'
 import { lineHunks, applyHunks } from '../lib/wordDiff'
 import { forgetMountedTerminal } from '../components/Terminal'
@@ -119,6 +119,48 @@ export interface ProvenanceTarget {
  */
 export type ClaudeEffort = 'default' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type CodexEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
+export type GroupSessionPhase =
+  | 'idle'
+  | 'answering'
+  | 'ready'
+  | 'negotiating'
+  | 'plan-ready'
+  | 'assigning'
+  | 'assigned'
+  | 'executing'
+  | 'execution-ready'
+  | 'reviewing'
+  | 'merge-ready'
+  | 'integrating'
+  | 'done'
+  // Rehydration compatibility for the first group-session prototype.
+  | 'critiquing'
+  | 'review-ready'
+  | 'synthesizing'
+export interface GroupSessionMember {
+  threadId: string
+  agentKey: string
+  label: string
+}
+export interface GroupSessionState {
+  members: GroupSessionMember[]
+  phase: GroupSessionPhase
+  task?: string
+  /** Child turn counts captured before a stage, used to isolate its response. */
+  baselines?: Record<string, number>
+  answers?: Record<string, string>
+  negotiations?: Record<string, string>
+  jointPlan?: string
+  critiques?: Record<string, string>
+  synthesis?: string
+  executions?: Record<string, string>
+  reviews?: Record<string, string>
+  integration?: string
+  worktrees?: Record<string, WorktreeSession>
+  changedFiles?: Record<string, WorktreeFile[]>
+  error?: string
+  leadThreadId?: string
+}
 export interface AssistantThread {
   id: string
   agentKey: string
@@ -141,6 +183,10 @@ export interface AssistantThread {
    * every change and message send, reapplied when the session reconnects —
    * without it a restart silently falls back to the agent's default mode. */
   permissionMode?: string
+  /** Visible orchestration session. Its members are private child threads. */
+  group?: GroupSessionState
+  /** Private worker owned and rendered by a visible group session. */
+  groupParentId?: string
 }
 
 /** Diff/terminal artifacts a tool-call frame carries (ACP ToolCallContent). */
@@ -627,7 +673,7 @@ const GLOBAL_KEYS = [
   'theme', 'themeMode', 'agentModels', 'fileTextZoom', 'termFontSize', 'termFontFamily',
   'termFontWeight', 'termCursorColor', 'termBackground', 'customAgents', 'enabledAgents', 'sessionTemplates', 'claudeModel', 'reasoningProvider',
   'localBaseUrl', 'localModel', 'openaiBaseUrl', 'openaiModel', 'openAlexMailto', 'grobidEndpoint',
-  'sandboxMode', 'workflows', 'automationsEnabled', 'perfMode', 'tabLayout', 'railWidth', 'railOpen', 'claudeSessions',
+  'sandboxMode', 'workflows', 'automationsEnabled', 'perfMode', 'tabLayout', 'railWidth', 'sessionRailWidth', 'railOpen', 'claudeSessions',
   'wordDiffs', 'showCosts', 'inbox', 'draftRestore', 'wallpaperTint', 'claudeAccounts',
   'claudeTerminalModel', 'claudeFastMode', 'defaultAutonomy',
   'permissionRules', 'sensitiveGlobs', 'latexMain', 'unsavedBuffers', 'termDrafts', 'onboardingVersion',
@@ -806,6 +852,8 @@ interface KaisolaState {
   onboardingVersion: number
   /** Width of the left workspace rail in px (null = the CSS default). */
   railWidth: number | null
+  /** Width of the left Sessions navigator; independent from the file rail. */
+  sessionRailWidth: number | null
   /** Left workspace rail visibility — the strip button / ⌘B (persisted). */
   railOpen: boolean
   /** Last Claude Code session id per workspace (from the hooks tap) — the
@@ -928,6 +976,7 @@ interface KaisolaState {
   placeDockView: (id: string, targetId: string, edge: 'left' | 'right' | 'top' | 'bottom') => void
   setCanvasWidth: (w: number | null) => void
   setRailWidth: (w: number | null) => void
+  setSessionRailWidth: (w: number | null) => void
   setClaudeSession: (workspace: string, sessionId: string) => void
   setClaudeAccountId: (id: string) => void
   addClaudeAccount: (label: string, configDir: string) => void
@@ -1009,6 +1058,11 @@ interface KaisolaState {
   openSignIn: (payload: { key: string; name: string; command: string; args: string[] }) => void
   closeSignIn: () => void
   requestNewThread: (agentKey?: string) => void
+  requestNewGroup: () => void
+  setGroupSession: (id: string, patch: Partial<GroupSessionState>, projectId?: string) => void
+  setGroupWorktrees: (id: string, worktrees: Record<string, WorktreeSession>, projectId?: string) => void
+  clearGroupWorktreeSessions: (id: string, cwd: string, projectId?: string) => void
+  setAssistantThreadCwd: (id: string, cwd: string | undefined, projectId?: string) => void
   setActiveThread: (id: string) => void
   closeAssistantThread: (id: string) => void
   renameAssistantThread: (id: string, name?: string) => void
@@ -1512,7 +1566,7 @@ function titleFrom(text: string, max = 34): string | undefined {
  */
 export function sessionOrderIds(s: Pick<KaisolaState, 'assistantThreads' | 'terminals' | 'agentTerminals' | 'panels' | 'sessionGroups' | 'pinnedSessions'>): string[] {
   const natural = [
-    ...s.assistantThreads.map((t) => t.id),
+    ...s.assistantThreads.filter((t) => !t.groupParentId).map((t) => t.id),
     ...s.terminals.map((t) => t.id),
     ...s.agentTerminals.map((t) => t.terminalId),
     ...s.panels.map((p) => p.id),
@@ -2184,6 +2238,7 @@ export const useKaisola = create<KaisolaState>()(
   tabLayout: 'sidebar' as TabLayout,
   onboardingVersion: 0,
   railWidth: null,
+  sessionRailWidth: null,
   // The default sidebar composition is intentionally visible: sessions left,
   // files right. ⌘B can still put the file tree away independently.
   railOpen: true,
@@ -2372,6 +2427,8 @@ export const useKaisola = create<KaisolaState>()(
     set({ canvasWidth: w == null ? null : Math.min(1600, Math.max(340, Math.round(w))) }),
   setRailWidth: (w) =>
     set({ railWidth: w == null ? null : Math.min(480, Math.max(176, Math.round(w))) }),
+  setSessionRailWidth: (w) =>
+    set({ sessionRailWidth: w == null ? null : Math.min(440, Math.max(164, Math.round(w))) }),
   setClaudeSession: (workspace, sessionId) =>
     set((s) => {
       if (s.claudeSessions[workspace] === sessionId) return s
@@ -3103,6 +3160,72 @@ export const useKaisola = create<KaisolaState>()(
         ...gridState([...s.dockGrid, [id]], { dockOpen: true }),
       }
     }),
+  requestNewGroup: () =>
+    set((s) => {
+      const id = uid('group')
+      const claudeId = uid('thr')
+      const codexId = uid('thr')
+      const members: GroupSessionMember[] = [
+        { threadId: claudeId, agentKey: 'claude-code', label: 'Claude' },
+        { threadId: codexId, agentKey: 'codex', label: 'Codex' },
+      ]
+      return {
+        assistantThreads: [
+          ...s.assistantThreads,
+          { id, agentKey: 'group', name: 'Claude + Codex', busy: false, group: { members, phase: 'idle' } },
+          ...members.map((member) => ({
+            id: member.threadId,
+            agentKey: member.agentKey,
+            name: member.label,
+            busy: false,
+            groupParentId: id,
+          })),
+        ],
+        activeThreadId: id,
+        ...gridState([...s.dockGrid, [id]], { dockOpen: true }),
+      }
+    }),
+  setGroupSession: (id, patch, projectId) => {
+    const pid = projectId ?? get().activeProjectId
+    get().patchProject(pid, (sl) => ({
+      assistantThreads: sl.assistantThreads.map((thread) =>
+        thread.id === id && thread.group
+          ? { ...thread, group: { ...thread.group, ...patch } }
+          : thread,
+      ),
+    }))
+  },
+  setGroupWorktrees: (id, worktrees, projectId) => {
+    const pid = projectId ?? get().activeProjectId
+    get().patchProject(pid, (sl) => ({
+      worktreeSessions: { ...sl.worktreeSessions, ...worktrees },
+      assistantThreads: sl.assistantThreads.map((thread) => {
+        const wt = worktrees[thread.id]
+        if (thread.id === id && thread.group) return { ...thread, group: { ...thread.group, worktrees } }
+        return thread.groupParentId === id && wt ? { ...thread, cwd: wt.path, acpSessionId: undefined } : thread
+      }),
+    }))
+  },
+  clearGroupWorktreeSessions: (id, cwd, projectId) => {
+    const pid = projectId ?? get().activeProjectId
+    get().patchProject(pid, (sl) => {
+      const memberIds = new Set(sl.assistantThreads.filter((thread) => thread.groupParentId === id).map((thread) => thread.id))
+      const worktreeSessions = { ...sl.worktreeSessions }
+      for (const memberId of memberIds) delete worktreeSessions[memberId]
+      return {
+        worktreeSessions,
+        assistantThreads: sl.assistantThreads.map((thread) => memberIds.has(thread.id)
+          ? { ...thread, cwd, acpSessionId: undefined }
+          : thread),
+      }
+    })
+  },
+  setAssistantThreadCwd: (id, cwd, projectId) => {
+    const pid = projectId ?? get().activeProjectId
+    get().patchProject(pid, (sl) => ({
+      assistantThreads: sl.assistantThreads.map((thread) => thread.id === id ? { ...thread, cwd, acpSessionId: undefined } : thread),
+    }))
+  },
   setActiveThread: (id) =>
     set((s) => {
       const needsYou = { ...s.needsYou }
@@ -3118,20 +3241,28 @@ export const useKaisola = create<KaisolaState>()(
   closeAssistantThread: (id) =>
     set((s) => {
       const closing = s.assistantThreads.find((t) => t.id === id)
-      const next = s.assistantThreads.filter((t) => t.id !== id)
+      const closingIds = new Set([
+        id,
+        ...(closing?.group ? s.assistantThreads.filter((thread) => thread.groupParentId === id).map((thread) => thread.id) : []),
+      ])
+      const next = s.assistantThreads.filter((t) => !closingIds.has(t.id))
       const assistantRuntimes = { ...s.assistantRuntimes }
       const rawRuntime = assistantRuntimes[id]
       const runtime = rawRuntime ? { ...rawRuntime, archivePending: undefined } : undefined
-      delete assistantRuntimes[id]
       const assistantDrafts = { ...s.assistantDrafts }
-      delete assistantDrafts[id]
       const assistantPromptQueues = { ...s.assistantPromptQueues }
-      delete assistantPromptQueues[id]
-      const activeThreadId = s.activeThreadId === id ? next[next.length - 1]?.id ?? '' : s.activeThreadId
-      const grid = gridWithout(s.dockGrid, id)
-      const fallback = next[next.length - 1]?.id ?? s.terminals[0]?.id
       const needsYou = { ...s.needsYou }
-      delete needsYou[id]
+      for (const closingId of closingIds) {
+        delete assistantRuntimes[closingId]
+        delete assistantDrafts[closingId]
+        delete assistantPromptQueues[closingId]
+        delete needsYou[closingId]
+      }
+      const visibleNext = next.filter((thread) => !thread.groupParentId)
+      const activeThreadId = closingIds.has(s.activeThreadId) ? visibleNext[visibleNext.length - 1]?.id ?? '' : s.activeThreadId
+      let grid = s.dockGrid
+      for (const closingId of closingIds) grid = gridWithout(grid, closingId)
+      const fallback = visibleNext[visibleNext.length - 1]?.id ?? s.terminals[0]?.id
       return {
         assistantThreads: next,
         assistantRuntimes,
@@ -3139,7 +3270,10 @@ export const useKaisola = create<KaisolaState>()(
         assistantPromptQueues,
         activeThreadId,
         needsYou,
-        closedStack: closing
+        // A group owns private child contexts, so reopening only its parent
+        // would create a broken shell. Groups remain restart-durable while
+        // open; closing one is intentionally final for this first release.
+        closedStack: closing && !closing.group && !closing.groupParentId
           ? [{ kind: 'thread' as const, at: Date.now(), thread: { ...closing, busy: false }, runtime }, ...s.closedStack].slice(0, 20)
           : s.closedStack,
         ...(grid.length

@@ -17,6 +17,7 @@ const GitPanel = lazy(() => import('./GitPanel').then((module) => ({ default: mo
 // Chat threads carry the react-markdown stack — loaded on the first chat
 // card, not at boot (the default shell is a lone agent terminal now).
 const Assistant = lazy(() => import('../Assistant').then((module) => ({ default: module.Assistant })))
+const GroupAssistant = lazy(() => import('../GroupAssistant').then((module) => ({ default: module.GroupAssistant })))
 
 /**
  * While ANY shell drag runs (card heads, column grips, the canvas edge),
@@ -302,15 +303,19 @@ export function SessionCards() {
           title="Drag to resize · double-click to reset"
         />
       ))}
-      {threads.map((t, i) => {
+      {threads.filter((thread) => !thread.groupParentId).map((t, i) => {
         const label = threadLabel(t, agents, threads, i)
         const body = pos.has(t.id)
-          ? <Suspense fallback={<div className="fx-loading aurora"><span className="shimmer-text">Loading chat…</span></div>}><Assistant threadId={t.id} /></Suspense>
+          ? <Suspense fallback={<div className="fx-loading aurora"><span className="shimmer-text">Loading chat…</span></div>}>
+              {t.group ? <GroupAssistant threadId={t.id} /> : <Assistant threadId={t.id} />}
+            </Suspense>
           : null
-        return card(t.id, 'Sparkles', label, body, {
-          hue: sessionHue({ agentKey: t.agentKey }),
-          agentKey: t.agentKey,
-          running: t.busy,
+        return card(t.id, t.group ? 'Network' : 'Sparkles', label, body, {
+          hue: sessionHue({ agentKey: t.group ? 'group' : t.agentKey }),
+          agentKey: t.group ? undefined : t.agentKey,
+          running: t.group
+            ? t.group.members.some((member) => threads.find((thread) => thread.id === member.threadId)?.busy)
+            : t.busy,
         })
       })}
       {/* live + ghost terminal cards share ONE array expression on purpose:

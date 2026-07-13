@@ -28,7 +28,7 @@ export function ShellSidebarFooter({ floating = false }: { floating?: boolean })
       <div className="shell-sidebar-footer-account">
         <AppAccountButton showLabel />
         <span className="grow" />
-        <button className="btn-icon shell-settings-trigger" onClick={() => openSettings(true, 'interface')} title="Settings  ⌘," aria-label="Open settings">
+        <button className="btn-icon shell-settings-trigger" onClick={() => openSettings(true)} title="Settings  ⌘," aria-label="Open settings">
           <Icon name="Settings" size={15} />
         </button>
       </div>

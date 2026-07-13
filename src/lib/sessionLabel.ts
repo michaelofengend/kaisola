@@ -46,6 +46,8 @@ export function threadLabel(
   threads: AssistantThread[],
   index: number,
 ): string {
+  if (t.group) return t.name ?? 'Claude + Codex'
   const nm = agentName(agents, t.agentKey) ?? 'Agent'
-  return t.name ?? t.autoName ?? `${nm}${threads.filter((x) => x.agentKey === t.agentKey).length > 1 ? ` ${index + 1}` : ''}`
+  const peers = threads.filter((x) => !x.groupParentId && x.agentKey === t.agentKey)
+  return t.name ?? t.autoName ?? `${nm}${peers.length > 1 ? ` ${index + 1}` : ''}`
 }

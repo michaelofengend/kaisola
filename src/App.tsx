@@ -268,6 +268,7 @@ export default function App() {
   const canvasWidth = useKaisola((s) => s.canvasWidth)
   const setCanvasWidth = useKaisola((s) => s.setCanvasWidth)
   const railWidth = useKaisola((s) => s.railWidth)
+  const sessionRailWidth = useKaisola((s) => s.sessionRailWidth)
   const railOpen = useKaisola((s) => s.railOpen)
   const tabLayout = useKaisola((s) => s.tabLayout)
   const requestTerminal = useKaisola((s) => s.requestTerminal)
@@ -702,7 +703,10 @@ export default function App() {
         data-layout={layoutMode}
         data-session-nav={sidebarSessions ? 'sidebar' : 'top'}
         data-rail={studio && !railOpen ? 'closed' : undefined}
-        style={railWidth ? ({ '--wsrail-w': `${railWidth}px` } as CSSProperties) : undefined}
+        style={(railWidth || sessionRailWidth) ? ({
+          ...(railWidth ? { '--wsrail-w': `${railWidth}px` } : {}),
+          ...(sessionRailWidth ? { '--sessionrail-w': `${sessionRailWidth}px` } : {}),
+        } as CSSProperties) : undefined}
       >
         {sidebarSessions && <SessionSidebar />}
         {studio && railOpen && !sidebarSessions && <WorkspaceRail />}
@@ -712,11 +716,6 @@ export default function App() {
           {studio && <SessionCards />}
           {showCanvas && (
             <div className="canvas-wrap" style={studio && dockOpen && canvasWidth ? { flex: `0 0 ${canvasWidth}px` } : undefined}>
-              {studio && canvasOpen && (
-                <button className="btn-icon canvas-local-close" onClick={toggleCanvas} title="Hide file preview  ⌘." aria-label="Hide file preview">
-                  <Icon name="PanelRightClose" size={14} />
-                </button>
-              )}
               {studio && dockOpen && (
                 <div
                   className="canvas-resize"
@@ -728,6 +727,13 @@ export default function App() {
               <main className="canvas">
                 <StageView />
               </main>
+              {/* Render after the draggable canvas. Electron resolves app-region
+                  overlaps in DOM order; placing this last keeps it clickable. */}
+              {studio && canvasOpen && (
+                <button className="btn-icon canvas-local-close" onClick={toggleCanvas} title="Hide file preview  ⌘." aria-label="Hide file preview">
+                  <Icon name="PanelRightClose" size={14} />
+                </button>
+              )}
             </div>
           )}
         </div>
