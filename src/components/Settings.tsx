@@ -11,6 +11,7 @@ import { Dropdown } from './Dropdown'
 import { UsageSettings } from './shell/LimitsButton'
 import { openExtensionsCenter } from '../lib/extensions'
 import { useModalFocus } from '../lib/useModalFocus'
+import { signOutToOnboarding } from '../lib/signOut'
 
 // Current Claude models (for the direct API path). Checked 2026-07-09.
 const CLAUDE_MODELS = [
@@ -249,8 +250,12 @@ function AppAccountRow() {
   }
   const signOut = async () => {
     setBusy(true)
-    setStatus(await bridge.appAuth.signOut())
-    setBusy(false)
+    try {
+      const next = await signOutToOnboarding()
+      if (next) setStatus(next)
+    } finally {
+      setBusy(false)
+    }
   }
   const cancelSignIn = async () => {
     setBusy(false)

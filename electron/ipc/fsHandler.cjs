@@ -8,6 +8,7 @@ const os = require('node:os')
 const { execFile } = require('node:child_process')
 const { shell, protocol, nativeImage } = require('electron')
 const { agentEnv } = require('./shellEnv.cjs')
+const { resolveUserPath } = require('./pathResolver.cjs')
 
 const HIDE = new Set(['node_modules', '.git', '.DS_Store', '.next', 'dist', '.cache'])
 const SEARCH_LIMIT = 120
@@ -40,6 +41,7 @@ const PDF_RENDER_TIMEOUT_MS = 30_000
 const PDF_RENDER_MIN_DPI = 96
 const PDF_RENDER_MAX_DPI = 288
 const PDF_CACHE_DIR = path.join(os.tmpdir(), 'kaisola-pdf-render-cache')
+const CLIPBOARD_ASSET_LIMIT = 32 * 1024 * 1024
 
 try {
   protocol.registerSchemesAsPrivileged([{
@@ -72,7 +74,33 @@ const PREVIEW_TYPES = new Map([
   ['bmp', { mediaKind: 'image', mime: 'image/bmp' }],
   ['ico', { mediaKind: 'image', mime: 'image/x-icon' }],
   ['svg', { mediaKind: 'image', mime: 'image/svg+xml' }],
+  ['mov', { mediaKind: 'video', mime: 'video/quicktime' }],
+  ['mp4', { mediaKind: 'video', mime: 'video/mp4' }],
+  ['m4v', { mediaKind: 'video', mime: 'video/x-m4v' }],
+  ['webm', { mediaKind: 'video', mime: 'video/webm' }],
+  ['avi', { mediaKind: 'video', mime: 'video/x-msvideo' }],
+  ['mkv', { mediaKind: 'video', mime: 'video/x-matroska' }],
 ])
+
+function assetTarget(targetDir, name, attempt = 1) {
+  const base = String(name || 'attachment').replace(/[/\\]/g, '-')
+  const ext = path.extname(base)
+  const stem = path.basename(base, ext)
+  return path.join(targetDir, attempt === 1 ? base : `${stem}-${attempt}${ext}`)
+}
+
+async function writeUniqueAsset(targetDir, name, write) {
+  for (let attempt = 1; attempt <= 10_000; attempt += 1) {
+    const target = assetTarget(targetDir, name, attempt)
+    try {
+      await write(target)
+      return target
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error
+    }
+  }
+  throw new Error('Too many attachments use that name.')
+}
 
 function isHiddenRelative(rel) {
   if (!rel) return false
@@ -475,15 +503,54 @@ function registerFsHandlers(ipcMain) {
       const stat = await fsp.stat(source)
       if (!stat.isFile()) return { ok: false, message: 'Not a file.' }
       await fsp.mkdir(targetDir, { recursive: true })
-      const base = (typeof name === 'string' && name ? name : path.basename(source)).replace(/[/\\]/g, '-')
-      const ext = path.extname(base)
-      const stem = path.basename(base, ext)
-      let target = path.join(targetDir, base)
-      for (let n = 2; fs.existsSync(target); n++) target = path.join(targetDir, `${stem}-${n}${ext}`)
-      await fsp.copyFile(source, target, fs.constants.COPYFILE_EXCL)
+      const target = await writeUniqueAsset(
+        targetDir,
+        typeof name === 'string' && name ? name : path.basename(source),
+        (candidate) => fsp.copyFile(source, candidate, fs.constants.COPYFILE_EXCL),
+      )
       return { ok: true, path: target, name: path.basename(target) }
     } catch (err) {
       return { ok: false, message: String((err && err.message) || err) }
+    }
+  })
+
+  // Clipboard images do not always have an OS file path. Keep the trust
+  // boundary in main: cap the payload, sanitize the name, and create only a
+  // fresh file inside the renderer-selected document asset directory.
+  ipcMain.handle('fs:importAssetData', async (_e, { data, targetDir, name } = {}) => {
+    try {
+      if (typeof targetDir !== 'string' || !targetDir || typeof name !== 'string' || !name) {
+        return { ok: false, message: 'bad attachment' }
+      }
+      const buffer = Buffer.isBuffer(data)
+        ? data
+        : data instanceof ArrayBuffer
+          ? Buffer.from(data)
+          : ArrayBuffer.isView(data)
+            ? Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+            : null
+      if (!buffer?.length) return { ok: false, message: 'Clipboard attachment is empty.' }
+      if (buffer.length > CLIPBOARD_ASSET_LIMIT) return { ok: false, message: 'Clipboard attachment is larger than 32 MB.' }
+      await fsp.mkdir(targetDir, { recursive: true })
+      const target = await writeUniqueAsset(targetDir, name, (candidate) => fsp.writeFile(candidate, buffer, { flag: 'wx' }))
+      return { ok: true, path: target, name: path.basename(target) }
+    } catch (err) {
+      return { ok: false, message: String((err && err.message) || err) }
+    }
+  })
+
+  // Terminal links are only promoted after main resolves them against the
+  // terminal's real cwd and confirms the target exists. This keeps hover
+  // heuristics in the renderer from turning arbitrary prose into file opens.
+  ipcMain.handle('fs:resolvePath', async (_e, { input, cwd } = {}) => {
+    try {
+      const candidate = resolveUserPath(input, cwd)
+      if (!candidate) return { ok: false, message: 'Invalid path.' }
+      const stat = await fsp.stat(candidate)
+      const real = await fsp.realpath(candidate)
+      return { ok: true, path: real, dir: stat.isDirectory() }
+    } catch {
+      return { ok: false, message: 'Path not found.' }
     }
   })
 
@@ -580,7 +647,7 @@ function registerFsHandlers(ipcMain) {
 
       const preview = PREVIEW_TYPES.get(extname(p))
       if (preview) {
-        if (preview.mediaKind === 'pdf') {
+        if (preview.mediaKind === 'pdf' || preview.mediaKind === 'video') {
           return {
             ok: true,
             content: '',

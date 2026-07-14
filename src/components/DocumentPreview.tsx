@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type ClipboardEvent as ReactClipboardEvent,
   type ReactElement,
   type ReactNode,
 } from 'react'
@@ -140,7 +141,17 @@ async function hydrateEditableImages(root: HTMLElement, sourcePath?: string) {
   }))
 }
 
-function EditableMarkdownSurface({ text, sourcePath, onChange }: { text: string; sourcePath?: string; onChange?: (text: string) => void }) {
+function EditableMarkdownSurface({
+  text,
+  sourcePath,
+  onChange,
+  onMediaPaste,
+}: {
+  text: string
+  sourcePath?: string
+  onChange?: (text: string) => void
+  onMediaPaste?: (event: ReactClipboardEvent<HTMLElement>) => void
+}) {
   // contentEditable must own its descendants while the user types. Giving
   // React a static HTML snapshot keeps reconciliation from replacing the
   // browser's live selection or undo stack after each onInput state update.
@@ -328,6 +339,7 @@ function EditableMarkdownSurface({ text, sourcePath, onChange }: { text: string;
         spellCheck
         dangerouslySetInnerHTML={{ __html: sanitizedMarkup.current }}
         onInput={syncMarkdown}
+        onPaste={onMediaPaste}
         onKeyUp={captureSelection}
         onMouseUp={captureSelection}
         onKeyDown={(event) => {
@@ -412,6 +424,12 @@ function resolveMarkdownAsset(sourcePath: string | undefined, src: string | unde
 const IMAGE_DROP = /\.(png|jpe?g|gif|webp|svg|avif|heic)$/i
 const VIDEO_DROP = /\.(mov|mp4|m4v|webm|avi|mkv)$/i
 
+interface MediaImport {
+  name: string
+  path?: string
+  file?: File
+}
+
 function assetDirFor(sourcePath: string) {
   const dir = dirname(sourcePath)
   const stem = sourcePath.slice(dir.length + 1).replace(/\.[^.]+$/, '')
@@ -419,10 +437,27 @@ function assetDirFor(sourcePath: string) {
   return { abs: `${dir}/${slug}-media`, rel: `${slug}-media` }
 }
 
-function droppedMedia(event: DragEvent) {
+function isImageMedia(file: File) {
+  return file.type.startsWith('image/') || IMAGE_DROP.test(stripUrlDecorations(file.name))
+}
+
+function isVideoMedia(file: File) {
+  return file.type.startsWith('video/') || VIDEO_DROP.test(stripUrlDecorations(file.name))
+}
+
+function droppedMedia(event: DragEvent): MediaImport[] {
   return Array.from(event.dataTransfer?.files ?? []).flatMap((file) => {
-    const item = { name: file.name, path: bridge.pathForFile?.(file) ?? '' }
-    return item.path && (IMAGE_DROP.test(item.path) || VIDEO_DROP.test(item.path)) ? [item] : []
+    if (!isImageMedia(file) && !isVideoMedia(file)) return []
+    return [{ name: file.name, path: bridge.pathForFile?.(file) || undefined, file }]
+  })
+}
+
+function pastedMedia(event: ReactClipboardEvent<HTMLElement>): MediaImport[] {
+  return Array.from(event.clipboardData.files).flatMap((file, index) => {
+    if (!isImageMedia(file) && !isVideoMedia(file)) return []
+    const fallbackExt = file.type.split('/')[1]?.replace('quicktime', 'mov') || (isVideoMedia(file) ? 'mp4' : 'png')
+    const name = file.name || `pasted-${isVideoMedia(file) ? 'video' : 'image'}-${index + 1}.${fallbackExt}`
+    return [{ name, file }]
   })
 }
 
@@ -723,6 +758,46 @@ function MarkdownImage({ src, alt, title, sourcePath }: { src?: string; alt?: st
   )
 }
 
+function MarkdownVideo({ href, children, sourcePath }: { href?: string; children?: ReactNode; sourcePath?: string }) {
+  const [resolved, setResolved] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const direct = href && isSafeUrl(href) && /^https?:/i.test(href) ? href : null
+  const localPath = direct ? null : resolveMarkdownAsset(sourcePath, href)
+  const strippedHref = href == null ? href : stripUrlDecorations(href)
+  const fallbackPath = direct || strippedHref === href ? null : resolveMarkdownAsset(sourcePath, strippedHref)
+
+  useEffect(() => {
+    let cancelled = false
+    setResolved(null)
+    setFailed(!direct && !localPath)
+    if (!localPath) return () => { cancelled = true }
+    void bridge.fs.read(localPath).then(async (result) => {
+      if (cancelled) return
+      let url = result.ok && result.mediaKind === 'video' ? result.previewUrl ?? result.dataUrl ?? null : null
+      if (!url && fallbackPath) {
+        const retry = await bridge.fs.read(fallbackPath)
+        if (cancelled) return
+        url = retry.ok && retry.mediaKind === 'video' ? retry.previewUrl ?? retry.dataUrl ?? null : null
+      }
+      if (url) setResolved(url)
+      else setFailed(true)
+    })
+    return () => { cancelled = true }
+  }, [direct, fallbackPath, localPath])
+
+  const videoSrc = direct ?? resolved
+  return (
+    <span className="fx-md-video">
+      {videoSrc ? (
+        <video src={videoSrc} controls preload="metadata" playsInline />
+      ) : (
+        <span className="fx-md-video-missing">{failed ? 'Video unavailable' : 'Loading video...'}</span>
+      )}
+      {children ? <span className="fx-md-video-caption">{children}</span> : null}
+    </span>
+  )
+}
+
 function MarkdownPreviewLink({ href, children, highlight }: { href?: string; children?: ReactNode; highlight: string }) {
   const open = (event: React.MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault()
@@ -790,6 +865,39 @@ export const DocumentPreview = memo(function DocumentPreview({ text, kind, sourc
   const onMediaDragOver = (event: DragEvent) => {
     if (sourcePath && event.dataTransfer?.types.includes('Files')) event.preventDefault()
   }
+
+  const attachMedia = async (media: MediaImport[], range: Range | null) => {
+    if (!sourcePath) return
+    const { pushToast } = useKaisola.getState()
+    const { abs, rel } = assetDirFor(sourcePath)
+    const chunks: string[] = []
+    const imported = await Promise.all(media.map(async (item) => {
+      try {
+        const copied = item.path
+          ? await bridge.fs.importAsset(item.path, abs, item.name)
+          : item.file
+            ? await bridge.fs.importAssetData(new Uint8Array(await item.file.arrayBuffer()), abs, item.name)
+            : { ok: false, message: 'No readable file data.' }
+        return { item, copied }
+      } catch (error) {
+        return { item, copied: { ok: false, message: String((error as Error)?.message ?? error) } }
+      }
+    }))
+    for (const { item, copied } of imported) {
+      if (!copied?.ok || !copied.name) {
+        pushToast('error', `Could not attach ${item.name}: ${copied?.message ?? 'copy failed'}`)
+      } else {
+        const href = escapeAttr(encodeURI(`${rel}/${copied.name}`))
+        const label = escapeAttr(copied.name.replace(/\.[^.]+$/, ''))
+        chunks.push(IMAGE_DROP.test(stripUrlDecorations(copied.name)) ? `<img src="${href}" alt="${label}">` : `<a href="${href}">${label}</a>`)
+      }
+    }
+    if (!chunks.length) return
+    if (!insertHtmlAtPoint(rootRef.current, range, chunks.join('<br>'))) {
+      pushToast('warn', `Saved to ${rel}/ — link it manually; the caret was lost.`)
+    }
+  }
+
   const onMediaDrop = (event: DragEvent) => {
     if (!sourcePath) return
     const media = droppedMedia(event)
@@ -802,25 +910,18 @@ export const DocumentPreview = memo(function DocumentPreview({ text, kind, sourc
       return
     }
     const range = document.caretRangeFromPoint?.(event.clientX, event.clientY) ?? null
-    const root = rootRef.current
-    void (async () => {
-      const { abs, rel } = assetDirFor(sourcePath)
-      const chunks: string[] = []
-      for (const item of media) {
-        const copied = await bridge.fs.importAsset(item.path, abs, item.name)
-        if (!copied?.ok || !copied.name) {
-          pushToast('error', `Could not attach ${item.name}: ${copied?.message ?? 'copy failed'}`)
-          continue
-        }
-        const href = escapeAttr(encodeURI(`${rel}/${copied.name}`))
-        const label = escapeAttr(copied.name.replace(/\.[^.]+$/, ''))
-        chunks.push(IMAGE_DROP.test(copied.name) ? `<img src="${href}" alt="${label}">` : `<a href="${href}">${label}</a>`)
-      }
-      if (!chunks.length) return
-      if (!insertHtmlAtPoint(root, range, chunks.join('<br>'))) {
-        pushToast('warn', `Saved to ${rel}/ — link it manually; the caret was lost.`)
-      }
-    })()
+    void attachMedia(media, range)
+  }
+
+  const onMediaPaste = (event: ReactClipboardEvent<HTMLElement>) => {
+    if (!sourcePath) return
+    const media = pastedMedia(event)
+    if (!media.length) return
+    event.preventDefault()
+    event.stopPropagation()
+    const selection = window.getSelection()
+    const range = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null
+    void attachMedia(media, range)
   }
 
   const rich = (tag: keyof JSX.IntrinsicElements) => markdownComponent(tag, editable ? '' : highlight) as never
@@ -834,13 +935,15 @@ export const DocumentPreview = memo(function DocumentPreview({ text, kind, sourc
       onDrop={onMediaDrop}
     >
       {editable ? (
-        <EditableMarkdownSurface text={text} sourcePath={sourcePath} onChange={onChange} />
+        <EditableMarkdownSurface text={text} sourcePath={sourcePath} onChange={onChange} onMediaPaste={onMediaPaste} />
       ) : (
         <article className="fx-doc-page md">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{
-            a: ({ href, children }) => <MarkdownPreviewLink href={href} highlight={highlight}>{children}</MarkdownPreviewLink>,
+            a: ({ href, children }) => href && VIDEO_DROP.test(stripUrlDecorations(href))
+              ? <MarkdownVideo href={href} sourcePath={sourcePath}>{children}</MarkdownVideo>
+              : <MarkdownPreviewLink href={href} highlight={highlight}>{children}</MarkdownPreviewLink>,
             img: ({ src, alt, title }) => (
               <MarkdownImage src={src} alt={alt} title={title} sourcePath={sourcePath} />
             ),

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { bridge, type AppAuthStatus } from '../../lib/bridge'
 import { useKaisola } from '../../store/store'
 import { useClickAway } from '../../lib/useClickAway'
+import { signOutToOnboarding } from '../../lib/signOut'
 import { Icon } from '../Icon'
 
 export function AppAccountButton({ showLabel = false }: { showLabel?: boolean }) {
@@ -41,8 +42,10 @@ export function AppAccountButton({ showLabel = false }: { showLabel?: boolean })
     setOpen((value) => !value)
   }
   const signOut = async () => {
+    const next = await signOutToOnboarding()
+    if (!next) return
     setOpen(false)
-    setStatus(await bridge.appAuth.signOut())
+    setStatus(next)
   }
 
   return (

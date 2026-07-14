@@ -2685,3 +2685,58 @@ body[data-shell-drag='1'] embed,
 body[data-shell-drag='1'] object {
   pointer-events: none !important;
 }
+
+/* Resize targets stay generous, but the visible affordance is a small calm
+   grip instead of a full-height highlighted stripe. */
+.grid-col-resize,
+.canvas-resize,
+.session-sidebar > .session-sidebar-resize,
+.wsrail > .wsrail-resize,
+.grid-col-resize:hover,
+.canvas-resize:hover,
+.canvas-resize:focus-visible,
+.session-sidebar > .session-sidebar-resize:hover,
+.session-sidebar > .session-sidebar-resize:focus-visible,
+.wsrail > .wsrail-resize:hover,
+.wsrail > .wsrail-resize:focus-visible {
+  background: transparent;
+  outline: none;
+}
+
+.grid-col-resize::after,
+.canvas-resize::after,
+.session-sidebar > .session-sidebar-resize::after,
+.wsrail > .wsrail-resize::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 44px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  opacity: 0;
+  transform: translate(-50%, -50%) scaleY(.62);
+  transition: opacity var(--dur-1) var(--ease-out), transform var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out);
+  pointer-events: none;
+}
+
+.grid-col-resize:hover::after,
+.grid-col-resize:focus-visible::after,
+.canvas-resize:hover::after,
+.canvas-resize:focus-visible::after,
+.session-sidebar > .session-sidebar-resize:hover::after,
+.session-sidebar > .session-sidebar-resize:focus-visible::after,
+.wsrail > .wsrail-resize:hover::after,
+.wsrail > .wsrail-resize:focus-visible::after {
+  opacity: .82;
+  transform: translate(-50%, -50%) scaleY(1);
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 4px 16px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .grid-col-resize::after,
+  .canvas-resize::after,
+  .session-sidebar > .session-sidebar-resize::after,
+  .wsrail > .wsrail-resize::after { transition: none; }
+}

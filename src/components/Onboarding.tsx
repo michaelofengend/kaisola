@@ -4,6 +4,7 @@ import { useKaisola } from '../store/store'
 import { GoogleIcon } from './ProviderIcon'
 import { Icon } from './Icon'
 import { useModalFocus } from '../lib/useModalFocus'
+import { OnboardingBeads } from './OnboardingBeads'
 
 const firstName = (status: AppAuthStatus | null) =>
   status?.profile?.name?.trim().split(/\s+/)[0] || status?.profile?.email?.split('@')[0] || ''
@@ -104,6 +105,7 @@ export function Onboarding() {
       aria-labelledby="onboarding-title"
       onCancel={(event) => event.preventDefault()}
     >
+      <OnboardingBeads />
       <div className="onboarding-card">
         <div className="onboarding-mark"><Icon name="Layers3" size={18} /></div>
         {step === 'welcome' ? (

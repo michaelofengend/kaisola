@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Terminal as XTerm, type IMarker, type ITheme } from '@xterm/xterm'
+import { Terminal as XTerm, type ILink, type IMarker, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -9,6 +9,7 @@ import { useKaisola, terminalOwnerMap, POP_TERMINAL_ID, type TermBackground, typ
 import { clockTime } from '../lib/format'
 import { touchMountedTerminal } from '../lib/terminalResidency'
 import { Icon } from './Icon'
+import { terminalFileLinkCandidates } from '../lib/terminalFileLinks'
 
 // xterm needs concrete hex (no CSS vars). These mirror --term-bg in tokens.css:
 // the terminal sits a touch darker than the app surface in BOTH themes.
@@ -400,6 +401,37 @@ export function Terminal({ id, attach = false, boot, cwd, projectId: projectIdOv
       } catch { /* fall through to the external browser */ }
       void bridge.openExternal(uri)
     }))
+    term.registerLinkProvider({
+      provideLinks(bufferLineNumber, callback) {
+        const value = term.buffer.active.getLine(bufferLineNumber - 1)?.translateToString(true) ?? ''
+        const links = terminalFileLinkCandidates(value).map((candidate): ILink => ({
+          range: {
+            start: { x: candidate.start + 1, y: bufferLineNumber },
+            end: { x: candidate.end, y: bufferLineNumber },
+          },
+          text: candidate.text,
+          decorations: { pointerCursor: true, underline: true },
+          activate: () => {
+            const state = useKaisola.getState()
+            const record = state.terminals.find((item) => item.id === id)
+            const base = state.terminalMeta[id]?.cwd ?? record?.cwd ?? cwd ?? state.workspacePath ?? undefined
+            void bridge.fs.resolvePath(candidate.path, base).then((resolved) => {
+              if (!resolved.ok || !resolved.path) {
+                state.pushToast('warn', `File not found: ${candidate.path}`)
+                return
+              }
+              if (resolved.dir) {
+                void bridge.fs.reveal(resolved.path)
+                return
+              }
+              state.requestFile(resolved.path)
+              if (candidate.line) window.setTimeout(() => state.requestScroll(resolved.path!, candidate.line!), 180)
+            })
+          },
+        }))
+        callback(links.length ? links : undefined)
+      },
+    })
     term.open(hostRef.current)
     touchMountedTerminal(id)
     // GPU renderer when available (the pty stays byte-identical without it).

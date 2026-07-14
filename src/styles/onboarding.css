@@ -8,9 +8,22 @@
   color: #17181b;
   background: #fff;
   -webkit-app-region: no-drag;
+  overflow: hidden;
+}
+
+.onboarding-beads {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  mask-image: linear-gradient(90deg, transparent 43%, rgb(0 0 0 / 28%) 52%, #000 72%);
+  opacity: .62;
 }
 
 .onboarding-card {
+  position: relative;
+  z-index: 1;
   width: min(440px, 100%);
   display: flex;
   flex-direction: column;
@@ -122,6 +135,10 @@
   .onboarding-account { margin-top: 10px; }
 }
 
+@media (max-width: 720px) {
+  .onboarding-beads { opacity: .22; mask-image: linear-gradient(90deg, transparent 25%, #000); }
+}
+
 @keyframes onboarding-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
@@ -129,4 +146,5 @@
 
 @media (prefers-reduced-motion: reduce) {
   .onboarding-card { animation: none; }
+  .onboarding-beads { opacity: .28; }
 }

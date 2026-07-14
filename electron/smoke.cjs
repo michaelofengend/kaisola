@@ -1317,10 +1317,17 @@ app.whenReady().then(async () => {
     const stamp = 'roundtrip-ok'
     const w = await window.kaisola.fs.write(tmp, stamp)
     const rb = await window.kaisola.fs.read(tmp)
+    const assetDir = '/tmp/pasola-smoke-pasted-assets'
+    const bytes = new Uint8Array([137, 80, 78, 71])
+    const [assetA, assetB] = await Promise.all([
+      window.kaisola.fs.importAssetData(bytes, assetDir, 'pasted.png'),
+      window.kaisola.fs.importAssetData(bytes, assetDir, 'pasted.png'),
+    ])
     return {
       listed: !!(l.ok && (l.entries || []).length > 0),
       read: !!(r.ok && typeof r.content === 'string'),
       wrote: !!(w.ok && rb.ok && rb.content === stamp),
+      pasted: !!(assetA.ok && assetB.ok && assetA.name !== assetB.name),
     }
   })()`)
   console.log('FILES=' + JSON.stringify(fschk))
@@ -1333,7 +1340,7 @@ app.whenReady().then(async () => {
   const smokePng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAG0lEQVR42mP8z8Dwn4GBgYGJgYGBgQEABw0BA8LLy1kAAAAASUVORK5CYII=', 'base64')
   fsx.writeFileSync(path.join(fileUiRoot, 'figs', 'inline.png'), smokePng)
   fsx.writeFileSync(path.join(fileUiRoot, 'alpha-search-target.txt'), 'alpha\n')
-  fsx.writeFileSync(path.join(fileUiRoot, 'beta-notes.md'), '# beta\n\nReadable olive markdown.\n\n![inline figure](figs/inline.png)\n\n- [x] task\n')
+  fsx.writeFileSync(path.join(fileUiRoot, 'beta-notes.md'), '# beta\n\nReadable olive markdown.\n\n![inline figure](figs/inline.png)\n\n[inline clip](sample-video.mp4)\n\n- [x] task\n')
   fsx.writeFileSync(path.join(fileUiRoot, 'page.html'), '<main><h1>HTML title</h1><p>Readable olive html.</p><script>window.__badHtmlPreview = true</script><p onclick="window.__badHtmlPreview = true">unsafe attr</p></main>')
   fsx.writeFileSync(path.join(fileUiRoot, 'table.csv'), 'name,score\nAda,98\nGrace,97\n')
   fsx.writeFileSync(path.join(fileUiRoot, 'tree.json'), '{"project":"Kaisola","features":["extensions","previews"]}\n')
@@ -1359,6 +1366,7 @@ a^2 + b^2 = c^2
 \end{document}
 `)
   fsx.writeFileSync(path.join(fileUiRoot, 'sample-image.png'), smokePng)
+  fsx.writeFileSync(path.join(fileUiRoot, 'sample-video.mp4'), Buffer.from('00000018667479706d703432000000006d703432', 'hex'))
   fsx.writeFileSync(path.join(fileUiRoot, 'sample-paper.pdf'), smokePdf('Kaisola PDF'))
   const largePdfPath = path.join(fileUiRoot, 'large-paper.pdf')
   fsx.writeFileSync(largePdfPath, smokePdf('Large Kaisola PDF'))
@@ -1410,6 +1418,7 @@ a^2 + b^2 = c^2
       const img = document.querySelector('.fx-doc-markdown img')
       return img && img.naturalWidth > 0 && /inline figure/.test(img.getAttribute('alt') || '')
     }))
+    const mdVideo = /^kaisola-preview:\\/\\//.test(document.querySelector('.fx-md-video video')?.getAttribute('src') || '')
     const find = document.querySelector('.fx-doc-find input')
     if (find) {
       setter.call(find, 'olive')
@@ -1448,12 +1457,10 @@ a^2 + b^2 = c^2
         mdBoldCommand = /Edited/.test(cleanEditor.querySelector('strong, b')?.textContent || '')
       }
     }
-    await new Promise((r) => setTimeout(r, 180))
-    const saveButton = [...document.querySelectorAll('.fx-save')].find((button) => !button.disabled)
-    saveButton?.click()
-    await new Promise((r) => setTimeout(r, 260))
+    await new Promise((r) => setTimeout(r, 950))
     const cleanSaved = await window.kaisola.fs.read(${JSON.stringify(path.join(fileUiRoot, 'beta-notes.md'))})
     const mdCleanMarkdown = /^# beta\\n\\n\\*\\*Edited\\*\\* cleanly olive\\./.test(cleanSaved.content || '')
+    const mdAutosaved = /Saved/.test(document.querySelector('.fx-save-status')?.textContent || '')
     const previewButton = [...document.querySelectorAll('.fx-mode')].find((button) => /preview/i.test(button.textContent || ''))
     previewButton?.click()
     await new Promise((r) => setTimeout(r, 180))
@@ -1543,6 +1550,10 @@ a^2 + b^2 = c^2
       const img = document.querySelector('.fx-media-image img')
       return img && imageWidthBefore > 0 && img.getBoundingClientRect().width > imageWidthBefore + 4
     }))
+    const videoRead = await window.kaisola.fs.read(${JSON.stringify(path.join(fileUiRoot, 'sample-video.mp4'))})
+    st.requestFile(${JSON.stringify(path.join(fileUiRoot, 'sample-video.mp4'))})
+    await new Promise((r) => setTimeout(r, 320))
+    const videoPreview = /^kaisola-preview:\\/\\//.test(document.querySelector('.fx-media-video video')?.getAttribute('src') || '')
     const pdfRead = await window.kaisola.fs.read(${JSON.stringify(path.join(fileUiRoot, 'sample-paper.pdf'))})
     const largePdfRead = await window.kaisola.fs.read(${JSON.stringify(largePdfPath)})
     st.requestFile(${JSON.stringify(path.join(fileUiRoot, 'sample-paper.pdf'))})
@@ -1665,12 +1676,14 @@ a^2 + b^2 = c^2
       activeBeta,
       mdPreview,
       mdImage,
+      mdVideo,
       mdMark,
       mdExternal,
       mdCleanEdit,
       mdAuthoringToolbar,
       mdBoldCommand,
       mdCleanMarkdown,
+      mdAutosaved,
       mdCleanPreview,
       htmlPreview,
       htmlSafe,
@@ -1681,6 +1694,9 @@ a^2 + b^2 = c^2
       imageHasDataUrl: /^data:image\\/png/.test(imageRead.dataUrl || ''),
       imagePreview,
       imageZoomed,
+      videoReadKind: videoRead.mediaKind,
+      videoHasPreviewUrl: /^kaisola-preview:\\/\\//.test(videoRead.previewUrl || ''),
+      videoPreview,
       pdfReadKind: pdfRead.mediaKind,
       pdfHasPreviewUrl: /^kaisola-preview:\\/\\//.test(pdfRead.previewUrl || ''),
       pdfNoDataUrl: !pdfRead.dataUrl,
@@ -3839,11 +3855,12 @@ a^2 + b^2 = c^2
     !persist.stored || !persist.hasTheme || !persist.hasAgent || !persist.hasThread || !persist.hasChatTurn || !persist.hasDraft || !persist.draftBounded || !persist.hasCodexEffort || !persist.hasTabLayout ||
     !boot.hasId || !boot.ran ||
     !auth.hasUrl || auth.code !== 'ABCD-1234' || !auth.done ||
-    !cards.cardPerView || !cards.chatLeftOfFiles || !cards.soloHeadSuppressed || !cards.noDockPanel || !cards.emptyMessageGone || !fschk.listed || !fschk.read || !fschk.wrote ||
+    !cards.cardPerView || !cards.chatLeftOfFiles || !cards.soloHeadSuppressed || !cards.noDockPanel || !cards.emptyMessageGone || !fschk.listed || !fschk.read || !fschk.wrote || !fschk.pasted ||
     !fileui.hasSearch || fileui.resultCount < 1 || fileui.tabs < 1 || !fileui.alphaPreview || !fileui.previewReplaced || !fileui.betaPinned || !fileui.hasBeta || !fileui.activeBeta ||
-    !fileui.mdPreview || !fileui.mdImage || !fileui.mdMark || !fileui.mdExternal || !fileui.mdCleanEdit || !fileui.mdAuthoringToolbar || !fileui.mdBoldCommand || !fileui.mdCleanMarkdown || !fileui.mdCleanPreview || !fileui.mdReadableChannel || !fileui.mdSplitFillsPane ||
+    !fileui.mdPreview || !fileui.mdImage || !fileui.mdVideo || !fileui.mdMark || !fileui.mdExternal || !fileui.mdCleanEdit || !fileui.mdAuthoringToolbar || !fileui.mdBoldCommand || !fileui.mdCleanMarkdown || !fileui.mdAutosaved || !fileui.mdCleanPreview || !fileui.mdReadableChannel || !fileui.mdSplitFillsPane ||
     !fileui.htmlPreview || !fileui.htmlSafe || !fileui.texSource || !fileui.texEditable || !fileui.texNoPreview ||
     fileui.imageReadKind !== 'image' || !fileui.imageHasDataUrl || !fileui.imagePreview || !fileui.imageZoomed ||
+    fileui.videoReadKind !== 'video' || !fileui.videoHasPreviewUrl || !fileui.videoPreview ||
     fileui.pdfReadKind !== 'pdf' || !fileui.pdfHasPreviewUrl || !fileui.pdfNoDataUrl || !fileui.pdfPreview || !fileui.pdfNoSidePane || !fileui.pdfZoomed || !fileui.pdfChromeCollapsed ||
     fileui.largePdfReadKind !== 'pdf' || !fileui.largePdfHasPreviewUrl || !fileui.largePdfNotTooLarge || !fileui.largePdfNoDataUrl || !fileui.railSawDelta ||
     !fileui.zoomed || !fileui.zoomCss || !fileui.mdHeadingZoomed ||

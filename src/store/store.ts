@@ -1077,6 +1077,7 @@ interface KaisolaState {
   defaultAutonomy: AutonomyLevel
   setDefaultAutonomy: (a: AutonomyLevel) => void
   completeOnboarding: () => void
+  restartOnboarding: () => void
   openPalette: (mode?: PaletteMode) => void
   closePalette: () => void
   togglePalette: (mode?: PaletteMode) => void
@@ -2539,6 +2540,7 @@ export const useKaisola = create<KaisolaState>()(
     for (const w of armed) get().runWorkflow(w.id)
   },
   completeOnboarding: () => set({ onboardingVersion: 1 }),
+  restartOnboarding: () => set({ onboardingVersion: 0, settingsOpen: false, settingsPane: null }),
   toggleTheme: () => {
     // a manual toggle is an EXPLICIT choice — it leaves system mode
     const next = get().theme === 'dark' ? 'light' : 'dark'
@@ -2819,7 +2821,10 @@ export const useKaisola = create<KaisolaState>()(
           boot: command,
           restart: opts?.restart,
           singletonKey: opts?.singletonKey,
-          cwd: opts?.cwd,
+          // Every new terminal belongs to the active project tab. Callers may
+          // override this for worktrees/templates, but an omitted cwd must not
+          // silently drop the shell into $HOME.
+          cwd: opts?.cwd ?? s.workspacePath ?? undefined,
           name: opts?.name,
           autoName,
         }],

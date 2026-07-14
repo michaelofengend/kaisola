@@ -128,6 +128,7 @@ app.whenReady().then(async () => {
   })()`)
 
   const wide = await inspect('wide-mixed')
+  const terminalUsesWorkspace = await win.webContents.executeJavaScript(`window.__kaisola.getState().terminals.find((terminal) => terminal.name === 'Shell matrix')?.cwd === ${JSON.stringify(workspace)}`)
 
   // The permanent top-right preview switch must be a real hit target inside
   // the frameless window drag row.
@@ -163,6 +164,14 @@ app.whenReady().then(async () => {
       !!root.querySelector('.fx-md-toolbar[role="toolbar"]') &&
       !!root.querySelector('.fx-md-toolbar [aria-label="Bold"]')
   })()`)
+  await win.webContents.executeJavaScript(`(() => {
+    const page = document.querySelector('.fx-doc-markdown[data-editing] .fx-doc-page[contenteditable="true"]')
+    if (!page) return
+    page.innerHTML = '<h1>Backlog title</h1><p>Autosaved from the layout probe.</p>'
+    page.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: '.' }))
+  })()`)
+  await wait(900)
+  const markdownAutosaved = fs.readFileSync(markdownFixture, 'utf8').includes('Autosaved from the layout probe.')
 
   // Real pointer drag: Sessions stretches, Files remains unchanged.
   const resizeStart = await win.webContents.executeJavaScript(`(() => {
@@ -219,12 +228,26 @@ app.whenReady().then(async () => {
     const tops = controls.map((control) => Math.round(control.getBoundingClientRect().top))
     return Math.max(...tops) - Math.min(...tops) <= 2
   })()`)
+  await win.webContents.executeJavaScript(`(() => {
+    window.confirm = () => true
+    document.querySelector('.shell-sidebar-footer [aria-label="Kaisola account"]')?.click()
+  })()`)
+  await wait(80)
+  await win.webContents.executeJavaScript(`document.querySelector('.app-account-menu button:last-child')?.click()`)
+  await wait(160)
+  const signOutRestartsOnboarding = await win.webContents.executeJavaScript(`window.__kaisola.getState().onboardingVersion === 0`)
 
   // Medium: two columns remain legible beside files and both rails.
   win.setSize(1180, 760)
   await win.webContents.executeJavaScript(`window.__kaisola.getState().setSessionRailWidth(210); window.__kaisola.getState().setRailWidth(220)`)
   await wait(220)
   const medium = await inspect('medium-mixed')
+  const mediumChromeFits = await win.webContents.executeJavaScript(`(() => {
+    const rows = [...document.querySelectorAll('.fx-file-chrome .fx-toolbar')]
+    const inactiveTabs = [...document.querySelectorAll('.fx-tabs-inline .fx-tab:not([data-active="true"])')]
+    return rows.length === 2 && rows.every((row) => row.scrollWidth <= row.clientWidth + 1) &&
+      inactiveTabs.every((tab) => getComputedStyle(tab).display === 'none')
+  })()`)
 
   // Compact: sessions only, stacked; no hidden horizontal overflow.
   win.setSize(820, 680)
@@ -262,10 +285,12 @@ app.whenReady().then(async () => {
 
   const result = {
     wide,
+    terminalUsesWorkspace,
     closePoint,
     canvasClosed,
     canvasRestored,
     markdownEditing,
+    markdownAutosaved,
     widthsBefore,
     widthsAfter,
     newSessionOrder,
@@ -273,7 +298,9 @@ app.whenReady().then(async () => {
     accountOpened,
     accountClosed,
     footerSingleRow,
+    signOutRestartsOnboarding,
     medium,
+    mediumChromeFits,
     compact,
     top,
     topStripScrolls,
@@ -291,12 +318,16 @@ app.whenReady().then(async () => {
     && canvasClosed
     && canvasRestored
     && markdownEditing
+    && markdownAutosaved
     && resized
     && orderOk
     && settingsGeneral
     && accountOpened
     && accountClosed
     && footerSingleRow
+    && signOutRestartsOnboarding
+    && mediumChromeFits
+    && terminalUsesWorkspace
     && top.horizontalTabs
     && topStripScrolls
       ? 0

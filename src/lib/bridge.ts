@@ -85,7 +85,7 @@ export interface FsSearchResult {
   truncated?: boolean
   message?: string
 }
-export type FsReadMediaKind = 'text' | 'image' | 'pdf' | 'binary'
+export type FsReadMediaKind = 'text' | 'image' | 'video' | 'pdf' | 'binary'
 export interface FsReadResult {
   ok: boolean
   content?: string
@@ -752,6 +752,9 @@ export interface KaisolaBridge {
     create(path: string, dir?: boolean): Promise<{ ok: boolean; message?: string }>
     /** Copy an OS file into an asset folder, collision-safe (name-2.ext). */
     importAsset(source: string, targetDir: string, name?: string): Promise<{ ok: boolean; path?: string; name?: string; message?: string }>
+    /** Persist clipboard media bytes into an asset folder, collision-safe (name-2.ext). */
+    importAssetData(data: Uint8Array, targetDir: string, name: string): Promise<{ ok: boolean; path?: string; name?: string; message?: string }>
+    resolvePath(input: string, cwd?: string): Promise<{ ok: boolean; path?: string; dir?: boolean; message?: string }>
     rename(from: string, to: string): Promise<{ ok: boolean; message?: string }>
     trash(path: string): Promise<{ ok: boolean; message?: string }>
     reveal(path: string): Promise<{ ok: boolean }>
@@ -1171,6 +1174,12 @@ const webMock: KaisolaBridge = {
       return { ok: false, message: DESKTOP_ONLY }
     },
     async importAsset() {
+      return { ok: false, message: DESKTOP_ONLY }
+    },
+    async importAssetData() {
+      return { ok: false, message: DESKTOP_ONLY }
+    },
+    async resolvePath() {
       return { ok: false, message: DESKTOP_ONLY }
     },
     async rename() {

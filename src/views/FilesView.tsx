@@ -151,7 +151,7 @@ const isSvg = (path?: string) => fileExt(path) === 'svg'
 const isTextTab = (tab: FileTab | null | undefined) => !tab?.mediaKind || tab.mediaKind === 'text'
 const isMediaTab = (tab: FileTab | null | undefined) => !!tab?.mediaKind && tab.mediaKind !== 'text'
 const mediaLabel = (kind?: FsReadMediaKind | null) =>
-  kind === 'pdf' ? 'PDF' : kind === 'image' ? 'image' : kind === 'binary' ? 'binary file' : 'file'
+  kind === 'pdf' ? 'PDF' : kind === 'image' ? 'image' : kind === 'video' ? 'video' : kind === 'binary' ? 'binary file' : 'file'
 const formatBytes = (bytes?: number | null) => {
   if (typeof bytes !== 'number' || !Number.isFinite(bytes)) return ''
   if (bytes < 1024) return `${bytes} B`
@@ -908,6 +908,21 @@ export function FilesView() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // Markdown behaves like a document editor: after the user pauses, every
+  // dirty Markdown tab is committed quietly. Cmd+S remains an immediate save.
+  useEffect(() => {
+    const dirtyMarkdown = tabs.filter((tab) => isTextTab(tab)
+      && isMarkdown(tab.path)
+      && !tab.loading
+      && !tab.saving
+      && tab.value !== tab.baseline)
+    if (!dirtyMarkdown.length) return
+    const timer = window.setTimeout(() => {
+      void Promise.all(dirtyMarkdown.map((tab) => savePath(tab.path, { toast: false })))
+    }, 650)
+    return () => window.clearTimeout(timer)
+  }, [savePath, tabs])
+
   const openFolder = async () => {
     const r = await bridge.pickFolder()
     if (r.ok && r.path) {
@@ -1202,7 +1217,7 @@ export function FilesView() {
   ) : null
 
   const searchBox = workspacePath && (
-    <div className="fx-search-wrap">
+    <div className="fx-search-wrap" data-query={query ? true : undefined}>
       <Icon name="Search" size={13} className="muted" />
       <input
         value={query}
@@ -1346,12 +1361,23 @@ export function FilesView() {
           )}
         </div>
       )}
-      {activeIsText && (
+      {activeIsMd ? (
+        <div
+          className="fx-save-status"
+          data-dirty={dirty || undefined}
+          role="status"
+          aria-live="polite"
+          title={active.saving ? 'Saving Markdown…' : dirty ? 'Autosaves after you pause typing' : 'All changes saved'}
+        >
+          <Icon name={active.saving ? 'LoaderCircle' : 'Check'} size={13} className={active.saving ? 'spin' : ''} />
+          <span>{active.saving ? 'Saving' : dirty ? 'Autosave' : 'Saved'}</span>
+        </div>
+      ) : activeIsText ? (
         <button type="button" className="btn btn-sm fx-save" disabled={!dirty || active.saving} onClick={save} title="Save  ⌘S">
           <Icon name={active.saving ? 'LoaderCircle' : 'Check'} size={13} className={active.saving ? 'spin' : ''} />
-          {active.saving ? 'Saving' : 'Save'}
+          <span>{active.saving ? 'Saving' : 'Save'}</span>
         </button>
-      )}
+      ) : null}
     </div>
   )
 
@@ -1529,6 +1555,16 @@ function MediaPreview({
       <div className="fx-media fx-media-image">
         <div className="fx-media-stage">
           <img src={tab.dataUrl} alt={fileName(tab.path)} draggable={false} />
+        </div>
+        {meta && <div className="fx-media-meta">{meta}</div>}
+      </div>
+    )
+  }
+  if (tab.mediaKind === 'video' && tab.previewUrl) {
+    return (
+      <div className="fx-media fx-media-video">
+        <div className="fx-media-stage">
+          <video src={tab.previewUrl} controls preload="metadata" playsInline />
         </div>
         {meta && <div className="fx-media-meta">{meta}</div>}
       </div>
