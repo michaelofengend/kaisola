@@ -118,6 +118,20 @@ Additional focused checks include `npm run group:probe` for the full
 Kaisola Mesh collaboration lifecycle and `npm run layout:probe` for responsive
 session arrangements.
 
+## Release
+
+After verification, stage exactly the changes intended for the release, then
+run one command:
+
+```sh
+npm run release:fast -- 0.1.64 "Release v0.1.64: concise description"
+```
+
+The helper bumps `package.json` and `package-lock.json`, commits the staged
+change set, creates the annotated version tag, and atomically pushes `main` and
+the tag. Untracked files are never added. The tag starts the signed and
+notarized macOS release workflow.
+
 ## Repository map
 
 | Path | Purpose |
