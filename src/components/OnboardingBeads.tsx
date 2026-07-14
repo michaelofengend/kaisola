@@ -92,9 +92,9 @@ export function OnboardingBeads() {
       context.setTransform(dpr, 0, 0, dpr, 0, 0)
 
       beads.length = 0
-      columns = clamp(Math.round(width / 41), 16, 36)
+      columns = clamp(Math.round(width / 29), 20, 50)
       const spacingX = width / Math.max(1, columns - 1)
-      const spacingY = clamp(height / 38, 19, 25)
+      const spacingY = clamp(height / 50, 15, 20)
       rows = Math.ceil((height + spacingY * 2) / spacingY)
 
       for (let column = 0; column < columns; column += 1) {
@@ -124,7 +124,7 @@ export function OnboardingBeads() {
     const draw = () => {
       context.clearRect(0, 0, width, height)
       context.lineWidth = 0.55
-      context.globalAlpha = 0.16
+      context.globalAlpha = 0.19
       for (let column = 0; column < columns; column += 1) {
         const first = beads[column * rows]
         if (!first) continue
@@ -142,7 +142,7 @@ export function OnboardingBeads() {
       context.textBaseline = 'middle'
       for (const bead of beads) {
         if (bead.y < -18 || bead.y > height + 18) continue
-        context.globalAlpha = bead.row === 0 ? 0.76 : 0.5 + ((bead.column + bead.row) % 3) * 0.07
+        context.globalAlpha = bead.row === 0 ? 0.8 : 0.54 + ((bead.column + bead.row) % 3) * 0.07
         context.fillStyle = bead.color
         context.font = `500 ${bead.fontSize}px ui-serif, "Noto Serif", "Noto Sans", "Apple Symbols", Georgia, serif`
         context.fillText(bead.glyph, bead.x, bead.y)

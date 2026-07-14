@@ -45,9 +45,9 @@
     canvas.height = Math.round(height * dpr)
     context.setTransform(dpr, 0, 0, dpr, 0, 0)
     points.length = 0
-    columns = clamp(Math.round(width / 42), 16, 36)
+    columns = clamp(Math.round(width / 30), 20, 48)
     const spacingX = width / Math.max(1, columns - 1)
-    const spacingY = clamp(height / 31, 19, 25)
+    const spacingY = clamp(height / 39, 15, 20)
     rows = Math.ceil((height + spacingY * 2) / spacingY)
 
     for (let column = 0; column < columns; column += 1) {
@@ -69,7 +69,7 @@
   const draw = () => {
     context.clearRect(0, 0, width, height)
     context.lineWidth = .55
-    context.globalAlpha = dark ? .18 : .16
+    context.globalAlpha = dark ? .21 : .19
     for (let column = 0; column < columns; column += 1) {
       const first = points[column * rows]
       if (!first) continue
@@ -86,7 +86,7 @@
     context.textBaseline = 'middle'
     for (const point of points) {
       if (point.y < -18 || point.y > height + 18) continue
-      context.globalAlpha = dark ? .62 : .51 + ((point.column + point.row) % 3) * .06
+      context.globalAlpha = dark ? .68 : .55 + ((point.column + point.row) % 3) * .06
       context.fillStyle = dark ? '#b8c08c' : point.color
       context.font = `500 ${point.fontSize}px ui-serif, "Noto Serif", "Noto Sans", "Apple Symbols", Georgia, serif`
       context.fillText(point.glyph, point.x, point.y)
