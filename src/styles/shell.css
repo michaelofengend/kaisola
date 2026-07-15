@@ -718,10 +718,23 @@
 .shell-sidebar-footer-tools {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: var(--sp-1);
   min-width: 0;
   width: 100%;
+}
+.shell-sidebar-footer-spacer {
+  flex: 1 1 auto;
+  min-width: var(--sp-2);
+}
+.shell-sidebar-footer-spacer::after {
+  content: '';
+  display: block;
+  width: 1px;
+  height: 18px;
+  margin-left: auto;
+  margin-right: var(--sp-1);
+  background: var(--border-faint);
 }
 .shell-sidebar-footer-tools .btn-icon,
 .shell-sidebar-footer-tools > .btn-icon {
@@ -1315,7 +1328,7 @@
   min-height: 0;
   display: grid;
   gap: var(--sp-4);
-  position: relative; /* anchors the column-resize grips */
+  position: relative; /* anchors the row/column resize grips */
   -webkit-app-region: drag;
 }
 
@@ -1808,6 +1821,18 @@
 }
 .grid-col-resize:hover {
   background: var(--accent-soft);
+}
+.grid-row-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 10px;
+  transform: translateY(-50%);
+  cursor: row-resize;
+  z-index: 6;
+  border-radius: var(--r-full);
+  -webkit-app-region: no-drag;
+  touch-action: none;
 }
 .session-card {
   display: none;
@@ -2750,10 +2775,13 @@ body[data-shell-drag='1'] object {
 /* Resize targets stay generous, but the visible affordance is a small calm
    grip instead of a full-height highlighted stripe. */
 .grid-col-resize,
+.grid-row-resize,
 .canvas-resize,
 .session-sidebar > .session-sidebar-resize,
 .wsrail > .wsrail-resize,
 .grid-col-resize:hover,
+.grid-row-resize:hover,
+.grid-row-resize:focus-visible,
 .canvas-resize:hover,
 .canvas-resize:focus-visible,
 .session-sidebar > .session-sidebar-resize:hover,
@@ -2765,6 +2793,7 @@ body[data-shell-drag='1'] object {
 }
 
 .grid-col-resize::after,
+.grid-row-resize::after,
 .canvas-resize::after,
 .session-sidebar > .session-sidebar-resize::after,
 .wsrail > .wsrail-resize::after {
@@ -2782,8 +2811,16 @@ body[data-shell-drag='1'] object {
   pointer-events: none;
 }
 
+.grid-row-resize::after {
+  width: 44px;
+  height: 2px;
+  transform: translate(-50%, -50%) scaleX(.62);
+}
+
 .grid-col-resize:hover::after,
 .grid-col-resize:focus-visible::after,
+.grid-row-resize:hover::after,
+.grid-row-resize:focus-visible::after,
 .canvas-resize:hover::after,
 .canvas-resize:focus-visible::after,
 .session-sidebar > .session-sidebar-resize:hover::after,
@@ -2795,8 +2832,14 @@ body[data-shell-drag='1'] object {
   box-shadow: 0 0 0 3px var(--accent-soft), 0 4px 16px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
+.grid-row-resize:hover::after,
+.grid-row-resize:focus-visible::after {
+  transform: translate(-50%, -50%) scaleX(1);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .grid-col-resize::after,
+  .grid-row-resize::after,
   .canvas-resize::after,
   .session-sidebar > .session-sidebar-resize::after,
   .wsrail > .wsrail-resize::after { transition: none; }

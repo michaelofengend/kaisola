@@ -122,7 +122,8 @@ app.whenReady().then(async () => {
       reply = 'Integrated both reviewed branches and verified the shared acceptance tests.'
     } else if (/Cross-review/.test(text)) {
       if (/Immutable review source/.test(text) && /git -C .* diff --no-ext-diff --find-renames/.test(text)) largeReviewRouted = true
-      reply = `${provider} verifier verdict: pass; ownership and integration checks are satisfied.`
+      const receipt = text.match(/MESH_REVIEW_RECEIPT\n(\{[^\n]+\})/)?.[1]
+      reply = `${provider} verifier verdict: pass; ownership and integration checks are satisfied.\n\nMESH_REVIEW_RECEIPT\n${receipt ?? '{}'}`
     }
     const firstScout = /scouting independently/.test(text) && count === 1
     await wait(firstScout ? (provider === 'Claude' ? 55 : 520) : 35)
@@ -390,6 +391,7 @@ app.whenReady().then(async () => {
     executions: Object.keys(group?.group?.executions ?? {}).length,
     worktrees: Object.keys(group?.group?.worktrees ?? {}).length,
     changedFiles: Object.values(group?.group?.changedFiles ?? {}).flat().map((file) => file.path).sort(),
+    reviewReceipts: Object.keys(group?.group?.reviewReceipts ?? {}).length,
     integration: group?.group?.integration,
     error: group?.group?.error,
     workerReceipts: Object.fromEntries(workerIds.map((id) => [id, state.assistantRuntimes[id]?.lastRun])),
@@ -424,6 +426,24 @@ app.whenReady().then(async () => {
       worktrees: Object.keys(group?.group?.worktrees ?? {}).length,
       visible: !!(group && document.querySelector('.group-assistant[data-phase="done"]')),
     }
+  })()`)
+  const invalidReviewBlocked = await win.webContents.executeJavaScript(`(() => {
+    const state = window.__kaisola.getState()
+    const parent = state.assistantThreads.find((thread) => thread.group)
+    if (!parent) return false
+    const attemptId = 'probe-invalid-review-' + Date.now()
+    const ids = parent.group.members.map((member) => member.threadId)
+    for (const id of ids) {
+      state.updateAssistantRuntime(id, (runtime) => ({ ...runtime, lastRun: { attemptId, ok: true, text: 'prose without a structured receipt', completedAt: Date.now() } }))
+      state.setThreadBusy(id, false)
+    }
+    state.setGroupSession(parent.id, { phase: 'reviewing', flow: 'fluid', stageAttemptId: attemptId, stageTargets: ids, stageStatus: Object.fromEntries(ids.map((id) => [id, 'succeeded'])), error: undefined })
+    return true
+  })()`)
+  await wait(180)
+  const invalidReviewStoppedMerge = invalidReviewBlocked && await win.webContents.executeJavaScript(`(() => {
+    const group = window.__kaisola.getState().assistantThreads.find((thread) => thread.group)?.group
+    return group?.phase === 'execution-ready' && /machine-readable|malformed/.test(group?.error ?? '')
   })()`)
   await win.webContents.executeJavaScript(`(() => {
     const state = window.__kaisola.getState()
@@ -534,7 +554,7 @@ app.whenReady().then(async () => {
       && restored.assistantPromptQueues[created.id]?.[0]?.text === 'preserve this queued follow-up'
       && restored.assistantThreads.find((thread) => thread.id === created.id)?.queuePaused === true
   })()`)
-  const result = { configured, saturated, asked, stopped, paused, pausedPersisted: !!pausedPersisted, pausedScreenshot, pausedCloseReopen, continued, adoptedBusyRecovered, selectiveResume, ready, parkedBeforeNegotiation, fluidEnabled, connectCalls, negotiated, assigned, doubleExecuteClaimed, isolatedWorktreeCount, executed, reviewed, largeReviewRouted, done, worktreeCleanupDone, ...facts, persisted, staleReviewRecovery, siteScreenshot, screenshot, closeReopen, openedDeleteMenu, clickedDelete, switchedProjectId, deleted, projectSwitchSafe, archiveDeleteVerified, deleteTeardownOrdered, sessionDraftRoundTrip, deleteLifecycle }
+  const result = { configured, saturated, asked, stopped, paused, pausedPersisted: !!pausedPersisted, pausedScreenshot, pausedCloseReopen, continued, adoptedBusyRecovered, selectiveResume, ready, parkedBeforeNegotiation, fluidEnabled, connectCalls, negotiated, assigned, doubleExecuteClaimed, isolatedWorktreeCount, executed, reviewed, largeReviewRouted, done, worktreeCleanupDone, ...facts, persisted, invalidReviewStoppedMerge, staleReviewRecovery, siteScreenshot, screenshot, closeReopen, openedDeleteMenu, clickedDelete, switchedProjectId, deleted, projectSwitchSafe, archiveDeleteVerified, deleteTeardownOrdered, sessionDraftRoundTrip, deleteLifecycle }
   console.log('GROUP_UI=' + JSON.stringify(result))
   const passed = configured
     && saturated
@@ -566,6 +586,7 @@ app.whenReady().then(async () => {
     && facts.answers.length === 2
     && facts.negotiations === 2
     && facts.reviews === 2
+    && facts.reviewReceipts === 2
     && facts.executions === 2
     && facts.worktrees === 0
     && facts.memberModels.join(',') === 'Claude Fast,Codex Deep'
@@ -581,6 +602,7 @@ app.whenReady().then(async () => {
     && persisted.integration === 'Integrated both reviewed branches and verified the shared acceptance tests.'
     && persisted.worktrees === 0
     && persisted.visible
+    && invalidReviewStoppedMerge
     && staleReviewRecovery
     && closeReopen.ok
     && closeReopen.bundledThreads === 3

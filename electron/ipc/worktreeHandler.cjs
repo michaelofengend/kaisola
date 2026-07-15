@@ -231,8 +231,9 @@ async function diff(taskId, repo, ref) {
   const resolved = await git(wt.repo, ['rev-parse', '--verify', `${target}^{commit}`])
   if (!resolved.ok) return { ok: false, message: 'review candidate commit no longer exists' }
   const sha = resolved.stdout.trim()
-  const patch = await git(wt.repo, ['diff', wt.base, sha])
-  if (!patch.ok) return diffFailure(patch, 'Worktree patch')
+  // The manifest is the durable review boundary. Build it before attempting a
+  // monolithic patch so very large candidates remain reviewable file-by-file
+  // instead of failing merely because stdout crossed Node's buffer ceiling.
   const ns = await git(wt.repo, ['diff', '--numstat', wt.base, sha])
   if (!ns.ok) return diffFailure(ns, 'Worktree file summary')
   const files = ns.stdout
@@ -243,7 +244,10 @@ async function diff(taskId, repo, ref) {
       const [add, del, p] = line.split('\t')
       return { path: p, additions: Number(add) || 0, deletions: Number(del) || 0 }
     })
-  return { ok: true, patch: patch.stdout, files, sha, base: wt.base }
+  const patch = await git(wt.repo, ['diff', wt.base, sha])
+  if (!patch.ok && !patch.truncated) return diffFailure(patch, 'Worktree patch')
+  if (patch.truncated) return { ok: true, reviewMode: 'manifest', files, sha, base: wt.base }
+  return { ok: true, reviewMode: 'inline', patch: patch.stdout, patchBytes: Buffer.byteLength(patch.stdout), files, sha, base: wt.base }
 }
 
 /** Preflight every frozen candidate before the first merge mutates main. This

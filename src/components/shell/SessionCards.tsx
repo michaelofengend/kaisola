@@ -76,6 +76,8 @@ export function SessionCards() {
   const termRemounts = useKaisola((s) => s.termRemounts)
   const dockColWeights = useKaisola((s) => s.dockColWeights)
   const setDockColWeights = useKaisola((s) => s.setDockColWeights)
+  const dockRowWeights = useKaisola((s) => s.dockRowWeights)
+  const setDockRowWeights = useKaisola((s) => s.setDockRowWeights)
   const [, bumpResidencyPreference] = useState(0)
   useEffect(() => {
     const refresh = () => bumpResidencyPreference((value) => value + 1)
@@ -169,6 +171,9 @@ export function SessionCards() {
   // uneven stacks share one grid: rows = lcm of the column heights, so a
   // lone card spans what two stacked neighbours split between them
   const rows = displayGrid.reduce((m, col) => lcm(m, col.length), 1)
+  const rowWeights = maximizedId
+    ? [1]
+    : dockRowWeights && dockRowWeights.length === rows ? dockRowWeights : Array.from({ length: rows }, () => 1)
   const pos = new Map<string, { col: number; row: number; span: number }>()
   displayGrid.forEach((col, ci) =>
     col.forEach((id, ri) => {
@@ -177,6 +182,41 @@ export function SessionCards() {
     }),
   )
   const soloCard = pos.size === 1
+
+  const startRowResize = (e: React.PointerEvent<HTMLDivElement>, boundary: number) => {
+    e.preventDefault()
+    const el = gridRef.current
+    if (!el) return
+    const handle = e.currentTarget
+    handle.setPointerCapture(e.pointerId)
+    shellDrag.start()
+    const total = rowWeights.reduce((sum, value) => sum + value, 0)
+    const pxPerWeight = el.getBoundingClientRect().height / total
+    const before = boundary - 1
+    const after = boundary
+    const pairTotal = rowWeights[before] + rowWeights[after]
+    const minWeight = Math.min(pairTotal / 2, Math.max(0.15, 120 / Math.max(1, pxPerWeight)))
+    const startY = e.clientY
+    const top0 = rowWeights[before]
+    const bottom0 = rowWeights[after]
+    const onMove = (event: PointerEvent) => {
+      const delta = (event.clientY - startY) / pxPerWeight
+      const shift = Math.max(-(top0 - minWeight), Math.min(bottom0 - minWeight, delta))
+      const next = [...rowWeights]
+      next[before] = top0 + shift
+      next[after] = bottom0 - shift
+      setDockRowWeights(next)
+    }
+    const onUp = () => {
+      shellDrag.end()
+      handle.removeEventListener('pointermove', onMove)
+      handle.removeEventListener('pointerup', onUp)
+      handle.removeEventListener('pointercancel', onUp)
+    }
+    handle.addEventListener('pointermove', onMove)
+    handle.addEventListener('pointerup', onUp)
+    handle.addEventListener('pointercancel', onUp)
+  }
 
   interface CardIdentity {
     hue: string
@@ -308,6 +348,12 @@ export function SessionCards() {
     acc += weights[i]
     boundaries.push(acc / totalW)
   }
+  const rowBoundaries = [...new Set(displayGrid.flatMap((column) => {
+    const span = rows / column.length
+    return column.slice(1).map((_, index) => (index + 1) * span)
+  }))].sort((a, b) => a - b)
+  const totalH = rowWeights.reduce((sum, value) => sum + value, 0)
+  const rowBoundaryFraction = (boundary: number) => rowWeights.slice(0, boundary).reduce((sum, value) => sum + value, 0) / totalH
 
   return (
     <div className="dock-col">
@@ -318,7 +364,7 @@ export function SessionCards() {
         data-solo={soloCard || undefined}
         style={{
           gridTemplateColumns: weights.map((w) => `minmax(0, ${w}fr)`).join(' ') || 'minmax(0, 1fr)',
-          gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+          gridTemplateRows: rowWeights.map((weight) => `minmax(0, ${weight}fr)`).join(' '),
         }}
       >
       {boundaries.map((frac, i) => (
@@ -346,6 +392,34 @@ export function SessionCards() {
           aria-orientation="vertical"
           tabIndex={0}
           title="Drag to resize · double-click to reset"
+        />
+      ))}
+      {rowBoundaries.map((boundary) => (
+        <div
+          key={`rowgrip-${boundary}`}
+          className="grid-row-resize"
+          style={{ top: `${rowBoundaryFraction(boundary) * 100}%` }}
+          onPointerDown={(event) => startRowResize(event, boundary)}
+          onDoubleClick={() => setDockRowWeights(null)}
+          onKeyDown={(event) => {
+            if (event.key === 'Home') { event.preventDefault(); setDockRowWeights(null); return }
+            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+            event.preventDefault()
+            const next = [...rowWeights]
+            const before = boundary - 1
+            const after = boundary
+            const delta = event.key === 'ArrowUp' ? -0.1 : 0.1
+            const minWeight = Math.min((next[before] + next[after]) / 2, 0.15)
+            const shift = Math.max(-(next[before] - minWeight), Math.min(next[after] - minWeight, delta))
+            next[before] += shift
+            next[after] -= shift
+            setDockRowWeights(next)
+          }}
+          role="separator"
+          aria-label={`Resize stacked session rows ${boundary} and ${boundary + 1}`}
+          aria-orientation="horizontal"
+          tabIndex={0}
+          title="Drag to resize stacked sessions · double-click to reset"
         />
       ))}
       {threads.flatMap((t, i) => {

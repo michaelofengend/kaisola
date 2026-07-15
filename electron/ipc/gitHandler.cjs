@@ -385,6 +385,30 @@ function registerGitHandlers(ipcMain) {
     return { ok: true, sha: sha.ok ? sha.stdout.trim() : undefined, summary: r.stdout.trim().split('\n')[0] }
   })
 
+  // Document autosave uses a path-scoped commit: it stages the saved document
+  // but `--only` leaves every unrelated staged file exactly where the user put
+  // it. Absolute renderer paths are reduced to literal repo-relative pathspecs.
+  ipcMain.handle('git:commitPath', async (_e, { cwd, file, message } = {}) => {
+    const root = cwd && (await repoRoot(cwd))
+    if (!root) return { ok: false, notRepo: true }
+    if (typeof file !== 'string' || !file) return { ok: false, message: 'File path is empty.' }
+    let absolute
+    try { absolute = fs.realpathSync(file) } catch { return { ok: false, message: 'Saved file no longer exists.' } }
+    const canonicalRoot = fs.realpathSync(root)
+    const rel = path.relative(canonicalRoot, absolute)
+    if (!rel || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return { ok: false, message: 'File is outside this repository.' }
+    const status = await git(root, ['status', '--porcelain=v1', '--', ...literal([rel])])
+    if (!status.ok) return { ok: false, message: status.stderr.trim() || 'Could not inspect the saved file.' }
+    if (!status.stdout.trim()) return { ok: true, skipped: true }
+    const staged = await git(root, ['add', '--', ...literal([rel])])
+    if (!staged.ok) return { ok: false, message: staged.stderr.trim() || 'git add failed' }
+    const subject = String(message || `Update ${path.basename(rel)}`).trim()
+    const committed = await git(root, ['commit', '--only', '-m', subject, '--', ...literal([rel])])
+    if (!committed.ok) return { ok: false, message: (committed.stderr.trim() || committed.stdout.trim() || 'git commit failed').slice(0, 400) }
+    const sha = await git(root, ['rev-parse', '--short', 'HEAD'])
+    return { ok: true, sha: sha.ok ? sha.stdout.trim() : undefined, summary: committed.stdout.trim().split('\n')[0] }
+  })
+
   ipcMain.handle('git:log', async (_e, { cwd, n } = {}) => {
     const root = cwd && (await repoRoot(cwd))
     if (!root) return { ok: false, notRepo: true }

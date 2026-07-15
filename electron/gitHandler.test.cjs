@@ -90,3 +90,22 @@ test('checkpoint IPC rejects option-like refs before Git or Trash can mutate fil
   git(repo, ['add', 'base.txt'])
   assert.equal((await invoke('git:show', { cwd: repo, sha: ':0', file: 'base.txt' })).content, 'staged\n')
 })
+
+test('path-scoped document commit preserves unrelated staged work', async (t) => {
+  const repo = repoFixture()
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(repo, 'BACKLOG.md'), 'first task\n')
+  fs.writeFileSync(path.join(repo, 'base.txt'), 'unrelated staged work\n')
+  git(repo, ['add', 'base.txt'])
+
+  const result = await captureHandlers()('git:commitPath', {
+    cwd: repo,
+    file: path.join(repo, 'BACKLOG.md'),
+    message: 'Update BACKLOG.md',
+  })
+
+  assert.equal(result.ok, true, result.message)
+  assert.equal(git(repo, ['show', 'HEAD:BACKLOG.md']), 'first task')
+  assert.equal(git(repo, ['diff', '--cached', '--name-only']), 'base.txt')
+  assert.equal(git(repo, ['show', 'HEAD:base.txt']), 'base')
+})

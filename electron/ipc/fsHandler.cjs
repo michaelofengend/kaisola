@@ -6,7 +6,7 @@ const { Readable } = require('node:stream')
 const crypto = require('node:crypto')
 const os = require('node:os')
 const { execFile } = require('node:child_process')
-const { shell, protocol, nativeImage } = require('electron')
+const { shell, protocol, nativeImage, clipboard } = require('electron')
 const { agentEnv } = require('./shellEnv.cjs')
 const { resolveUserPath } = require('./pathResolver.cjs')
 
@@ -589,6 +589,28 @@ function registerFsHandlers(ipcMain) {
   ipcMain.handle('fs:reveal', async (_e, { path: p } = {}) => {
     if (typeof p === 'string' && p) shell.showItemInFolder(p)
     return { ok: true }
+  })
+
+  ipcMain.handle('fs:copyPreview', async (_e, { path: p } = {}) => {
+    try {
+      if (typeof p !== 'string' || !p) return { ok: false, message: 'no path' }
+      const stat = await fsp.stat(p)
+      if (!stat.isFile()) return { ok: false, message: 'not a file' }
+      if (PREVIEW_TYPES.get(extname(p))?.mediaKind === 'image') {
+        const image = nativeImage.createFromPath(p)
+        if (!image.isEmpty()) {
+          clipboard.writeImage(image)
+          return { ok: true, kind: 'image' }
+        }
+      }
+      // Electron has no cross-platform Finder-file clipboard primitive. A
+      // pathname is still useful for PDFs/video/binary previews and pastes
+      // cleanly into terminals, agents, and file pickers.
+      clipboard.writeText(p)
+      return { ok: true, kind: 'path' }
+    } catch (err) {
+      return { ok: false, message: String((err && err.message) || err) }
+    }
   })
 
   ipcMain.handle('fs:pdfInfo', async (_e, { path: p } = {}) => {

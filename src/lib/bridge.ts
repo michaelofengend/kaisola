@@ -703,6 +703,7 @@ export interface KaisolaBridge {
     stage(cwd: string, paths: string[]): Promise<{ ok: boolean; message?: string }>
     unstage(cwd: string, paths: string[]): Promise<{ ok: boolean; message?: string }>
     commit(cwd: string, message: string): Promise<{ ok: boolean; sha?: string; summary?: string; message?: string }>
+    commitPath(cwd: string, file: string, message?: string): Promise<{ ok: boolean; notRepo?: boolean; skipped?: boolean; sha?: string; summary?: string; message?: string }>
     log(cwd: string, n?: number): Promise<{ ok: boolean; notRepo?: boolean; commits?: GitLogEntry[] }>
   }
   /** Headless LaTeX build: parsed errors, never a terminal of log spew. */
@@ -778,6 +779,7 @@ export interface KaisolaBridge {
     rename(from: string, to: string): Promise<{ ok: boolean; message?: string }>
     trash(path: string): Promise<{ ok: boolean; message?: string }>
     reveal(path: string): Promise<{ ok: boolean }>
+    copyPreview(path: string): Promise<{ ok: boolean; kind?: 'image' | 'path'; message?: string }>
     pdfInfo(path: string): Promise<PdfInfoResult>
     pdfPage(path: string, page: number, scale?: number): Promise<PdfPageResult>
     watch(root: string, cb: (ev: FsWatchBatch) => void): () => void
@@ -790,7 +792,7 @@ export interface KaisolaBridge {
     create(req: { repo: string; taskId: string }): Promise<{ ok: boolean; path?: string; branch?: string; base?: string; baseBranch?: string; dirty?: boolean; message?: string }>
     /** `repo` lets main rehydrate a worktree it forgot across a relaunch. */
     finalize(req: { taskId: string; message?: string; repo?: string }): Promise<{ ok: boolean; committed?: boolean; sha?: string; message?: string }>
-    diff(req: { taskId: string; repo?: string; ref?: string }): Promise<{ ok: boolean; patch?: string; files?: WorktreeFile[]; sha?: string; base?: string; message?: string }>
+    diff(req: { taskId: string; repo?: string; ref?: string }): Promise<{ ok: boolean; reviewMode?: 'inline' | 'manifest'; patch?: string; patchBytes?: number; files?: WorktreeFile[]; sha?: string; base?: string; message?: string }>
     verify(req: { taskId: string; repo?: string; ref: string }): Promise<{ ok: boolean; drifted?: boolean; sha?: string; message?: string }>
     merge(req: { taskId: string; repo?: string; ref?: string }): Promise<{ ok: boolean; conflicted?: boolean; drifted?: boolean; wrongBranch?: boolean; message?: string }>
     remove(req: { taskId: string; repo?: string }): Promise<{ ok: boolean; message?: string }>
@@ -1038,6 +1040,9 @@ const webMock: KaisolaBridge = {
     async commit() {
       return { ok: false, message: DESKTOP_ONLY }
     },
+    async commitPath() {
+      return { ok: false, notRepo: true, message: DESKTOP_ONLY }
+    },
     async log() {
       return { ok: true, commits: [] }
     },
@@ -1215,6 +1220,9 @@ const webMock: KaisolaBridge = {
     },
     async reveal() {
       return { ok: true }
+    },
+    async copyPreview() {
+      return { ok: false, message: DESKTOP_ONLY }
     },
     async pdfInfo() {
       return { ok: false, message: DESKTOP_ONLY }

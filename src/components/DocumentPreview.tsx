@@ -154,6 +154,40 @@ function encodeMarkdownDestination(value: string) {
     Array.from(new TextEncoder().encode(ch), (byte) => `%${byte.toString(16).toUpperCase().padStart(2, '0')}`).join(''))
 }
 
+const MARKDOWN_IMAGE_WIDTH = /([#&])kaisola-width=(\d{1,3})(?=&|$)/
+const markdownImageWidth = (src: string) => {
+  const value = Number(MARKDOWN_IMAGE_WIDTH.exec(src)?.[2])
+  return Number.isFinite(value) ? Math.min(100, Math.max(20, value)) : undefined
+}
+const withMarkdownImageWidth = (src: string, width: number) => {
+  const clean = src.replace(MARKDOWN_IMAGE_WIDTH, (_match, separator: string) => separator === '#' ? '#' : '').replace(/#&/, '#').replace(/#$/, '')
+  return `${clean}${clean.includes('#') ? '&' : '#'}kaisola-width=${Math.round(Math.min(100, Math.max(20, width)))}`
+}
+
+function decorateEditableImage(image: HTMLImageElement) {
+  const original = image.dataset.markdownSrc ?? image.getAttribute('src') ?? ''
+  const width = markdownImageWidth(original) ?? 100
+  let shell = image.parentElement?.dataset.markdownImageShell === 'true' ? image.parentElement : null
+  if (!shell) {
+    shell = document.createElement('span')
+    shell.className = 'fx-md-image-shell'
+    shell.dataset.markdownImageShell = 'true'
+    shell.contentEditable = 'false'
+    image.replaceWith(shell)
+    shell.append(image)
+    const handle = document.createElement('span')
+    handle.className = 'fx-md-image-resize'
+    handle.dataset.markdownImageResize = 'true'
+    handle.setAttribute('role', 'slider')
+    handle.setAttribute('aria-label', 'Resize image')
+    handle.setAttribute('aria-valuemin', '20')
+    handle.setAttribute('aria-valuemax', '100')
+    shell.append(handle)
+  }
+  shell.style.width = `${width}%`
+  shell.querySelector<HTMLElement>('[data-markdown-image-resize]')?.setAttribute('aria-valuenow', String(width))
+}
+
 function selectionBlock(node: Node | null, root: HTMLElement): MarkdownSelectionState['block'] {
   const element = node instanceof Element ? node : node?.parentElement
   const block = element?.closest('h1, h2, h3, blockquote, pre, p')
@@ -172,6 +206,7 @@ async function hydrateEditableImages(root: HTMLElement, sourcePath?: string) {
   const images = Array.from(root.querySelectorAll<HTMLImageElement>('img'))
   await Promise.all(images.map(async (image) => {
     const original = image.dataset.markdownSrc ?? image.getAttribute('src') ?? ''
+    decorateEditableImage(image)
     if (!original || image.dataset.markdownHydrated === 'true' || isRemoteOrDataImage(original)) return
     const localPath = resolveMarkdownAsset(sourcePath, original)
     if (!localPath) return
@@ -232,6 +267,17 @@ function EditableMarkdownSurface({
         const alt = (element.getAttribute('alt') ?? '').replace(/\]/g, '\\]')
         const title = element.getAttribute('title')
         return src ? `![${alt}](${encodeMarkdownDestination(src)}${title ? ` \"${title.replace(/\"/g, '\\\"')}\"` : ''})` : ''
+      },
+    })
+    service.addRule('kaisola-image-shell', {
+      filter: (node) => node.nodeName === 'SPAN' && (node as HTMLElement).dataset.markdownImageShell === 'true',
+      replacement: (_content, node) => {
+        const image = (node as HTMLElement).querySelector<HTMLImageElement>('img')
+        if (!image) return ''
+        const src = image.dataset.markdownSrc ?? image.getAttribute('src') ?? ''
+        const alt = (image.getAttribute('alt') ?? '').replace(/\]/g, '\\]')
+        const title = image.getAttribute('title')
+        return src ? `![${alt}](${encodeMarkdownDestination(src)}${title ? ` "${title.replace(/"/g, '\\"')}"` : ''})` : ''
       },
     })
     // Links mirror images: the live href may be sanitizer-stripped (relative
@@ -338,6 +384,35 @@ function EditableMarkdownSurface({
     captureSelection()
   }
 
+  const startImageResize = (event: React.PointerEvent<HTMLElement>) => {
+    const handle = (event.target as HTMLElement).closest<HTMLElement>('[data-markdown-image-resize]')
+    const surface = surfaceRef.current
+    const shell = handle?.closest<HTMLElement>('[data-markdown-image-shell]')
+    const image = shell?.querySelector<HTMLImageElement>('img')
+    if (!handle || !surface || !shell || !image) return
+    event.preventDefault()
+    event.stopPropagation()
+    const bounds = surface.getBoundingClientRect()
+    const onMove = (move: PointerEvent) => {
+      // Images are centered (`margin-inline: auto`), so the right handle sits
+      // half a width from the page center. Measure that radius to avoid a jump
+      // on pointer-down (50%-wide image -> handle at 75% of the page).
+      const center = bounds.left + bounds.width / 2
+      const width = Math.min(100, Math.max(20, ((move.clientX - center) * 2 / Math.max(1, bounds.width)) * 100))
+      shell.style.width = `${Math.round(width)}%`
+      handle.setAttribute('aria-valuenow', String(Math.round(width)))
+      const src = image.dataset.markdownSrc ?? image.getAttribute('src') ?? ''
+      if (src) image.dataset.markdownSrc = withMarkdownImageWidth(src, width)
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      syncMarkdown()
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp, { once: true })
+  }
+
   return (
     <>
       <div className="fx-md-toolbar" role="toolbar" aria-label="Markdown formatting">
@@ -401,6 +476,7 @@ function EditableMarkdownSurface({
         spellCheck
         dangerouslySetInnerHTML={{ __html: sanitizedMarkup.current }}
         onInput={syncMarkdown}
+        onPointerDown={startImageResize}
         onPaste={onMediaPaste}
         onKeyUp={captureSelection}
         onMouseUp={captureSelection}
@@ -811,7 +887,8 @@ function MarkdownImage({ src, alt, title, sourcePath }: { src?: string; alt?: st
   }, [direct, localPath, fallbackPath])
 
   const imageSrc = direct ?? resolved
-  if (imageSrc) return <img src={imageSrc} alt={alt ?? ''} title={title} loading="lazy" decoding="async" />
+  const width = markdownImageWidth(src ?? '')
+  if (imageSrc) return <img src={imageSrc} alt={alt ?? ''} title={title} loading="lazy" decoding="async" style={width ? { width: `${width}%` } : undefined} />
   return (
     <span className="fx-md-image-missing" title={localPath ?? src}>
       {failed ? 'Image unavailable' : 'Loading image...'}

@@ -257,6 +257,7 @@ const bridge = {
     stage: (cwd, paths) => ipcRenderer.invoke('git:stage', { cwd, paths }),
     unstage: (cwd, paths) => ipcRenderer.invoke('git:unstage', { cwd, paths }),
     commit: (cwd, message) => ipcRenderer.invoke('git:commit', { cwd, message }),
+    commitPath: (cwd, file, message) => ipcRenderer.invoke('git:commitPath', { cwd, file, message }),
     log: (cwd, n) => ipcRenderer.invoke('git:log', { cwd, n }),
   },
 
@@ -365,6 +366,7 @@ const bridge = {
     rename: (from, to) => ipcRenderer.invoke('fs:rename', { from, to }),
     trash: (path) => ipcRenderer.invoke('fs:trash', { path }),
     reveal: (path) => ipcRenderer.invoke('fs:reveal', { path }),
+    copyPreview: (path) => ipcRenderer.invoke('fs:copyPreview', { path }),
     pdfInfo: (path) => ipcRenderer.invoke('fs:pdfInfo', { path }),
     pdfPage: (path, page, scale) => ipcRenderer.invoke('fs:pdfPage', { path, page, scale }),
     watch: (root, cb) => {

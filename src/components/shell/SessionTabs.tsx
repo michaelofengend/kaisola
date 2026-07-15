@@ -1,5 +1,5 @@
-import { useCallback, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
-import { useKaisola, sessionOrderIds } from '../../store/store'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { CLOSED_SESSION_RETENTION_MS, useKaisola, sessionOrderIds } from '../../store/store'
 import { bridge } from '../../lib/bridge'
 import { sessionHue, terminalAgentKey } from '../../lib/sessionHue'
 import { useAgentRegistry, openAgentSession } from '../../lib/registry'
@@ -62,8 +62,30 @@ export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orien
   const closeTerminal = useKaisola((s) => s.closeTerminal)
   const closeAgentTerminal = useKaisola((s) => s.closeAgentTerminal)
   const closePanel = useKaisola((s) => s.closePanel)
-  const forgetClosedSession = useKaisola((s) => s.forgetClosedSession)
   const pushToast = useKaisola((s) => s.pushToast)
+  const closedStack = useKaisola((s) => s.closedStack)
+  const forgetClosedSession = useKaisola((s) => s.forgetClosedSession)
+  useEffect(() => {
+    const purge = () => {
+      const expired = closedStack.filter((closed) => Date.now() - closed.at >= CLOSED_SESSION_RETENTION_MS)
+      for (const closed of expired) {
+        const threads = closed.groupThreads ?? (closed.thread ? [closed.thread] : [])
+        for (const thread of threads) {
+          const runtime = closed.groupRuntimes?.[thread.id] ?? (closed.thread?.id === thread.id ? closed.runtime : undefined)
+          void bridge.assistantArchive?.clear({
+            projectId: activeProjectId,
+            threadId: thread.id,
+            ...(runtime?.archiveEpoch ? { epoch: runtime.archiveEpoch } : {}),
+          }).catch(() => ({ ok: false }))
+        }
+        const id = closed.term?.id ?? closed.thread?.id ?? closed.panel?.id
+        if (id) forgetClosedSession(id, activeProjectId)
+      }
+    }
+    purge()
+    const timer = window.setInterval(purge, 60 * 60 * 1_000)
+    return () => window.clearInterval(timer)
+  }, [activeProjectId, closedStack, forgetClosedSession])
   const renameThread = useKaisola((s) => s.renameAssistantThread)
   const renameTerminal = useKaisola((s) => s.renameTerminal)
   const togglePinSession = useKaisola((s) => s.togglePinSession)
@@ -213,6 +235,7 @@ export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orien
     else if (t.kind === 'term') closeTerminal(t.id)
     else if (t.kind === 'agentTerm') closeAgentTerminal(t.id)
     else closePanel(t.id)
+    if (t.kind !== 'agentTerm') pushToast('info', `${t.label} closed. Reopen it from + or ⇧⌘T for 7 days.`)
   }
   const deleteTab = async (t: STab) => {
     const thread = t.kind === 'thread' ? threads.find((candidate) => candidate.id === t.id) : undefined
@@ -420,7 +443,7 @@ export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orien
                     type="button"
                     className="stab-close"
                     onClick={(e) => { e.stopPropagation(); closeTab(t) }}
-                    title={t.kind === 'agentTerm' ? 'Hide command output — agent keeps running' : 'Close session — reopen from + or ⇧⌘T'}
+                    title={t.kind === 'agentTerm' ? 'Hide command output — agent keeps running' : 'Close session — kept for 7 days in + / ⇧⌘T'}
                     aria-label={t.kind === 'agentTerm' ? `Hide command output for ${t.label}; agent keeps running` : `Close session ${t.label}`}
                   >
                     <Icon name="X" size={10} />
@@ -636,7 +659,7 @@ function NewSessionButton({ orientation }: { orientation: 'horizontal' | 'vertic
   // recently-closed sessions reopen from here (⌘⇧T restores the newest);
   // closed agent threads carry their acpSessionId, so a reopen also resumes
   // the agent-side conversation
-  const recentlyClosed = closedStack.slice(0, 6).flatMap((c) => {
+  const recentlyClosed = closedStack.filter((closed) => Date.now() - closed.at < CLOSED_SESSION_RETENTION_MS).slice(0, 6).flatMap((c) => {
     const id = c.term?.id ?? c.thread?.id ?? c.panel?.id ?? ''
     const label = c.thread
       ? c.thread.name ?? c.thread.autoName ?? c.thread.agentKey

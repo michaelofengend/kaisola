@@ -287,6 +287,7 @@ export function FilesView() {
   const activePathRef = useRef<string | null>(null)
   const sessionWorkspaceRef = useRef<string | null>(workspacePath)
   const externalDirtyRef = useRef(new Set<string>())
+  const localWriteEchoRef = useRef(new Map<string, { content: string; at: number }>())
   const paneRef = useRef<HTMLDivElement>(null)
   const zoomRef = useRef(fileTextZoom)
   const pendingZoomRef = useRef(fileTextZoom)
@@ -689,6 +690,12 @@ export function FilesView() {
     snapshot.forEach((tab) => {
       if (!touched(tab.path)) return
       if (isTextTab(tab) && tab.value !== tab.baseline) {
+        const echo = localWriteEchoRef.current.get(tab.path)
+        if (echo && echo.content === tab.value && Date.now() - echo.at < 4_000) return
+        // Markdown is a document surface with quiet autosave. Preserve a dirty
+        // local buffer on watcher races, but do not interrupt writing with a
+        // source-editor-style external-change warning.
+        if (isMarkdown(tab.path)) return
         if (!externalDirtyRef.current.has(tab.path)) {
           externalDirtyRef.current.add(tab.path)
           pushToast('warn', `External change detected; keeping local edits in ${fileName(tab.path)}`)
@@ -867,6 +874,11 @@ export function FilesView() {
   // Cmd+S can arrive from both the editor keymap and the window listener at once;
   // a synchronous set dedupes so we never write or toast twice for one press.
   const inFlight = useRef(new Set<string>())
+  const autoCommitTimers = useRef(new Map<string, number>())
+  useEffect(() => () => {
+    for (const timer of autoCommitTimers.current.values()) window.clearTimeout(timer)
+    autoCommitTimers.current.clear()
+  }, [])
   const savePath = useCallback(async (path: string, opts?: { toast?: boolean }) => {
     const tab = tabsRef.current.find((t) => t.path === path)
     if (!tab || !isTextTab(tab) || tab.value === tab.baseline || inFlight.current.has(path)) return false
@@ -883,12 +895,23 @@ export function FilesView() {
       ),
     )
     if (r.ok) {
+      localWriteEchoRef.current.set(path, { content, at: Date.now() })
+      if (workspacePath && isMarkdown(path) && (path === workspacePath || path.startsWith(`${workspacePath}/`))) {
+        const pending = autoCommitTimers.current.get(path)
+        if (pending) window.clearTimeout(pending)
+        autoCommitTimers.current.set(path, window.setTimeout(() => {
+          autoCommitTimers.current.delete(path)
+          void bridge.git.commitPath(workspacePath, path, `Update ${fileName(path)}`).then((commit) => {
+            if (!commit.ok && !commit.notRepo) pushToast('error', commit.message ?? `Could not commit ${fileName(path)}.`)
+          })
+        }, 1_600))
+      }
       if (opts?.toast !== false) pushToast('success', `Saved ${fileName(path)}`)
     } else {
       pushToast('error', r.message ?? 'Could not save file.')
     }
     return r.ok
-  }, [pushToast])
+  }, [pushToast, workspacePath])
   const save = useCallback(async () => {
     if (!active || !activeIsText || !dirty) return
     await savePath(active.path)
@@ -1140,12 +1163,35 @@ export function FilesView() {
   // The old gate (this pdf must be latexMain's own pdf) made double-click
   // silently dead until the user had explicitly picked/built a main.
   const mediaPreview = active && activeIsMedia ? (
-    <MediaPreview
-      tab={active}
-      zoom={liveZoom}
-      latexSyncEnabled={isDesktop && !!workspacePath}
-      onPdfSync={syncFromPdf}
-    />
+    <div
+      className="fx-media-preview-shell"
+      tabIndex={0}
+      onDoubleClick={(event) => {
+        if (active.mediaKind !== 'pdf' && !(event.target as HTMLElement).closest('button')) void bridge.fs.reveal(active.path)
+      }}
+      onKeyDown={(event) => {
+        if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'c') return
+        event.preventDefault()
+        void bridge.fs.copyPreview(active.path).then((result) => {
+          if (result.ok) pushToast('success', result.kind === 'image' ? 'Copied image' : 'Copied file path')
+          else pushToast('error', result.message ?? 'Could not copy this preview.')
+        })
+      }}
+    >
+      <div className="fx-media-actions">
+        <button type="button" onClick={() => void bridge.fs.copyPreview(active.path).then((result) => {
+          if (result.ok) pushToast('success', result.kind === 'image' ? 'Copied image' : 'Copied file path')
+          else pushToast('error', result.message ?? 'Could not copy this preview.')
+        })} title="Copy preview (⌘C)"><Icon name="Copy" size={13} /> Copy</button>
+        <button type="button" onClick={() => void bridge.fs.reveal(active.path)} title="Show this file in Finder"><Icon name="FolderOpen" size={13} /> Finder</button>
+      </div>
+      <MediaPreview
+        tab={active}
+        zoom={liveZoom}
+        latexSyncEnabled={isDesktop && !!workspacePath}
+        onPdfSync={syncFromPdf}
+      />
+    </div>
   ) : null
   // svg previews straight from the edit buffer, so Split shows changes live
   const svgPreview = active && activeIsSvg ? (

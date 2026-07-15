@@ -176,6 +176,8 @@ export interface GroupSessionState {
   synthesis?: string
   executions?: Record<string, string>
   reviews?: Record<string, string>
+  /** Machine-validated cross-review attestations, keyed by reviewer thread. */
+  reviewReceipts?: Record<string, import('../lib/meshReview').MeshReviewReceipt>
   integration?: string
   worktrees?: Record<string, WorktreeSession>
   /** Durable cleanup checkpoint. Clean merges can release worker checkouts as
@@ -464,6 +466,7 @@ export interface SessionGroup {
 export const GROUP_COLORS = ['#8a8f98', '#4a7dbd', '#c25e5e', '#c2a24e', '#5f9e6e', '#b96a9c', '#8b6fc0', '#4e9ba8']
 
 /** A recently closed session (⌘⇧T brings it back, Chrome-style). */
+export const CLOSED_SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000
 export interface ClosedSession {
   kind: 'term' | 'thread' | 'group' | 'panel'
   at: number
@@ -747,7 +750,7 @@ export const PROJECT_SLICE_PERSIST_KEYS = [
   // works after an app restart — agent threads keep their acpSessionId, so a
   // restored thread resumes its agent-side session too
   'closedStack',
-  'latexMode', 'dockGrid', 'dockViews', 'dockColWeights', 'canvasWidth', 'canvasOpen', 'dockOpen',
+  'latexMode', 'dockGrid', 'dockViews', 'dockColWeights', 'dockRowWeights', 'canvasWidth', 'canvasOpen', 'dockOpen',
 ] as const
 
 export const PROJECT_SLICE_MEMORY_KEYS = [
@@ -897,6 +900,8 @@ interface KaisolaState {
   /** Relative widths of the session-grid columns (fr units); null = equal.
    * Self-heals: ignored whenever its length no longer matches the grid. */
   dockColWeights: number[] | null
+  /** Relative heights of the session-grid rows (fr units); null = equal. */
+  dockRowWeights: number[] | null
   /** Whether the main view (files/canvas) shows; false = only session cards. */
   canvasOpen: boolean
   /** User terminals (each may boot a command, e.g. `codex login`). */
@@ -1128,6 +1133,7 @@ interface KaisolaState {
    * `expect` aborts if the active project/workspace moved during the probes. */
   launchClaude: (opts?: { reveal?: boolean; expect?: { pid: string; ws: string } }) => Promise<boolean>
   setDockColWeights: (weights: number[] | null) => void
+  setDockRowWeights: (weights: number[] | null) => void
   /** Minimize/restore the main view — when minimized the work row is all cards. */
   toggleCanvas: () => void
   requestTerminal: (command?: string, opts?: { cwd?: string; name?: string; singletonKey?: string; restart?: boolean; reveal?: boolean; rerun?: boolean }) => void
@@ -1923,6 +1929,7 @@ const freshSlice = (pid: string, path: string | null = null): ProjectSliceMemory
     dockGrid: path ? [[term]] : [],
     dockViews: path ? [term] : [],
     dockColWeights: null,
+    dockRowWeights: null,
     canvasWidth: null,
     canvasOpen: true,
     dockOpen: !!path,
@@ -2142,7 +2149,7 @@ function sanitizeSliceForPersist(slice: ProjectSliceMemory): ProjectSlicePersist
     // recently-closed history, kept light on disk: closed threads carry only a
     // transcript tail (full history stays in main's archive), closed terminals
     // shed live-only fields, dead same-process receipts are dropped
-    closedStack: (slice.closedStack ?? []).slice(0, 20).map((c) => {
+    closedStack: (slice.closedStack ?? []).filter((closed) => Date.now() - closed.at < CLOSED_SESSION_RETENTION_MS).slice(0, 20).map((c) => {
       if (c.kind === 'group' && c.thread && c.groupThreads) {
         const ids = new Set(c.groupThreads.map((thread) => thread.id))
         const trimRuntime = (runtime: AssistantRuntime) => ({
@@ -2192,6 +2199,7 @@ function sanitizeSliceForPersist(slice: ProjectSliceMemory): ProjectSlicePersist
     dockGrid: sessionGrid.dockGrid,
     dockViews: sessionGrid.dockViews,
     dockColWeights: slice.dockColWeights,
+    dockRowWeights: slice.dockRowWeights,
     canvasWidth: slice.canvasWidth,
     canvasOpen: slice.canvasOpen,
     dockOpen: slice.dockOpen,
@@ -2450,6 +2458,7 @@ export const useKaisola = create<KaisolaState>()(
   dockViews: [seedTermId(BOOT_PID)],
   canvasWidth: null,
   dockColWeights: null,
+  dockRowWeights: null,
   canvasOpen: true,
   terminals: [{ id: seedTermId(BOOT_PID) }],
   agentTerminals: [],
@@ -2813,6 +2822,8 @@ export const useKaisola = create<KaisolaState>()(
   },
   setDockColWeights: (weights) =>
     set({ dockColWeights: weights && weights.length ? weights.map((w) => Math.max(0.15, w)) : null }),
+  setDockRowWeights: (weights) =>
+    set({ dockRowWeights: weights && weights.length ? weights.map((w) => Math.max(0.15, w)) : null }),
   // minimizing the main view leaves only the session cards — so keep them shown
   toggleCanvas: () => set((s) => {
     // Focus always renders the canvas, so "Hide files" must first return to

@@ -207,7 +207,7 @@ test('worktree cache isolates identical task ids across canonical repositories',
   }
 })
 
-test('worktree review fails closed instead of returning a truncated oversized patch', async () => {
+test('oversized worktree review falls back to an immutable manifest', async () => {
   const repo = repoFixture()
   const taskId = `oversized-${Date.now().toString(36)}`
   try {
@@ -219,9 +219,10 @@ test('worktree review fails closed instead of returning a truncated oversized pa
     assert.equal(frozen.ok, true)
 
     const reviewed = await worktree.diff(taskId, repo, frozen.sha)
-    assert.equal(reviewed.ok, false)
-    assert.equal(reviewed.incomplete, true)
-    assert.match(reviewed.message, /review (?:is )?incomplete|cannot be reviewed safely/i)
+    assert.equal(reviewed.ok, true)
+    assert.equal(reviewed.reviewMode, 'manifest')
+    assert.equal(reviewed.sha, frozen.sha)
+    assert.deepEqual(reviewed.files, [{ path: 'oversized.txt', additions: 1, deletions: 0 }])
     assert.equal(Object.hasOwn(reviewed, 'patch'), false)
   } finally {
     await worktree.remove(taskId, repo)
