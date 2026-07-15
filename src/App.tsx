@@ -9,6 +9,7 @@ import { initGlassWash } from './lib/glassWash'
 import { ShellTools } from './components/shell/AgentSidebar'
 import { WorkspaceRail } from './components/shell/WorkspaceRail'
 import { ProjectTabs } from './components/shell/ProjectTabs'
+import { SavedWindows } from './components/shell/SavedWindows'
 import { ProjectLauncher } from './components/shell/ProjectLauncher'
 import { CommandPalette } from './components/shell/CommandPalette'
 import { SessionCards } from './components/shell/SessionCards'
@@ -800,6 +801,7 @@ function KaisolaApp() {
       {/* grid row 1: the project strip (desktop main window only; on web/pop it
           isn't rendered and --tabstrip-h collapses the row to 0) */}
       {isDesktop && !POP_TERMINAL_ID && <ProjectTabs />}
+      {isDesktop && !POP_TERMINAL_ID && <SavedWindows />}
       {isDesktop && <TabMenuSync />}
       {isDesktop && !POP_TERMINAL_ID && <AttentionSync />}
       <TopProgress />

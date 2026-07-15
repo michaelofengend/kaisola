@@ -56,6 +56,9 @@ app.whenReady().then(async () => {
   registerAssistantArchiveHandlers(ipcMain, path.join(userData, 'assistant-archives'))
   ipcMain.handle('shell:glass', () => ({ supported: false, active: false, enabled: false }))
   ipcMain.handle('shell:window-mode', () => ({ wantSolid: true, liveSolid: true }))
+  ipcMain.handle('window:list-saved', () => ({ ok: true, windows: [] }))
+  ipcMain.handle('window:reopen-saved', () => ({ ok: false, missing: true }))
+  ipcMain.handle('window:delete-saved', () => ({ ok: false, missing: true }))
   ipcMain.handle('acp:presets', () => [{ id: 'codex', name: 'Codex', builtin: false }])
   ipcMain.handle('acp:status', (_event, { clientKeys } = {}) => {
     const key = clientKeys?.[0] || 'codex::probe'

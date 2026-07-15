@@ -43,6 +43,9 @@ app.whenReady().then(async () => {
   registerGitHandlers(ipcMain); registerClaudeHooksHandlers(ipcMain); registerUpdateHandlers(ipcMain)
   registerLatexHandlers(ipcMain)
   ipcMain.handle('shell:glass', () => ({ supported: false, active: false, enabled: false }))
+  ipcMain.handle('window:list-saved', () => ({ ok: true, windows: [] }))
+  ipcMain.handle('window:reopen-saved', () => ({ ok: false, missing: true }))
+  ipcMain.handle('window:delete-saved', () => ({ ok: false, missing: true }))
 
   const win = new BrowserWindow({
     show: false,

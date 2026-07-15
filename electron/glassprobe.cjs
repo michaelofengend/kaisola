@@ -57,6 +57,9 @@ app.whenReady().then(async () => {
   registerExtensionHandlers(ipcMain)
   ipcMain.handle('shell:glass', () => ({ supported: false, active: false, enabled: false }))
   ipcMain.handle('shell:window-mode', () => ({ wantSolid: false, liveSolid: false }))
+  ipcMain.handle('window:list-saved', () => ({ ok: true, windows: [] }))
+  ipcMain.handle('window:reopen-saved', () => ({ ok: false, missing: true }))
+  ipcMain.handle('window:delete-saved', () => ({ ok: false, missing: true }))
 
   const win = new BrowserWindow({
     show: true, width: 1280, height: 800, frame: false,

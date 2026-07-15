@@ -93,6 +93,9 @@ app.whenReady().then(async () => {
   // Liquid Glass prefs are cosmetic; the smoke shell answers with "unsupported"
   ipcMain.handle('shell:glass', () => ({ supported: false, active: false, enabled: false }))
   ipcMain.handle('shell:window-mode', () => ({ wantSolid: false, liveSolid: false }))
+  ipcMain.handle('window:list-saved', () => ({ ok: true, windows: [] }))
+  ipcMain.handle('window:reopen-saved', () => ({ ok: false, missing: true }))
+  ipcMain.handle('window:delete-saved', () => ({ ok: false, missing: true }))
   ipcMain.handle('window:popped', () => ({ ok: true, termIds: [], states: [], closed: [] }))
   ipcMain.handle('window:pop-closed-ack', () => ({ ok: false }))
   ipcMain.handle('window:pop', () => ({ ok: false }))

@@ -53,6 +53,9 @@ app.whenReady().then(async () => {
     fsx.writeFileSync(PREFS, JSON.stringify(current))
     return { wantSolid: current.solidWindow === true, liveSolid: true }
   })
+  ipcMain.handle('window:list-saved', () => ({ ok: true, windows: [] }))
+  ipcMain.handle('window:reopen-saved', () => ({ ok: false, missing: true }))
+  ipcMain.handle('window:delete-saved', () => ({ ok: false, missing: true }))
 
   const win = new BrowserWindow({
     show: true, width: 1280, height: 800, frame: false,

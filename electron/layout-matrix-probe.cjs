@@ -36,6 +36,9 @@ app.whenReady().then(async () => {
   require('./ipc/assistantArchive.cjs').registerAssistantArchiveHandlers(ipcMain, path.join(userData, 'assistant-archives'))
   ipcMain.handle('shell:glass', () => ({ supported: false, active: false, enabled: false }))
   ipcMain.handle('shell:window-mode', () => ({ wantSolid: true, liveSolid: true }))
+  ipcMain.handle('window:list-saved', () => ({ ok: true, windows: [] }))
+  ipcMain.handle('window:reopen-saved', () => ({ ok: false, missing: true }))
+  ipcMain.handle('window:delete-saved', () => ({ ok: false, missing: true }))
   ipcMain.handle('window:popped', () => ({ ok: true, termIds: [], states: [], closed: [] }))
   ipcMain.handle('window:pop-closed-ack', () => ({ ok: false }))
   ipcMain.on('window:terminal-state', () => {})
@@ -69,6 +72,14 @@ app.whenReady().then(async () => {
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: false },
   })
   await win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: { solidwin: '1' } })
+  const waitForSelector = async (selector, timeoutMs = 3_000) => {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (await win.webContents.executeJavaScript(`!!document.querySelector(${JSON.stringify(selector)})`)) return true
+      await wait(50)
+    }
+    return false
+  }
   await wait(900)
   await win.webContents.executeJavaScript(`(() => {
     const state = window.__kaisola.getState()
@@ -129,6 +140,7 @@ app.whenReady().then(async () => {
   })()`)
 
   const wide = await inspect('wide-mixed')
+  const savedWindowsControl = await win.webContents.executeJavaScript(`!!document.querySelector('.tabstrip [aria-label="Saved windows"]')`)
   const terminalUsesWorkspace = await win.webContents.executeJavaScript(`window.__kaisola.getState().terminals.find((terminal) => terminal.name === 'Shell matrix')?.cwd === ${JSON.stringify(workspace)}`)
 
   // The permanent top-right preview switch must be a real hit target inside
@@ -153,9 +165,9 @@ app.whenReady().then(async () => {
 
   // Markdown enters the clean rich editor with the authoring toolbar.
   await win.webContents.executeJavaScript(`window.__kaisola.getState().requestFile(${JSON.stringify(markdownFixture)}, 'preview', { pinned: true })`)
-  await wait(240)
+  await waitForSelector('.fx-doc-markdown')
   await win.webContents.executeJavaScript(`document.querySelector('.fx-doc-markdown')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`)
-  await wait(220)
+  await waitForSelector('.fx-doc-markdown[data-editing]')
   const markdownEditing = await win.webContents.executeJavaScript(`(() => {
     const root = document.querySelector('.fx-doc-markdown[data-editing]')
     const page = root?.querySelector('.fx-doc-page')
@@ -286,6 +298,7 @@ app.whenReady().then(async () => {
 
   const result = {
     wide,
+    savedWindowsControl,
     terminalUsesWorkspace,
     closePoint,
     canvasClosed,
@@ -314,6 +327,7 @@ app.whenReady().then(async () => {
   const passed = layoutsOk
     && wide.cardCount >= 5
     && Object.values(wide.visibleKinds).every(Boolean)
+    && savedWindowsControl
     && closePoint?.topmost
     && canvasClosed
     && canvasRestored
