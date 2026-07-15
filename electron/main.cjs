@@ -941,6 +941,231 @@ ipcMain.on('window:prepare-delete-ack', (event, payload = {}) => {
   })
 })
 
+function waitForDeleteReady(win, timeoutMs = 15_000) {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return Promise.resolve(false)
+  if (deleteReadyWc.has(win.webContents.id)) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const senderId = win.webContents.id
+    const timer = setTimeout(() => {
+      if (pendingDeleteReady.get(senderId) === settle) pendingDeleteReady.delete(senderId)
+      resolve(false)
+    }, timeoutMs)
+    timer.unref?.()
+    const settle = (ready) => {
+      clearTimeout(timer)
+      resolve(ready)
+    }
+    pendingDeleteReady.set(senderId, settle)
+  })
+}
+
+function requestRendererDelete(win) {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return Promise.resolve({ ok: false, message: 'The saved window is unavailable.' })
+  const transactionId = `window-delete-${Date.now()}-${++windowDeleteSeq}`
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingDeleteAcks.delete(transactionId)
+      resolve({ ok: false, timedOut: true, message: 'The saved window did not finish preparing for deletion.' })
+    }, 15_000)
+    timer.unref?.()
+    pendingDeleteAcks.set(transactionId, { senderId: win.webContents.id, resolve, timer })
+    win.webContents.send('window:prepare-delete', { transactionId })
+  })
+}
+
+function captureSavedStore(slot) {
+  const values = {}
+  const absent = []
+  for (const key of storeKeysForSlot(slot)) {
+    const value = dbGet(key)
+    if (value == null) absent.push(key)
+    else values[key] = value
+  }
+  return { values, absent }
+}
+
+function restoreSavedStore(backup) {
+  dbMutate({ set: backup.values, delete: backup.absent })
+}
+
+function discardDeleteBoot(win) {
+  if (!win || win.isDestroyed()) return
+  win.__kaisolaSuppressPark = true
+  win.__kaisolaDeleteBoot = true
+  win.destroy()
+}
+
+function reloadSavedWindowFromBackup(win, backup) {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) {
+    restoreSavedStore(backup)
+    return
+  }
+  win.__kaisolaDeleting = false
+  win.__kaisolaSuppressPark = false
+  const restore = () => {
+    try { restoreSavedStore(backup) } catch { /* the original manifest remains authoritative */ }
+  }
+  win.webContents.once('did-start-loading', restore)
+  try { win.webContents.reload() } catch { restore() }
+}
+
+async function deleteSavedWindow(event, id) {
+  loadWindowManifest()
+  if (typeof id !== 'string' || id.length > 80) return { ok: false, message: 'That saved window is invalid.' }
+  const entry = windowManifest.find((candidate) => candidate.id === id)
+  if (!entry) return { ok: false, missing: true, message: 'That saved window was already deleted.' }
+  if (deletingSavedWindows.has(id)) return { ok: false, busy: true, message: 'That saved window is already being deleted.' }
+  let target = liveSavedWindows.get(id)
+  const wasLive = !!target && !target.isDestroyed() && !target.__kaisolaDeleteBoot
+  if (wasLive) {
+    const safety = acpRendererSwapState(target.webContents)
+    if (!safety.safe) {
+      return {
+        ok: false,
+        busy: true,
+        awaitingPermission: safety.awaitingPermission,
+        message: safety.awaitingPermission
+          ? 'Resolve the pending agent approval before deleting this window.'
+          : 'Stop active agent work before deleting this window.',
+      }
+    }
+  }
+
+  const requester = BrowserWindow.fromWebContents(event.sender)
+  const options = {
+    type: 'warning',
+    title: 'Delete saved window?',
+    message: `Delete “${entry.title || (entry.slot == null ? 'Primary window' : `Window ${entry.slot}`)}”?`,
+    detail: 'Its saved projects, drafts, layouts, chats, and terminal sessions will be removed from Kaisola. Workspace files on disk will not be touched.',
+    buttons: ['Delete window', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  }
+  const confirmation = requester && !requester.isDestroyed()
+    ? await dialog.showMessageBox(requester, options)
+    : await dialog.showMessageBox(options)
+  if (confirmation.response !== 0) return { ok: false, cancelled: true }
+
+  // The dialog is asynchronous; a turn could have started while it was open.
+  target = liveSavedWindows.get(id)
+  if (target && !target.isDestroyed() && !target.__kaisolaDeleteBoot) {
+    const safety = acpRendererSwapState(target.webContents)
+    if (!safety.safe) return { ok: false, busy: true, awaitingPermission: safety.awaitingPermission, message: 'Agent work started, so the window was not deleted.' }
+  }
+
+  deletingSavedWindows.add(id)
+  let deleteBoot = false
+  let countedTransaction = false
+  let backup
+  try {
+    if (!target || target.isDestroyed()) {
+      target = reopenSavedEntry(entry, { deleteBoot: true })
+      deleteBoot = true
+    }
+    if (!target || target.isDestroyed() || !(await waitForDeleteReady(target))) {
+      if (deleteBoot) discardDeleteBoot(target)
+      return { ok: false, message: 'Kaisola could not safely open the saved window for teardown.' }
+    }
+    const safety = acpRendererSwapState(target.webContents)
+    if (!safety.safe) {
+      if (deleteBoot) discardDeleteBoot(target)
+      return { ok: false, busy: true, awaitingPermission: safety.awaitingPermission, message: 'Active agent work blocked deletion.' }
+    }
+    // The renderer copies any legacy localStorage-only blob into the durable
+    // DB before announcing readiness. Capture after that handshake so even an
+    // ACK-timeout or failed delete can restore the last remaining user copy.
+    try { backup = captureSavedStore(entry.slot) } catch {
+      if (deleteBoot) discardDeleteBoot(target)
+      return { ok: false, message: 'Kaisola could not verify the saved session before deletion.' }
+    }
+    const prepared = await requestRendererDelete(target)
+    if (!prepared.ok) {
+      if (deleteBoot) {
+        discardDeleteBoot(target)
+        try { restoreSavedStore(backup) } catch { /* keep the manifest entry */ }
+      } else if (prepared.timedOut) {
+        reloadSavedWindowFromBackup(target, backup)
+      }
+      return { ok: false, message: prepared.message || 'The saved window could not be prepared for deletion.' }
+    }
+
+    target.__kaisolaDeleting = true
+    target.__kaisolaSuppressPark = true
+    const destroyedId = target.webContents.id
+    windowDeleteTransactions++
+    countedTransaction = true
+    const result = await new Promise((resolve) => {
+      let settled = false
+      const finish = (value) => {
+        if (settled) return
+        settled = true
+        resolve(value)
+      }
+      target.once('closed', () => {
+        const nextManifest = removeManifestEntry(windowManifest, id)
+        try {
+          dbMutate({
+            set: { [WINDOW_MANIFEST_KEY]: serializeManifest(nextManifest) },
+            delete: storeKeysForSlot(entry.slot),
+          })
+        } catch {
+          try {
+            restoreSavedStore(backup)
+            finish({ ok: false, message: 'Deletion failed; Kaisola restored the saved window and its session data.' })
+          } catch {
+            finish({ ok: false, message: 'Deletion failed and the app data store could not be restored. The manifest was retained.' })
+          }
+          return
+        }
+        // The manifest+store commit above is the transaction boundary. UI
+        // notifications and orphan pop cleanup are best-effort follow-ups and
+        // must never turn a successful durable deletion into a false rollback.
+        windowManifest = nextManifest
+        for (const projectId of prepared.projectIds ?? []) {
+          try { closeUnownedProjectPops(projectId) } catch { /* next launch also excludes the deleted owner */ }
+        }
+        try { broadcastSavedWindowsChanged() } catch { /* surviving windows can refresh when opened */ }
+        finish({ ok: true, id })
+      })
+      try { target.destroy() } catch {
+        clearDeleteRendererWaiters(destroyedId)
+        try { restoreSavedStore(backup) } catch { /* reported below */ }
+        finish({ ok: false, message: 'The renderer could not be destroyed, so the saved window was not deleted.' })
+      }
+    })
+    if (!result.ok && wasLive && windowManifest.some((candidate) => candidate.id === id)) {
+      const surviving = liveSavedWindows.get(id)
+      if (surviving && !surviving.isDestroyed()) {
+        surviving.__kaisolaDeleting = false
+        surviving.__kaisolaSuppressPark = false
+        surviving.webContents.reload()
+      } else {
+        reopenSavedEntry(windowManifest.find((candidate) => candidate.id === id))
+      }
+    }
+    return result
+  } finally {
+    if (countedTransaction) windowDeleteTransactions = Math.max(0, windowDeleteTransactions - 1)
+    deletingSavedWindows.delete(id)
+    if (windowDeleteQuitRequested && deletingSavedWindows.size === 0) {
+      windowDeleteQuitRequested = false
+      app.quit()
+    } else if (process.platform !== 'darwin' && windowDeleteTransactions === 0 && BrowserWindow.getAllWindows().length === 0) app.quit()
+  }
+}
+
+ipcMain.handle('window:list-saved', (event) => ({ ok: true, windows: savedWindowList(event.sender) }))
+ipcMain.handle('window:reopen-saved', (_event, { id } = {}) => {
+  loadWindowManifest()
+  const entry = typeof id === 'string' ? windowManifest.find((candidate) => candidate.id === id) : null
+  if (!entry) return { ok: false, missing: true, message: 'That saved window no longer exists.' }
+  if (deletingSavedWindows.has(entry.id)) return { ok: false, busy: true, message: 'That saved window is being deleted.' }
+  const win = reopenSavedEntry(entry)
+  return { ok: !!win, id: entry.id }
+})
+ipcMain.handle('window:delete-saved', (event, { id } = {}) => deleteSavedWindow(event, id))
+
 // Transactional Chrome-style project transfers. A drop over another Kaisola
 // tab strip reuses that renderer; any other drag-out creates a HIDDEN window.
 // The source keeps its project until the receiver applies it and ACKs.
@@ -1474,6 +1699,17 @@ app.on('browser-window-blur', () => {
 })
 
 app.on('before-quit', (event) => {
+  if (deletingSavedWindows.size > 0) {
+    event.preventDefault()
+    windowDeleteQuitRequested = true
+    void dialog.showMessageBox({
+      type: 'info',
+      title: 'Finishing saved-window deletion',
+      message: 'Kaisola is completing the current saved-window transaction before quitting.',
+      buttons: ['OK'],
+    }).catch(() => {})
+    return
+  }
   const restartState = acpRestartSafetyState()
   if (!restartState.safe) {
     // ACP streams still terminate in Electron main. Keep the UI available for

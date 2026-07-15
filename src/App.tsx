@@ -259,7 +259,110 @@ function TabMenuSync() {
   return null
 }
 
-export default function App() {
+const WINDOW_DELETE_GROUP_PHASES = new Set(['answering', 'negotiating', 'assigning', 'executing', 'reviewing', 'integrating', 'critiquing', 'synthesizing'])
+
+const windowStoreKeys = () => {
+  const slot = new URLSearchParams(location.search).get('win')
+  const suffix = slot ? `-w${slot}` : ''
+  return [`kaisola-store${suffix}`, `kiasola-store${suffix}`, `pasola-store${suffix}`]
+}
+
+function windowDeletionBlocker() {
+  const state = useKaisola.getState()
+  for (const tab of state.projectTabs) {
+    const slice = tab.id === state.activeProjectId ? state : state.projectSlices[tab.id]
+    if (!slice) continue
+    if (slice.pendingPermissions.length > 0) return 'Resolve pending agent approvals before deleting this window.'
+    if (slice.assistantThreads.some((thread) => thread.busy || !!thread.group?.operation || (!!thread.group && !thread.group.paused && WINDOW_DELETE_GROUP_PHASES.has(thread.group.phase)))) {
+      return 'Stop active agent turns before deleting this window.'
+    }
+    if (Object.values(slice.assistantPromptQueues).some((queue) => queue.length > 0) || slice.agentQueueRunning || Object.values(slice.agentRunning).some(Boolean)) {
+      return 'Finish or clear queued agent work before deleting this window.'
+    }
+    const terminalIds = [
+      ...slice.terminals.map((terminal) => terminal.id),
+      ...slice.agentTerminals.map((terminal) => terminal.terminalId),
+    ]
+    if (terminalIds.some((id) => state.terminalMeta[id]?.agentBusy) || slice.agentTerminals.some((terminal) => state.terminalMeta[terminal.terminalId]?.running)) {
+      return 'Stop active terminal agents before deleting this window.'
+    }
+  }
+  if (state.fileDirty || Object.keys(state.unsavedBuffers).length > 0) return 'Save or discard unsaved file edits before deleting this window.'
+  return null
+}
+
+async function prepareWindowDeletion() {
+  const blocker = windowDeletionBlocker()
+  if (blocker) return { ok: false, message: blocker }
+  const before = useKaisola.getState()
+  const projectIds = before.projectTabs.map((tab) => tab.id)
+  const terminals = projectIds.flatMap((projectId) => {
+    const slice = projectId === before.activeProjectId ? before : before.projectSlices[projectId]
+    if (!slice) return []
+    return [
+      ...slice.terminals.map((terminal) => ({ id: terminal.id, projectId })),
+      ...slice.agentTerminals.map((terminal) => ({ id: terminal.terminalId, projectId })),
+    ]
+  })
+  const connections = projectIds.flatMap((projectId) => {
+    const slice = projectId === before.activeProjectId ? before : before.projectSlices[projectId]
+    return (slice?.assistantThreads ?? []).map((thread) => ({ key: `${thread.agentKey}::${thread.id}`, projectId }))
+  })
+  document.body.inert = true
+  const disconnected = await Promise.all(connections.map(({ key, projectId }) =>
+    bridge.acp.disconnect(key, projectId).catch(() => ({ ok: false }))))
+  if (disconnected.some((result) => !result.ok)) {
+    document.body.inert = false
+    return { ok: false, message: 'An agent session could not be disconnected safely.' }
+  }
+  try {
+    for (const projectId of projectIds) {
+      const current = useKaisola.getState()
+      const slice = projectId === current.activeProjectId ? current : current.projectSlices[projectId]
+      if (!slice) continue
+      const roots = slice.assistantThreads.filter((thread) => !thread.groupParentId)
+      for (const thread of roots) useKaisola.getState().closeAssistantThread(thread.id, projectId)
+      // Malformed legacy state can contain an orphaned group child. Close any
+      // residue through the same action rather than leaving it mounted.
+      const remaining = projectId === useKaisola.getState().activeProjectId
+        ? useKaisola.getState().assistantThreads
+        : useKaisola.getState().projectSlices[projectId]?.assistantThreads ?? []
+      for (const thread of remaining) useKaisola.getState().closeAssistantThread(thread.id, projectId)
+      useKaisola.getState().closeProject(projectId, { force: true })
+    }
+    try { window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false })) } catch { window.dispatchEvent(new Event('pagehide')) }
+    for (const key of windowStoreKeys()) localStorage.removeItem(key)
+    return { ok: true, projectIds }
+  } catch {
+    useKaisola.setState(before, true)
+    for (const terminal of terminals) void bridge.terminal.cancelRelease(terminal.id, terminal.projectId).catch(() => {})
+    try { window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false })) } catch { window.dispatchEvent(new Event('pagehide')) }
+    document.body.inert = false
+    return { ok: false, message: 'Kaisola restored the window because renderer teardown did not complete.' }
+  }
+}
+
+function registerWindowDeletionHandler() {
+  if (!bridge.windows?.onPrepareDelete) return undefined
+  let migrationFailed = false
+  // Old installs can still have their only session blob in localStorage. Main
+  // cannot read renderer storage, so migrate that exact blob synchronously
+  // before the readiness signal; main then backs it up before teardown.
+  for (const key of windowStoreKeys()) {
+    try {
+      const fallback = localStorage.getItem(key)
+      if (fallback == null || bridge.db.getSync(key) != null) continue
+      if (!bridge.db.setSync(key, fallback)) migrationFailed = true
+    } catch {
+      migrationFailed = true
+    }
+  }
+  return bridge.windows.onPrepareDelete(migrationFailed
+    ? async () => ({ ok: false, message: 'Kaisola could not secure the legacy saved session, so deletion was cancelled.' })
+    : prepareWindowDeletion)
+}
+
+function KaisolaApp() {
   const layoutMode = useKaisola((s) => s.layoutMode)
   const stage = useKaisola((s) => s.stage)
   const setStage = useKaisola((s) => s.setStage)
@@ -276,6 +379,16 @@ export default function App() {
   // per-project arming (spec risk #5): a single boolean would arm Claude once
   // for the whole app and never in the second project — key by tab+workspace
   useKeybindings()
+
+  // Explicit window deletion is a two-process transaction. Main performs the
+  // authoritative ACP safety check; the renderer repeats the project-level
+  // checks, disconnects idle sessions, uses the existing close actions to
+  // release project resources, and forces the normal pagehide durability
+  // barrier before ACKing. Main destroys this renderer before deleting DB rows.
+  useEffect(() => {
+    if (!isDesktop || POP_TERMINAL_ID) return
+    return registerWindowDeletionHandler()
+  }, [])
 
   // when the ACP agent runs a command it spawns a real pty — list it as a
   // session in the OWNING project's rail (a background run docks in its slice,
@@ -760,4 +873,14 @@ export default function App() {
       <Onboarding />
     </div>
   )
+}
+
+function WindowDeletionBoot() {
+  useEffect(registerWindowDeletionHandler, [])
+  return null
+}
+
+export default function App() {
+  const deleteBoot = new URLSearchParams(location.search).get('deleteWindow') === '1'
+  return deleteBoot ? <WindowDeletionBoot /> : <KaisolaApp />
 }

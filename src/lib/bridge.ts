@@ -459,6 +459,26 @@ export interface CodexWindow {
   windowDurationMins?: number
   resetsAt?: number // unix epoch seconds
 }
+
+export type SavedWindowState = 'open_at_quit' | 'parked'
+export interface SavedWindowSummary {
+  id: string
+  slot: number | null
+  state: SavedWindowState
+  title?: string
+  projectCount?: number
+  updatedAt: number
+  bounds?: { x: number; y: number; width: number; height: number }
+  maximized?: boolean
+  fullScreen?: boolean
+  open: boolean
+  current: boolean
+}
+export interface PrepareWindowDeleteResult {
+  ok: boolean
+  message?: string
+  projectIds?: string[]
+}
 export interface CodexUsage {
   ok: boolean
   message?: string
@@ -819,6 +839,11 @@ export interface KaisolaBridge {
   /** Multi-window: full slot windows + terminal pop-outs + project-tab menu wiring. */
   windows?: {
     newWindow(): Promise<{ ok: boolean }>
+    listSaved(): Promise<{ ok: boolean; windows: SavedWindowSummary[]; message?: string }>
+    reopenSaved(id: string): Promise<{ ok: boolean; id?: string; missing?: boolean; busy?: boolean; message?: string }>
+    deleteSaved(id: string): Promise<{ ok: boolean; id?: string; missing?: boolean; busy?: boolean; awaitingPermission?: boolean; cancelled?: boolean; message?: string }>
+    onSavedChanged(cb: () => void): () => void
+    onPrepareDelete(cb: (request: { transactionId: string }) => PrepareWindowDeleteResult | Promise<PrepareWindowDeleteResult>): () => void
     pop(termId: string, title: string | undefined, hue: string | undefined, projectId: string): Promise<{ ok: boolean; existed?: boolean }>
     popped(): Promise<{ ok: boolean; termIds?: string[]; states?: TerminalMirrorState[]; closed?: PopClosedTerminalState[] }>
     ackPopClosed(termId: string, projectId: string, revision: number): Promise<{ ok: boolean }>
@@ -1279,6 +1304,21 @@ const webMock: KaisolaBridge = {
   windows: {
     async newWindow() {
       return { ok: false }
+    },
+    async listSaved() {
+      return { ok: true, windows: [] }
+    },
+    async reopenSaved() {
+      return { ok: false }
+    },
+    async deleteSaved() {
+      return { ok: false }
+    },
+    onSavedChanged() {
+      return () => {}
+    },
+    onPrepareDelete() {
+      return () => {}
     },
     async pop() {
       return { ok: false }

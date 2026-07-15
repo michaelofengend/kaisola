@@ -442,6 +442,24 @@ const bridge = {
   // ── multi-window: full slots (own persisted state) + terminal pop-outs ──
   windows: {
     newWindow: () => ipcRenderer.invoke('window:new'),
+    listSaved: () => ipcRenderer.invoke('window:list-saved'),
+    reopenSaved: (id) => ipcRenderer.invoke('window:reopen-saved', { id }),
+    deleteSaved: (id) => ipcRenderer.invoke('window:delete-saved', { id }),
+    onSavedChanged: (cb) => {
+      const listener = () => cb()
+      ipcRenderer.on('window:saved-changed', listener)
+      return () => ipcRenderer.removeListener('window:saved-changed', listener)
+    },
+    onPrepareDelete: (cb) => {
+      const listener = async (_event, request = {}) => {
+        let result
+        try { result = await cb(request) } catch (error) { result = { ok: false, message: String(error?.message || error) } }
+        ipcRenderer.send('window:prepare-delete-ack', { transactionId: request.transactionId, ...result })
+      }
+      ipcRenderer.on('window:prepare-delete', listener)
+      ipcRenderer.send('window:delete-ready')
+      return () => ipcRenderer.removeListener('window:prepare-delete', listener)
+    },
     pop: (termId, title, hue, projectId) => ipcRenderer.invoke('window:pop', { termId, title, hue, projectId }),
     popped: () => ipcRenderer.invoke('window:popped'),
     ackPopClosed: (termId, projectId, revision) => ipcRenderer.invoke('window:pop-closed-ack', { termId, projectId, revision }),
