@@ -14,16 +14,16 @@
 
   
 
-\- make the onboarding beads run away from cursor now towards, and make letters more dense on the rows, and make it more smooth if possible
+- [x] make the onboarding beads run away from cursor now towards, and make letters more dense on the rows, and make it more smooth if possible
 
-Also when adding terminal or new window side tabs, it would be nice if it automatically knew how to be space efficient in the way that if there'es two tabs it opens them vertically stacked like this: 
-
-  
-
-\- sessions should be movable/orderable in different ways as well. also when moving window tabs it gives the green plus button, when moving them it should feel more intuitive (if we move them around or add/drop them elsewhere)
+- [x] Also when adding terminal or new window side tabs, it would be nice if it automatically knew how to be space efficient in the way that if there'es two tabs it opens them vertically stacked like this: 
 
   
 
-\- horizontal tabs should maximizable/minamiziable formable as well, 
+- [x] sessions should be movable/orderable in different ways as well. also when moving window tabs it gives the green plus button, when moving them it should feel more intuitive (if we move them around or add/drop them elsewhere)
 
-also it seems the approve plan and create isolated worktrees doesn't work well for mesh??
+  
+
+- [x] horizontal tabs should maximizable/minamiziable formable as well, 
+
+- [x] also it seems the approve plan and create isolated worktrees doesn't work well for mesh?? Large frozen patches now route through an immutable local Git review instead of blocking integration, and an interrupted older review exposes a retry action.

@@ -45,6 +45,7 @@ const adoptedBusy = new Set()
 const lifecycleEvents = []
 let delayCloseSessions = false
 let connectCalls = 0
+let largeReviewRouted = false
 const selectedModels = new Map()
 const selectedEfforts = new Map()
 const promptCounts = new Map()
@@ -105,18 +106,22 @@ app.whenReady().then(async () => {
     const provider = agentKey.startsWith('claude') ? 'Claude' : 'Codex'
     const count = (promptCounts.get(key) ?? 0) + 1
     promptCounts.set(key, count)
-    let reply = `${provider} independent proposal with an ownership boundary and acceptance tests.`
+    let reply = `${provider} independent proposal with an ownership boundary and acceptance tests. `.repeat(12).trim()
     if (/only role-negotiation round/.test(text)) {
       reply = `${provider} accepts the peer constraint and proposes an orthogonal role split.`
     } else if (/Act as the coordinator/.test(text)) {
       reply = 'Mission intent\nShared invariants\nClaude assignment\nCodex assignment\nIntegration order\nAcceptance tests\nStop and escalation conditions'
     } else if (/Execute only your named assignment/.test(text)) {
       const worktree = text.match(/isolated worktree: (.+?)\. Do not/)?.[1]
-      if (worktree) fs.writeFileSync(path.join(worktree, `${provider.toLowerCase()}-result.txt`), `${provider} isolated result\n`)
+      if (worktree) fs.writeFileSync(
+        path.join(worktree, `${provider.toLowerCase()}-result.txt`),
+        provider === 'Codex' ? `${provider} isolated result\n${'large-review-fixture\n'.repeat(2_200)}` : `${provider} isolated result\n`,
+      )
       reply = `${provider} execution complete; changed one owned file and ran the probe check.`
     } else if (/sole integration owner/.test(text)) {
       reply = 'Integrated both reviewed branches and verified the shared acceptance tests.'
     } else if (/Cross-review/.test(text)) {
+      if (/Immutable review source/.test(text) && /git -C .* diff --no-ext-diff --find-renames/.test(text)) largeReviewRouted = true
       reply = `${provider} verifier verdict: pass; ownership and integration checks are satisfied.`
     }
     const firstScout = /scouting independently/.test(text) && count === 1
@@ -401,6 +406,9 @@ app.whenReady().then(async () => {
       const b = body.getBoundingClientRect()
       return h.right <= copy.getBoundingClientRect().right + 1 && h.bottom <= b.top + 1 && card.scrollWidth <= card.clientWidth + 1
     }),
+    condensedResponses: [...document.querySelectorAll('.group-result p')].every((body) =>
+      body.clientHeight <= 48 && body.scrollHeight > body.clientHeight
+    ),
     }
   })()`)
   await wait(700)
@@ -417,6 +425,19 @@ app.whenReady().then(async () => {
       visible: !!(group && document.querySelector('.group-assistant[data-phase="done"]')),
     }
   })()`)
+  await win.webContents.executeJavaScript(`(() => {
+    const state = window.__kaisola.getState()
+    const group = state.assistantThreads.find((thread) => thread.group)
+    if (group) state.setGroupSession(group.id, { phase: 'execution-ready', flow: 'fluid', error: "Codex's frozen patch is too large for a complete Mesh review." })
+  })()`)
+  await wait(100)
+  const staleReviewRecovery = await win.webContents.executeJavaScript(`/Retry complete cross-review/.test(document.querySelector('.group-action')?.textContent ?? '')`)
+  await win.webContents.executeJavaScript(`(() => {
+    const state = window.__kaisola.getState()
+    const group = state.assistantThreads.find((thread) => thread.group)
+    if (group) state.setGroupSession(group.id, { phase: 'done', error: undefined })
+  })()`)
+  await wait(80)
   const siteScreenshot = await captureAsset('mesh-light.jpg', '.group-execution')
   const image = await win.webContents.capturePage()
   const screenshot = path.join(os.tmpdir(), 'kaisola-group-session.png')
@@ -513,7 +534,7 @@ app.whenReady().then(async () => {
       && restored.assistantPromptQueues[created.id]?.[0]?.text === 'preserve this queued follow-up'
       && restored.assistantThreads.find((thread) => thread.id === created.id)?.queuePaused === true
   })()`)
-  const result = { configured, saturated, asked, stopped, paused, pausedPersisted: !!pausedPersisted, pausedScreenshot, pausedCloseReopen, continued, adoptedBusyRecovered, selectiveResume, ready, parkedBeforeNegotiation, fluidEnabled, connectCalls, negotiated, assigned, doubleExecuteClaimed, isolatedWorktreeCount, executed, reviewed, done, worktreeCleanupDone, ...facts, persisted, siteScreenshot, screenshot, closeReopen, openedDeleteMenu, clickedDelete, switchedProjectId, deleted, projectSwitchSafe, archiveDeleteVerified, deleteTeardownOrdered, sessionDraftRoundTrip, deleteLifecycle }
+  const result = { configured, saturated, asked, stopped, paused, pausedPersisted: !!pausedPersisted, pausedScreenshot, pausedCloseReopen, continued, adoptedBusyRecovered, selectiveResume, ready, parkedBeforeNegotiation, fluidEnabled, connectCalls, negotiated, assigned, doubleExecuteClaimed, isolatedWorktreeCount, executed, reviewed, largeReviewRouted, done, worktreeCleanupDone, ...facts, persisted, staleReviewRecovery, siteScreenshot, screenshot, closeReopen, openedDeleteMenu, clickedDelete, switchedProjectId, deleted, projectSwitchSafe, archiveDeleteVerified, deleteTeardownOrdered, sessionDraftRoundTrip, deleteLifecycle }
   console.log('GROUP_UI=' + JSON.stringify(result))
   const passed = configured
     && saturated
@@ -536,6 +557,7 @@ app.whenReady().then(async () => {
     && isolatedWorktreeCount === 2
     && executed
     && reviewed
+    && largeReviewRouted
     && done
     && worktreeCleanupDone
     && facts.phase === 'done'
@@ -553,11 +575,13 @@ app.whenReady().then(async () => {
     && facts.integration === 'Integrated both reviewed branches and verified the shared acceptance tests.'
     && facts.workerCount === 2
     && facts.compactGeometry
+    && facts.condensedResponses
     && persisted.phase === 'done'
     && persisted.members === 2
     && persisted.integration === 'Integrated both reviewed branches and verified the shared acceptance tests.'
     && persisted.worktrees === 0
     && persisted.visible
+    && staleReviewRecovery
     && closeReopen.ok
     && closeReopen.bundledThreads === 3
     && clickedDelete

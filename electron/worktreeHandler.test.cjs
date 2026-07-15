@@ -33,6 +33,7 @@ test('Mesh merges the exact reviewed commit and rejects post-review drift', asyn
     const reviewed = await worktree.diff(taskId, repo, frozen.sha)
     assert.equal(reviewed.ok, true)
     assert.equal(reviewed.sha, frozen.sha)
+    assert.equal(reviewed.base, created.base)
     assert.match(reviewed.patch, /candidate\.txt/)
     const verified = await worktree.verify(taskId, repo, frozen.sha)
     assert.deepEqual(verified, { ok: true, drifted: false, sha: frozen.sha })

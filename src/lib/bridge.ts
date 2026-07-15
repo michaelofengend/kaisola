@@ -790,7 +790,7 @@ export interface KaisolaBridge {
     create(req: { repo: string; taskId: string }): Promise<{ ok: boolean; path?: string; branch?: string; base?: string; baseBranch?: string; dirty?: boolean; message?: string }>
     /** `repo` lets main rehydrate a worktree it forgot across a relaunch. */
     finalize(req: { taskId: string; message?: string; repo?: string }): Promise<{ ok: boolean; committed?: boolean; sha?: string; message?: string }>
-    diff(req: { taskId: string; repo?: string; ref?: string }): Promise<{ ok: boolean; patch?: string; files?: WorktreeFile[]; sha?: string; message?: string }>
+    diff(req: { taskId: string; repo?: string; ref?: string }): Promise<{ ok: boolean; patch?: string; files?: WorktreeFile[]; sha?: string; base?: string; message?: string }>
     verify(req: { taskId: string; repo?: string; ref: string }): Promise<{ ok: boolean; drifted?: boolean; sha?: string; message?: string }>
     merge(req: { taskId: string; repo?: string; ref?: string }): Promise<{ ok: boolean; conflicted?: boolean; drifted?: boolean; wrongBranch?: boolean; message?: string }>
     remove(req: { taskId: string; repo?: string }): Promise<{ ok: boolean; message?: string }>

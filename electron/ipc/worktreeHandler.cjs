@@ -243,7 +243,7 @@ async function diff(taskId, repo, ref) {
       const [add, del, p] = line.split('\t')
       return { path: p, additions: Number(add) || 0, deletions: Number(del) || 0 }
     })
-  return { ok: true, patch: patch.stdout, files, sha }
+  return { ok: true, patch: patch.stdout, files, sha, base: wt.base }
 }
 
 /** Preflight every frozen candidate before the first merge mutates main. This
