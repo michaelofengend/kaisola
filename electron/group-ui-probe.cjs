@@ -55,13 +55,21 @@ const controlsFor = (key) => {
   const options = provider === 'claude'
     ? [{ modelId: 'claude-default', name: 'Claude Default' }, { modelId: 'claude-fast', name: 'Claude Fast' }]
     : [{ modelId: 'codex-default', name: 'Codex Default' }, { modelId: 'codex-deep', name: 'Codex Deep' }]
+  // Both adapters report a live effort control; Codex mirrors the app-server's
+  // model_reasoning_effort so Mesh must pass its wire values untranslated.
   const configOptions = provider === 'claude' ? [{
     id: 'reasoning_effort',
     name: 'Reasoning effort',
     category: 'thought_level',
     currentValue: selectedEfforts.get(key) ?? 'high',
     options: ['low', 'medium', 'high', 'xhigh', 'max'].map((value) => ({ value, name: value })),
-  }] : []
+  }] : [{
+    id: 'model_reasoning_effort',
+    name: 'Reasoning effort',
+    category: 'thought_level',
+    currentValue: selectedEfforts.get(key) ?? 'high',
+    options: ['low', 'medium', 'high', 'xhigh'].map((value) => ({ value, name: value })),
+  }]
   return { modes: null, configOptions, models: { currentModelId: selectedModels.get(key) ?? options[0].modelId, availableModels: options } }
 }
 
@@ -221,14 +229,16 @@ app.whenReady().then(async () => {
 
   const configuredControls = await win.webContents.executeJavaScript(`(() => {
     const selects = [...document.querySelectorAll('.group-model-select')]
-    const effort = document.querySelector('.group-effort-select')
-    if (selects.length !== 2 || selects.some((select) => select.options.length < 2) || !effort) return false
+    const efforts = [...document.querySelectorAll('.group-effort-select')]
+    if (selects.length !== 2 || selects.some((select) => select.options.length < 2) || efforts.length !== 2) return false
     selects.forEach((select) => {
       select.value = select.options[select.options.length - 1].value
       select.dispatchEvent(new Event('change', { bubbles: true }))
     })
-    effort.value = 'xhigh'
-    effort.dispatchEvent(new Event('change', { bubbles: true }))
+    efforts.forEach((effort) => {
+      effort.value = 'xhigh'
+      effort.dispatchEvent(new Event('change', { bubbles: true }))
+    })
     return !!document.querySelector('.group-add-member')
   })()`)
   await wait(240)
@@ -236,9 +246,15 @@ app.whenReady().then(async () => {
     const state = window.__kaisola.getState()
     const group = state.assistantThreads.find((thread) => thread.group)
     const claude = group?.group?.members.find((member) => member.agentKey === 'claude-code')
-    const child = state.assistantThreads.find((thread) => thread.id === claude?.threadId)
-    return child?.claudeEffort === 'xhigh' && group?.group?.members.map((member) => member.modelLabel).join(',') === 'Claude Fast,Codex Deep'
+    const codex = group?.group?.members.find((member) => member.agentKey === 'codex')
+    const claudeChild = state.assistantThreads.find((thread) => thread.id === claude?.threadId)
+    const codexChild = state.assistantThreads.find((thread) => thread.id === codex?.threadId)
+    return claudeChild?.claudeEffort === 'xhigh' && codexChild?.codexEffort === 'xhigh'
+      && group?.group?.members.map((member) => member.modelLabel).join(',') === 'Claude Fast,Codex Deep'
   })()`)
+  // The renderer must have handed each provider its exact wire value.
+  const effortWire = [...selectedEfforts.entries()]
+    .map(([key, value]) => `${key.split('::')[0]}:${value}`).sort().join(',')
 
   const asked = await win.webContents.executeJavaScript(`(() => {
     const input = document.querySelector('.group-composer textarea')
@@ -451,7 +467,7 @@ app.whenReady().then(async () => {
     if (group) state.setGroupSession(group.id, { phase: 'execution-ready', flow: 'fluid', error: "Codex's frozen patch is too large for a complete Mesh review." })
   })()`)
   await wait(100)
-  const staleReviewRecovery = await win.webContents.executeJavaScript(`/Retry complete cross-review/.test(document.querySelector('.group-action')?.textContent ?? '')`)
+  const staleReviewRecovery = await win.webContents.executeJavaScript(`/Retry cross-review/.test(document.querySelector('.group-action')?.textContent ?? '')`)
   await win.webContents.executeJavaScript(`(() => {
     const state = window.__kaisola.getState()
     const group = state.assistantThreads.find((thread) => thread.group)
@@ -554,9 +570,10 @@ app.whenReady().then(async () => {
       && restored.assistantPromptQueues[created.id]?.[0]?.text === 'preserve this queued follow-up'
       && restored.assistantThreads.find((thread) => thread.id === created.id)?.queuePaused === true
   })()`)
-  const result = { configured, saturated, asked, stopped, paused, pausedPersisted: !!pausedPersisted, pausedScreenshot, pausedCloseReopen, continued, adoptedBusyRecovered, selectiveResume, ready, parkedBeforeNegotiation, fluidEnabled, connectCalls, negotiated, assigned, doubleExecuteClaimed, isolatedWorktreeCount, executed, reviewed, largeReviewRouted, done, worktreeCleanupDone, ...facts, persisted, invalidReviewStoppedMerge, staleReviewRecovery, siteScreenshot, screenshot, closeReopen, openedDeleteMenu, clickedDelete, switchedProjectId, deleted, projectSwitchSafe, archiveDeleteVerified, deleteTeardownOrdered, sessionDraftRoundTrip, deleteLifecycle }
+  const result = { configured, effortWire, saturated, asked, stopped, paused, pausedPersisted: !!pausedPersisted, pausedScreenshot, pausedCloseReopen, continued, adoptedBusyRecovered, selectiveResume, ready, parkedBeforeNegotiation, fluidEnabled, connectCalls, negotiated, assigned, doubleExecuteClaimed, isolatedWorktreeCount, executed, reviewed, largeReviewRouted, done, worktreeCleanupDone, ...facts, persisted, invalidReviewStoppedMerge, staleReviewRecovery, siteScreenshot, screenshot, closeReopen, openedDeleteMenu, clickedDelete, switchedProjectId, deleted, projectSwitchSafe, archiveDeleteVerified, deleteTeardownOrdered, sessionDraftRoundTrip, deleteLifecycle }
   console.log('GROUP_UI=' + JSON.stringify(result))
   const passed = configured
+    && effortWire === 'claude-code:xhigh,codex:xhigh'
     && saturated
     && asked
     && stopped

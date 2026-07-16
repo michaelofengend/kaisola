@@ -25,6 +25,7 @@ import { ProviderIcon } from './ProviderIcon'
 import { stageMeta } from '../lib/stages'
 import { clockTime, workedTime } from '../lib/format'
 import { isCurrentMeshOrchestration } from '../lib/meshPolicy'
+import { isClaudeEffort, isCodexEffort } from '../lib/providerEffort'
 import type { Paper } from '../domain/types'
 
 type Turn = AssistantTurn
@@ -228,8 +229,6 @@ const CODEX_EFFORT_OPTIONS = [
   { value: 'ultra', name: 'Ultra', description: 'Maximum Codex reasoning · higher usage' },
 ]
 const isAssistantSpeed = (v: string): v is AssistantSpeed => v === 'default' || v === 'fast'
-const isClaudeEffort = (v: string): v is ClaudeEffort => ['default', 'low', 'medium', 'high', 'xhigh', 'max'].includes(v)
-const isCodexEffort = (v: string): v is CodexEffort => ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(v)
 const MAX_VISIBLE_TURN_TEXT = 320_000
 const MAX_DIFF_TEXT = 200_000
 const MAX_TOOL_ARTIFACTS = 8

@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Assistant, PermissionCard } from './Assistant'
+import { isClaudeEffort, isCodexEffort } from '../lib/providerEffort'
 import { Icon } from './Icon'
 import { ProviderIcon } from './ProviderIcon'
 import { bridge, type AcpAgent, type AcpControls, type AcpPreset, type WorktreeFile } from '../lib/bridge'
@@ -20,12 +21,14 @@ const EMPTY_DRAFT: AssistantDraft = { text: '', attachments: [], mentions: [], s
 const MAX_SHARED_TEXT = 28_000
 const MAX_GROUP_MEMBERS = 6
 const MESH_RENDERER_OWNER = `mesh-renderer-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
-const CLAUDE_EFFORTS: Array<{ value: ClaudeEffort; label: string }> = [
-  { value: 'low', label: 'Low effort' },
-  { value: 'medium', label: 'Medium effort' },
-  { value: 'high', label: 'High effort' },
-  { value: 'xhigh', label: 'Extra-high effort' },
-  { value: 'max', label: 'Maximum effort' },
+/** Fallback list for a Claude adapter that reports no live effort control;
+ * providers that do report one render their own options untranslated. */
+const CLAUDE_EFFORTS: Array<{ value: ClaudeEffort; name: string }> = [
+  { value: 'low', name: 'Low' },
+  { value: 'medium', name: 'Medium' },
+  { value: 'high', name: 'High' },
+  { value: 'xhigh', name: 'Extra high' },
+  { value: 'max', name: 'Max' },
 ]
 type CandidateDiff = { ok: boolean; reviewMode?: 'inline' | 'manifest'; patch?: string; patchBytes?: number; files?: WorktreeFile[]; sha?: string; base?: string; message?: string }
 
@@ -78,21 +81,21 @@ const responseAfter = (runtime: AssistantRuntime | undefined, baseline = 0, lega
 
 const phaseLabel: Record<GroupSessionPhase, string> = {
   idle: 'Ready',
-  answering: 'Independent scouting',
+  answering: 'Scouting',
   ready: 'Scouts ready',
-  negotiating: 'Role negotiation',
-  'plan-ready': 'Negotiation ready',
-  assigning: 'Writing role contract',
-  assigned: 'Plan awaiting approval',
-  executing: 'Isolated execution',
+  negotiating: 'Negotiating',
+  'plan-ready': 'Negotiated',
+  assigning: 'Drafting contract',
+  assigned: 'Awaiting approval',
+  executing: 'Executing',
   'execution-ready': 'Changes ready',
-  reviewing: 'Cross-review',
-  'merge-ready': 'Integration awaiting approval',
+  reviewing: 'Reviewing',
+  'merge-ready': 'Merge ready',
   integrating: 'Integrating',
-  done: 'Complete',
-  critiquing: 'Role negotiation',
-  'review-ready': 'Negotiation ready',
-  synthesizing: 'Writing role contract',
+  done: 'Done',
+  critiquing: 'Negotiating',
+  'review-ready': 'Negotiated',
+  synthesizing: 'Drafting contract',
 }
 
 const runningPhases = new Set<GroupSessionPhase>(['answering', 'negotiating', 'assigning', 'executing', 'reviewing', 'integrating', 'critiquing', 'synthesizing'])
@@ -148,6 +151,7 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
   const setBusy = useKaisola((state) => state.setThreadBusy)
   const setThreadQueuePaused = useKaisola((state) => state.setThreadQueuePaused)
   const setThreadClaudeEffort = useKaisola((state) => state.setThreadClaudeEffort)
+  const setThreadCodexEffort = useKaisola((state) => state.setThreadCodexEffort)
   const setThreadAcpSession = useKaisola((state) => state.setThreadAcpSession)
   const answerPermission = useKaisola((state) => state.answerPermission)
   const alwaysAllowPermission = useKaisola((state) => state.alwaysAllowPermission)
@@ -987,12 +991,18 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
     if (result.ok) setGroupMemberModel(threadId, member.threadId, value, label, projectId)
     else setGroup(threadId, { error: result.message ?? `Could not select ${label} for ${member.label}.` }, projectId)
   }
-  const chooseClaudeEffort = async (member: GroupSessionMember, value: ClaudeEffort) => {
-    if (!/claude/i.test(member.agentKey) || phase !== 'idle') return
+  const chooseEffort = async (member: GroupSessionMember, value: string) => {
+    if (phase !== 'idle') return
     const key = `${member.agentKey}::${member.threadId}`
     const child = childThreads.find((candidate) => candidate.id === member.threadId)
+    if (child?.busy) {
+      setGroup(threadId, { error: `Wait for ${member.label} to finish before changing effort.` }, projectId)
+      return
+    }
     const control = effortControl(agents.find((agent) => agent.key === key)?.controls)
+    const claudeMember = /claude/i.test(member.agentKey)
     if (control) {
+      // Provider-reported control: pass the wire value through untranslated.
       if (!control.options.some((option) => option.value === value)) {
         setGroup(threadId, { error: `${member.label}'s current model does not support ${value} effort.` }, projectId)
         return
@@ -1002,10 +1012,15 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
         setGroup(threadId, { error: result.message ?? `Could not set ${member.label} effort.` }, projectId)
         return
       }
-      setThreadClaudeEffort(member.threadId, value, projectId)
+      // Persist the native value on the child thread so reconnects reapply it.
+      if (claudeMember && isClaudeEffort(value)) setThreadClaudeEffort(member.threadId, value, projectId)
+      else if (/codex/i.test(member.agentKey) && isCodexEffort(value)) setThreadCodexEffort(member.threadId, value, projectId)
       setGroup(threadId, { error: undefined }, projectId)
       return
     }
+    // Only Claude has a session-creation fallback (reconnect with the new
+    // value). A provider that reports no effort control gets none fabricated.
+    if (!claudeMember || !isClaudeEffort(value)) return
     if (!workspacePath || !child) {
       setGroup(threadId, { error: `Open a workspace before changing ${member.label}'s effort.` }, projectId)
       return
@@ -1037,7 +1052,7 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
     <div className="group-assistant" data-phase={phase}>
       <header className="group-head">
         <span className="group-mark"><Icon name="Network" size={14} /></span>
-        <div className="group-head-copy"><strong>Mesh</strong><small>{members.length} participants · shared mission, isolated work</small></div>
+        <div className="group-head-copy"><strong>Mesh</strong><small>{members.length} agents</small></div>
         <span className="grow" />
         <div className="group-presence" aria-label="Mesh participants">
           {members.slice(0, 4).map((member) => <span key={member.threadId} title={`${member.label} · ${currentMemberStatuses[member.threadId]}`} data-status={currentMemberStatuses[member.threadId]}>
@@ -1052,14 +1067,14 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
         {!group.task && (
           <div className="group-empty">
             <Icon name="Network" size={24} />
-            <strong>Start a focused agent group.</strong>
-            <p>Participants compare approaches, agree on ownership, work in isolated branches, and cross-review before one controlled integration.</p>
+            <strong>One mission, isolated owners.</strong>
+            <p>Scout → contract → build apart → review → integrate.</p>
             <div className="group-mode" role="group" aria-label="Mesh flow mode">
               <button type="button" data-active={(group.flow ?? 'fluid') === 'fluid' || undefined} onClick={() => setGroup(threadId, { flow: 'fluid' }, projectId)}>
-                <Icon name="Zap" size={12} /><span><strong>Fluid</strong><small>Analysis flows; write gates pause</small></span>
+                <Icon name="Zap" size={12} /><span><strong>Fluid</strong><small>Pauses at write gates</small></span>
               </button>
               <button type="button" data-active={group.flow === 'guided' || undefined} onClick={() => setGroup(threadId, { flow: 'guided' }, projectId)}>
-                <Icon name="ListChecks" size={12} /><span><strong>Guided</strong><small>Pause at every stage</small></span>
+                <Icon name="ListChecks" size={12} /><span><strong>Guided</strong><small>Pauses every stage</small></span>
               </button>
             </div>
             <div className="group-roster" aria-label="Mesh participants">
@@ -1069,7 +1084,11 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
                 const control = modelControl(agent?.controls)
                 const child = childThreads.find((candidate) => candidate.id === member.threadId)
                 const effort = effortControl(agent?.controls)
-                const effortValue = (effort?.currentValue ?? child?.claudeEffort ?? 'high') as ClaudeEffort
+                const claudeMember = /claude/i.test(member.agentKey)
+                const effortChoices = effort?.options ?? (claudeMember ? CLAUDE_EFFORTS : [])
+                const effortValue = effort?.currentValue
+                  ?? (claudeMember ? child?.claudeEffort : child?.codexEffort)
+                  ?? 'high'
                 const value = control?.value ?? member.modelId ?? ''
                 return <div className="group-roster-row" key={member.threadId}>
                   <ProviderIcon provider={member.agentKey} name={member.label} size={14} />
@@ -1085,16 +1104,14 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
                     {!value && <option value="">Provider default</option>}
                     {(control?.options ?? []).map((option) => <option value={option.value} key={option.value}>{option.name}</option>)}
                   </select>
-                  {/claude/i.test(member.agentKey) && <select
+                  {effortChoices.length > 0 && <select
                     className="group-effort-select"
                     value={effortValue}
-                    onChange={(event) => { void chooseClaudeEffort(member, event.target.value as ClaudeEffort) }}
+                    onChange={(event) => { void chooseEffort(member, event.target.value) }}
                     title={`Reasoning effort for ${member.label}`}
                     aria-label={`Reasoning effort for ${member.label}`}
                   >
-                    {CLAUDE_EFFORTS
-                      .filter((option) => !effort || effort.options.some((providerOption) => providerOption.value === option.value))
-                      .map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+                    {effortChoices.map((option) => <option value={option.value} key={option.value}>{option.name}</option>)}
                   </select>}
                   {members.length > 2 && <button type="button" className="btn-icon" onClick={() => {
                     void bridge.acp.disconnect(`${member.agentKey}::${member.threadId}`, projectId)
@@ -1138,38 +1155,38 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
         {group.task && <section className="group-task"><span>You · mission</span><p>{group.task}</p></section>}
 
         {(phase !== 'idle' || group.answers) && (
-          <GroupPair title="Independent scouts" members={members} values={currentAnswers} childThreads={childThreads} statuses={currentMemberStatuses} active={phase === 'answering'} />
+          <GroupPair title="Scouts" members={members} values={currentAnswers} childThreads={childThreads} statuses={currentMemberStatuses} active={phase === 'answering'} />
         )}
         {(negotiated || phase === 'negotiating' || phase === 'critiquing') && (
-          <GroupPair title="Role negotiation" members={members} values={currentNegotiations} childThreads={childThreads} statuses={currentMemberStatuses} active={phase === 'negotiating' || phase === 'critiquing'} compact />
+          <GroupPair title="Negotiation" members={members} values={currentNegotiations} childThreads={childThreads} statuses={currentMemberStatuses} active={phase === 'negotiating' || phase === 'critiquing'} compact />
         )}
         {(group.jointPlan || phase === 'assigning' || phase === 'synthesizing') && (
           <section className="group-final group-contract">
-            <header><Icon name="ClipboardList" size={14} /><strong>Role contract</strong><span>System receipt</span></header>
-            <p>{group.jointPlan || 'Coordinator is resolving ownership, interfaces, tests, and stop conditions…'}</p>
+            <header><Icon name="ClipboardList" size={14} /><strong>Role contract</strong></header>
+            <p>{group.jointPlan || 'Writing the role contract…'}</p>
           </section>
         )}
         {(group.worktrees || phase === 'executing' || group.executions) && (
           <section className="group-execution group-stage">
-            <h3>Isolated execution</h3>
+            <h3>Execution</h3>
             {members.map((member) => {
               const wt = group.worktrees?.[member.threadId]
               const files = group.changedFiles?.[member.threadId] ?? []
               return <article key={`exec:${member.threadId}`}>
                 <header><ProviderIcon provider={member.agentKey} name={member.label} size={14} /><strong>{member.label}</strong>{wt && <span className="group-branch">{wt.branch}</span>}<span className="group-member-status" data-status={currentMemberStatuses[member.threadId]}>{currentMemberStatuses[member.threadId]}</span></header>
-                <p tabIndex={0} aria-label={`${member.label} execution response; scroll to read the full response`}>{currentExecutions[member.threadId] || (phase === 'executing' ? 'Working in an isolated checkout…' : 'Awaiting execution')}</p>
+                <p tabIndex={0} aria-label={`${member.label} execution response; scroll to read the full response`}>{currentExecutions[member.threadId] || (phase === 'executing' ? 'Working…' : 'Awaiting execution')}</p>
                 {files.length > 0 && <small>{files.map((file) => file.path).join(' · ')}</small>}
               </article>
             })}
           </section>
         )}
         {(group.reviews || phase === 'reviewing') && (
-          <GroupPair title="Cross-review" members={members} values={currentReviews} childThreads={childThreads} statuses={currentMemberStatuses} active={phase === 'reviewing'} compact />
+          <GroupPair title="Review" members={members} values={currentReviews} childThreads={childThreads} statuses={currentMemberStatuses} active={phase === 'reviewing'} compact />
         )}
         {(phase === 'integrating' || finalText) && (
           <section className="group-final">
-            <header><Icon name="CheckCircle2" size={14} /><strong>Integrated result</strong><span>System receipt</span></header>
-            <p>{finalText || 'The integration owner is reconciling branches and running the shared acceptance tests…'}</p>
+            <header><Icon name="CheckCircle2" size={14} /><strong>Integrated</strong></header>
+            <p>{finalText || 'Integrating and running the acceptance tests…'}</p>
           </section>
         )}
       </div>
@@ -1179,15 +1196,15 @@ export const GroupAssistant = memo(function GroupAssistant({ threadId }: { threa
         {phase === 'idle' && <><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Give this group one mission…" aria-label="Mesh mission" rows={2} />{workspacePath
           ? <button type="button" className="group-primary" onClick={askBoth} disabled={!draft.trim()} title="Start independent scouting" aria-label="Start independent scouting"><Icon name="ArrowUp" size={15} /></button>
           : <button type="button" className="group-primary" onClick={() => { void chooseMeshWorkspace() }} title="Choose one project folder before starting Mesh" aria-label="Choose a project folder before starting Mesh"><Icon name="FolderOpen" size={15} /></button>}</>}
-        {phase === 'ready' && group.flow === 'guided' && <button type="button" className="group-action" onClick={negotiate}><Icon name="MessageSquarePlus" size={14} /> Continue to role negotiation</button>}
-        {(phase === 'plan-ready' || phase === 'review-ready') && group.flow === 'guided' && <button type="button" className="group-action" onClick={writeRoleContract}><Icon name="ClipboardList" size={14} /> Approve negotiation and write role contract</button>}
-        {phase === 'assigned' && <button type="button" className="group-action" onClick={() => void executeIsolated()} disabled={transitioning}><Icon name="GitBranch" size={14} /> Approve plan and create isolated worktrees</button>}
-        {phase === 'execution-ready' && (group.flow === 'guided' || !!group.error) && <button type="button" className="group-action" onClick={() => void crossReview()} disabled={transitioning}><Icon name="ScanSearch" size={14} /> {group.error ? 'Retry complete cross-review' : 'Cross-review implementations'}</button>}
-        {phase === 'merge-ready' && <button type="button" className="group-action" onClick={() => void integrate()} disabled={transitioning}><Icon name="GitMerge" size={14} /> Approve and integrate reviewed work</button>}
+        {phase === 'ready' && group.flow === 'guided' && <button type="button" className="group-action" onClick={negotiate}><Icon name="MessageSquarePlus" size={14} /> Negotiate roles</button>}
+        {(phase === 'plan-ready' || phase === 'review-ready') && group.flow === 'guided' && <button type="button" className="group-action" onClick={writeRoleContract}><Icon name="ClipboardList" size={14} /> Write role contract</button>}
+        {phase === 'assigned' && <button type="button" className="group-action" onClick={() => void executeIsolated()} disabled={transitioning}><Icon name="GitBranch" size={14} /> Approve plan · create worktrees</button>}
+        {phase === 'execution-ready' && (group.flow === 'guided' || !!group.error) && <button type="button" className="group-action" onClick={() => void crossReview()} disabled={transitioning}><Icon name="ScanSearch" size={14} /> {group.error ? 'Retry cross-review' : 'Cross-review'}</button>}
+        {phase === 'merge-ready' && <button type="button" className="group-action" onClick={() => void integrate()} disabled={transitioning}><Icon name="GitMerge" size={14} /> Integrate reviewed work</button>}
         {phase === 'done' && <button type="button" className="group-action" onClick={requestNewGroup}><Icon name="Plus" size={14} /> New Mesh</button>}
         {group.paused && <button type="button" className="group-action" onClick={() => { void continueStage() }} disabled={transitioning}><Icon name="Play" size={14} /> {transitioning ? 'Waiting for agents to stop…' : `Continue ${group.pausedPending?.length ? `${group.pausedPending.length} unfinished ${group.pausedPending.length === 1 ? 'agent' : 'agents'}` : 'stage'}`}</button>}
-        {fluidAdvancing && <span className="group-running" role="status" aria-live="polite"><span className="session-busy" /> Continuing safe analysis…</span>}
-        {(running || transitioning) && <span className="group-running" role="status" aria-live="polite"><span className="session-busy" /> {transitioning ? 'Preparing safe transition' : phaseLabel[phase]}…</span>}
+        {fluidAdvancing && <span className="group-running" role="status" aria-live="polite"><span className="session-busy" /> Continuing…</span>}
+        {(running || transitioning) && <span className="group-running" role="status" aria-live="polite"><span className="session-busy" /> {transitioning ? 'Preparing' : phaseLabel[phase]}…</span>}
         {running && <button type="button" className="group-stop" onClick={() => { void pauseStage() }} title="Stop all unfinished Mesh agents and keep this checkpoint"><Icon name="Square" size={11} /> Stop</button>}
       </footer>
 
