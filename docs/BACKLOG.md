@@ -6,4 +6,4 @@
 
 \- also maybe we add two buttons next to notifcations, (usage, little usage pop up, and theme change)
 
-\- also can we make it so I can add multiple s
+\- also can we make it so I can add multiple subscriptions of claude code?
