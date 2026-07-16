@@ -1,1 +1,3 @@
-\- lets make terminal text even small
+\- lets make terminal text even smaller if possible
+
+\-
