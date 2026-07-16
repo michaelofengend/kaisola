@@ -1011,12 +1011,79 @@
   max-width: 100%;
   min-width: 20%;
   margin: var(--sp-5) auto;
+  border-radius: var(--r-3);
+  cursor: grab;
+  outline: 2px solid transparent;
+  outline-offset: 3px;
+  transition: outline-color var(--dur-1) var(--ease-out);
 }
+.fx-md-image-shell:active { cursor: grabbing; }
+.fx-md-image-shell[data-selected],
+.fx-md-image-shell:focus-visible { outline-color: color-mix(in srgb, var(--accent) 72%, transparent); }
 .fx-md-image-shell > img {
   width: 100%;
   max-width: 100%;
   margin: 0;
 }
+.fx-md-image-grip {
+  position: absolute;
+  left: 50%;
+  top: -12px;
+  translate: -50% 0;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-1);
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 16px;
+  letter-spacing: -2px;
+  opacity: 0;
+  user-select: none;
+  pointer-events: none;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+.fx-md-image-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-1);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+.fx-md-image-action {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-1);
+  color: var(--text-2);
+  font: 600 15px/1 var(--font-ui);
+  cursor: pointer;
+  user-select: none;
+}
+.fx-md-image-action:hover,
+.fx-md-image-action:focus-visible { background: var(--bg-hover); color: var(--text-1); outline: none; }
+.fx-md-image-delete:hover,
+.fx-md-image-delete:focus-visible { color: var(--danger); }
+.fx-md-image-shell:hover .fx-md-image-grip,
+.fx-md-image-shell[data-selected] .fx-md-image-grip,
+.fx-md-image-shell:focus-within .fx-md-image-grip,
+.fx-md-image-shell:hover .fx-md-image-actions,
+.fx-md-image-shell[data-selected] .fx-md-image-actions,
+.fx-md-image-shell:focus-within .fx-md-image-actions { opacity: 1; }
+.fx-md-image-shell:hover .fx-md-image-actions,
+.fx-md-image-shell[data-selected] .fx-md-image-actions,
+.fx-md-image-shell:focus-within .fx-md-image-actions { pointer-events: auto; }
 .fx-md-image-resize {
   position: absolute;
   right: -5px;
@@ -1032,7 +1099,11 @@
   transition: opacity var(--dur-1) var(--ease-out);
 }
 .fx-md-image-shell:hover .fx-md-image-resize,
+.fx-md-image-shell[data-selected] .fx-md-image-resize,
 .fx-md-image-resize:focus-visible { opacity: .9; }
+.fx-doc-markdown[data-editing] [data-markdown-image-caret] {
+  min-height: 1.5em;
+}
 .fx-md-image-missing {
   display: flex;
   flex-direction: column;

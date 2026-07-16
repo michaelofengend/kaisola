@@ -173,8 +173,37 @@ function decorateEditableImage(image: HTMLImageElement) {
     shell.className = 'fx-md-image-shell'
     shell.dataset.markdownImageShell = 'true'
     shell.contentEditable = 'false'
+    shell.draggable = true
+    shell.tabIndex = 0
+    shell.setAttribute('role', 'group')
+    shell.setAttribute('aria-label', image.alt ? `Image: ${image.alt}` : 'Markdown image')
     image.replaceWith(shell)
     shell.append(image)
+    const grip = document.createElement('span')
+    grip.className = 'fx-md-image-grip'
+    grip.dataset.markdownImageGrip = 'true'
+    grip.setAttribute('aria-hidden', 'true')
+    grip.textContent = '⋮⋮'
+    shell.append(grip)
+    const actions = document.createElement('span')
+    actions.className = 'fx-md-image-actions'
+    actions.setAttribute('role', 'toolbar')
+    actions.setAttribute('aria-label', 'Image actions')
+    const action = (name: 'up' | 'down' | 'delete', label: string, glyph: string) => {
+      const control = document.createElement('span')
+      control.className = `fx-md-image-action fx-md-image-${name}`
+      control.dataset.markdownImageAction = name
+      control.setAttribute('role', 'button')
+      control.setAttribute('aria-label', label)
+      control.setAttribute('title', label)
+      control.tabIndex = 0
+      control.textContent = glyph
+      actions.append(control)
+    }
+    action('up', 'Move image earlier', '↑')
+    action('down', 'Move image later', '↓')
+    action('delete', 'Remove image from document', '×')
+    shell.append(actions)
     const handle = document.createElement('span')
     handle.className = 'fx-md-image-resize'
     handle.dataset.markdownImageResize = 'true'
@@ -186,6 +215,58 @@ function decorateEditableImage(image: HTMLImageElement) {
   }
   shell.style.width = `${width}%`
   shell.querySelector<HTMLElement>('[data-markdown-image-resize]')?.setAttribute('aria-valuenow', String(width))
+}
+
+const MARKDOWN_BLOCK_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, blockquote, pre, ul, ol, table, hr, div'
+
+function topLevelMarkdownBlock(node: Node, root: HTMLElement): HTMLElement | null {
+  let element = node instanceof HTMLElement ? node : node.parentElement
+  while (element?.parentElement && element.parentElement !== root) element = element.parentElement
+  return element?.parentElement === root ? element : null
+}
+
+function emptyCaretBlock() {
+  const paragraph = document.createElement('p')
+  paragraph.dataset.markdownImageCaret = 'true'
+  paragraph.append(document.createElement('br'))
+  return paragraph
+}
+
+function isImageOnlyBlock(block: HTMLElement) {
+  const clone = block.cloneNode(true) as HTMLElement
+  clone.querySelectorAll('[data-markdown-image-shell]').forEach((shell) => shell.remove())
+  return !clone.textContent?.trim() && !clone.querySelector('img, video, hr, table, ul, ol, pre, blockquote')
+}
+
+/** A contentEditable=false image at the start/end of a document can become an
+ *  unreachable island in Chromium. Keep real editable paragraphs on both sides
+ *  of every image-only block. These helpers are editor-only DOM; Turndown drops
+ *  empty paragraphs, so the document text and sanitizer contract stay intact. */
+function ensureImageCaretBlocks(root: HTMLElement) {
+  const imageBlocks = Array.from(root.querySelectorAll<HTMLElement>('[data-markdown-image-shell]'))
+    .map((shell) => topLevelMarkdownBlock(shell, root))
+    .filter((block): block is HTMLElement => !!block && isImageOnlyBlock(block))
+  for (const block of imageBlocks) {
+    const before = block.previousElementSibling as HTMLElement | null
+    const after = block.nextElementSibling as HTMLElement | null
+    if (!before || (before.matches(MARKDOWN_BLOCK_SELECTOR) && before.querySelector('[data-markdown-image-shell]') && isImageOnlyBlock(before))) {
+      block.before(emptyCaretBlock())
+    }
+    if (!after || (after.matches(MARKDOWN_BLOCK_SELECTOR) && after.querySelector('[data-markdown-image-shell]') && isImageOnlyBlock(after))) {
+      block.after(emptyCaretBlock())
+    }
+  }
+}
+
+function setCaretInBlock(block: HTMLElement, atEnd = false) {
+  const selection = window.getSelection()
+  if (!selection) return
+  block.focus?.()
+  const range = document.createRange()
+  range.selectNodeContents(block)
+  range.collapse(!atEnd)
+  selection.removeAllRanges()
+  selection.addRange(range)
 }
 
 function selectionBlock(node: Node | null, root: HTMLElement): MarkdownSelectionState['block'] {
@@ -222,6 +303,7 @@ async function hydrateEditableImages(root: HTMLElement, sourcePath?: string) {
     if (url) image.src = url
     else image.dataset.markdownHydrated = 'failed'
   }))
+  ensureImageCaretBlocks(root)
 }
 
 function EditableMarkdownSurface({
@@ -243,6 +325,8 @@ function EditableMarkdownSurface({
   const surfaceRef = useRef<HTMLElement>(null)
   const savedRange = useRef<Range | null>(null)
   const emittedText = useRef(text)
+  const imageDragRef = useRef<HTMLElement | null>(null)
+  const imageHistoryRef = useRef<{ undo: Array<{ before: string; after: string }>; redo: Array<{ before: string; after: string }> }>({ undo: [], redo: [] })
   const [selectionState, setSelectionState] = useState<MarkdownSelectionState>(EMPTY_MARKDOWN_SELECTION)
   const turndown = useMemo(() => {
     const service = new TurndownService({
@@ -305,6 +389,104 @@ function EditableMarkdownSurface({
     void hydrateEditableImages(surface, sourcePath)
   }, [onChange, sourcePath, turndown])
 
+  const selectImage = (shell: HTMLElement | null, focus = true) => {
+    const surface = surfaceRef.current
+    if (!surface) return
+    surface.querySelectorAll<HTMLElement>('[data-markdown-image-shell][data-selected]').forEach((selected) => delete selected.dataset.selected)
+    if (!shell) return
+    shell.dataset.selected = 'true'
+    if (focus) shell.focus({ preventScroll: true })
+  }
+
+  const applyImageHistory = (direction: 'undo' | 'redo') => {
+    const surface = surfaceRef.current
+    if (!surface) return false
+    const history = imageHistoryRef.current
+    const from = direction === 'undo' ? history.undo : history.redo
+    const to = direction === 'undo' ? history.redo : history.undo
+    const entry = from.pop()
+    if (!entry) return false
+    to.push(entry)
+    surface.innerHTML = direction === 'undo' ? entry.before : entry.after
+    void hydrateEditableImages(surface, sourcePath)
+    syncMarkdown()
+    surface.focus({ preventScroll: true })
+    return true
+  }
+
+  const commitImageMutation = (before: string) => {
+    const surface = surfaceRef.current
+    if (!surface) return
+    ensureImageCaretBlocks(surface)
+    const after = surface.innerHTML
+    if (before !== after) {
+      const history = imageHistoryRef.current
+      history.undo.push({ before, after })
+      if (history.undo.length > 30) history.undo.shift()
+      history.redo = []
+      syncMarkdown()
+    }
+  }
+
+  const editableImageBlock = (shell: HTMLElement, root: HTMLElement) => {
+    const block = topLevelMarkdownBlock(shell, root)
+    if (block && isImageOnlyBlock(block)) return block
+    const paragraph = document.createElement('p')
+    shell.before(paragraph)
+    paragraph.append(shell)
+    return paragraph
+  }
+
+  const meaningfulSibling = (block: HTMLElement, direction: 'up' | 'down') => {
+    let sibling = direction === 'up' ? block.previousElementSibling : block.nextElementSibling
+    while (sibling instanceof HTMLElement && sibling.dataset.markdownImageCaret === 'true') {
+      sibling = direction === 'up' ? sibling.previousElementSibling : sibling.nextElementSibling
+    }
+    return sibling instanceof HTMLElement ? sibling : null
+  }
+
+  const moveImage = (shell: HTMLElement, direction: 'up' | 'down') => {
+    const surface = surfaceRef.current
+    if (!surface) return
+    const before = surface.innerHTML
+    const block = editableImageBlock(shell, surface)
+    const sibling = meaningfulSibling(block, direction)
+    if (!sibling) return
+    if (direction === 'up') sibling.before(block)
+    else sibling.after(block)
+    selectImage(shell, false)
+    commitImageMutation(before)
+    shell.focus({ preventScroll: true })
+  }
+
+  const removeImage = (shell: HTMLElement) => {
+    const surface = surfaceRef.current
+    if (!surface) return
+    const before = surface.innerHTML
+    const block = topLevelMarkdownBlock(shell, surface)
+    const target = block && isImageOnlyBlock(block) ? block : shell
+    const caretTarget = (target.nextElementSibling ?? target.previousElementSibling) as HTMLElement | null
+    target.remove()
+    commitImageMutation(before)
+    if (caretTarget?.isConnected) setCaretInBlock(caretTarget, false)
+    else surface.focus({ preventScroll: true })
+  }
+
+  const focusAroundImage = (shell: HTMLElement, after: boolean) => {
+    const surface = surfaceRef.current
+    if (!surface) return
+    ensureImageCaretBlocks(surface)
+    const block = topLevelMarkdownBlock(shell, surface)
+    if (!block) return
+    let target = (after ? block.nextElementSibling : block.previousElementSibling) as HTMLElement | null
+    if (!target) {
+      target = emptyCaretBlock()
+      if (after) block.after(target)
+      else block.before(target)
+    }
+    setCaretInBlock(target, !after)
+  }
+
   const captureSelection = useCallback(() => {
     const surface = surfaceRef.current
     const selection = window.getSelection()
@@ -361,6 +543,8 @@ function EditableMarkdownSurface({
   }
 
   const runCommand = (command: string, value?: string) => {
+    if (command === 'undo' && applyImageHistory('undo')) return
+    if (command === 'redo' && applyImageHistory('redo')) return
     if (!restoreSelection()) return
     document.execCommand(command, false, value)
     syncMarkdown()
@@ -385,13 +569,17 @@ function EditableMarkdownSurface({
   }
 
   const startImageResize = (event: React.PointerEvent<HTMLElement>) => {
-    const handle = (event.target as HTMLElement).closest<HTMLElement>('[data-markdown-image-resize]')
+    const target = event.target as HTMLElement
+    const handle = target.closest<HTMLElement>('[data-markdown-image-resize]')
     const surface = surfaceRef.current
-    const shell = handle?.closest<HTMLElement>('[data-markdown-image-shell]')
+    const shell = target.closest<HTMLElement>('[data-markdown-image-shell]')
     const image = shell?.querySelector<HTMLImageElement>('img')
-    if (!handle || !surface || !shell || !image) return
+    if (!surface || !shell || !image) return
+    selectImage(shell, !handle)
+    if (!handle) return
     event.preventDefault()
     event.stopPropagation()
+    const before = surface.innerHTML
     const bounds = surface.getBoundingClientRect()
     const onMove = (move: PointerEvent) => {
       // Images are centered (`margin-inline: auto`), so the right handle sits
@@ -407,10 +595,121 @@ function EditableMarkdownSurface({
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
-      syncMarkdown()
+      window.removeEventListener('pointercancel', onUp)
+      commitImageMutation(before)
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp, { once: true })
+    window.addEventListener('pointercancel', onUp, { once: true })
+  }
+
+  const handleImageClick = (event: React.MouseEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement
+    const action = target.closest<HTMLElement>('[data-markdown-image-action]')
+    const shell = target.closest<HTMLElement>('[data-markdown-image-shell]')
+    if (!shell) {
+      selectImage(null, false)
+      return
+    }
+    selectImage(shell, !action)
+    if (!action) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (action.dataset.markdownImageAction === 'up') moveImage(shell, 'up')
+    if (action.dataset.markdownImageAction === 'down') moveImage(shell, 'down')
+    if (action.dataset.markdownImageAction === 'delete') removeImage(shell)
+  }
+
+  const handleImageDragStart = (event: React.DragEvent<HTMLElement>) => {
+    const shell = (event.target as HTMLElement).closest<HTMLElement>('[data-markdown-image-shell]')
+    if (!shell) return
+    imageDragRef.current = shell
+    selectImage(shell, false)
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('application/x-kaisola-markdown-image', 'move')
+  }
+
+  const handleImageDrop = (event: React.DragEvent<HTMLElement>) => {
+    const surface = surfaceRef.current
+    const shell = imageDragRef.current
+    if (!surface || !shell || !surface.contains(shell)) return
+    event.preventDefault()
+    event.stopPropagation()
+    const before = surface.innerHTML
+    const moving = editableImageBlock(shell, surface)
+    const range = document.caretRangeFromPoint?.(event.clientX, event.clientY) ?? null
+    const target = range && surface.contains(range.startContainer) ? topLevelMarkdownBlock(range.startContainer, surface) : null
+    if (target && target !== moving) {
+      const bounds = target.getBoundingClientRect()
+      if (event.clientY < bounds.top + bounds.height / 2) target.before(moving)
+      else target.after(moving)
+      selectImage(shell, false)
+      commitImageMutation(before)
+    }
+    imageDragRef.current = null
+  }
+
+  const handleEditableKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement
+    const shell = target.closest<HTMLElement>('[data-markdown-image-shell]')
+    const action = target.closest<HTMLElement>('[data-markdown-image-action]')
+    const resize = target.closest<HTMLElement>('[data-markdown-image-resize]')
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+      const applied = applyImageHistory(event.shiftKey ? 'redo' : 'undo')
+      if (applied) event.preventDefault()
+      return
+    }
+    if (action && shell && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault()
+      if (action.dataset.markdownImageAction === 'up') moveImage(shell, 'up')
+      if (action.dataset.markdownImageAction === 'down') moveImage(shell, 'down')
+      if (action.dataset.markdownImageAction === 'delete') removeImage(shell)
+      return
+    }
+    if (resize && shell && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      const surface = surfaceRef.current
+      const image = shell.querySelector<HTMLImageElement>('img')
+      if (!surface || !image) return
+      event.preventDefault()
+      const before = surface.innerHTML
+      const current = Number(resize.getAttribute('aria-valuenow')) || 100
+      const width = Math.min(100, Math.max(20, current + (event.key === 'ArrowRight' ? 5 : -5)))
+      shell.style.width = `${width}%`
+      resize.setAttribute('aria-valuenow', String(width))
+      const src = image.dataset.markdownSrc ?? image.getAttribute('src') ?? ''
+      if (src) image.dataset.markdownSrc = withMarkdownImageWidth(src, width)
+      commitImageMutation(before)
+      return
+    }
+    if (!shell) {
+      if (event.key !== 'Tab') return
+      event.preventDefault()
+      const selection = window.getSelection()
+      const inList = selection?.anchorNode && (selection.anchorNode instanceof Element ? selection.anchorNode : selection.anchorNode.parentElement)?.closest('li')
+      document.execCommand(inList ? (event.shiftKey ? 'outdent' : 'indent') : 'insertText', false, inList ? undefined : '  ')
+      imageHistoryRef.current = { undo: [], redo: [] }
+      syncMarkdown()
+      return
+    }
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      event.preventDefault()
+      removeImage(shell)
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      focusAroundImage(shell, !event.shiftKey)
+      return
+    }
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      focusAroundImage(shell, false)
+      return
+    }
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      event.preventDefault()
+      focusAroundImage(shell, true)
+    }
   }
 
   return (
@@ -475,19 +774,24 @@ function EditableMarkdownSurface({
         aria-label="Edit Markdown document"
         spellCheck
         dangerouslySetInnerHTML={{ __html: sanitizedMarkup.current }}
-        onInput={syncMarkdown}
+        onInput={() => {
+          imageHistoryRef.current = { undo: [], redo: [] }
+          syncMarkdown()
+        }}
         onPointerDown={startImageResize}
+        onClick={handleImageClick}
+        onDragStart={handleImageDragStart}
+        onDragOver={(event) => {
+          if (!imageDragRef.current) return
+          event.preventDefault()
+          event.dataTransfer.dropEffect = 'move'
+        }}
+        onDrop={handleImageDrop}
+        onDragEnd={() => { imageDragRef.current = null }}
         onPaste={onMediaPaste}
         onKeyUp={captureSelection}
         onMouseUp={captureSelection}
-        onKeyDown={(event) => {
-          if (event.key !== 'Tab') return
-          event.preventDefault()
-          const selection = window.getSelection()
-          const inList = selection?.anchorNode && (selection.anchorNode instanceof Element ? selection.anchorNode : selection.anchorNode.parentElement)?.closest('li')
-          document.execCommand(inList ? (event.shiftKey ? 'outdent' : 'indent') : 'insertText', false, inList ? undefined : '  ')
-          syncMarkdown()
-        }}
+        onKeyDown={handleEditableKeyDown}
       />
     </>
   )
