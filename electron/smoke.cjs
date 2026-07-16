@@ -209,9 +209,12 @@ app.whenReady().then(async () => {
     // Utilities stay in the navigation footer; the two structural switches
     // stay in one stable top-right group.
     sidebarFooter: !!document.querySelector('.session-sidebar > .shell-sidebar-footer'),
-    topViewControls: document.querySelectorAll('.tabstrip-view-controls > button').length === 2 &&
-      !!document.querySelector('.tabstrip-view-controls [aria-label="Hide file tree"]') &&
-      !!document.querySelector('.tabstrip-view-controls [aria-label="Hide file preview"]'),
+    topViewControls: (() => {
+      const controls = [...document.querySelectorAll('.tabstrip-view-controls > button')]
+      return controls.length === 2 &&
+        controls[0]?.getAttribute('aria-label') === 'Hide file preview' &&
+        controls[1]?.getAttribute('aria-label') === 'Hide file tree'
+    })(),
   }))()`)
   // A footer remount (layout/tab-layout switches) refetches the real auth
   // status and drops this injected profile, so profile-menu sections below
@@ -1618,9 +1621,9 @@ a^2 + b^2 = c^2
       return node ? getComputedStyle(node).getPropertyValue('-webkit-app-region').trim() : ''
     }
     const compactFileChrome =
-      document.querySelectorAll('.fx-file-chrome .fx-toolbar').length === 2 &&
+      document.querySelectorAll('.fx-file-chrome .fx-toolbar').length === 1 &&
       !!document.querySelector('.fx-toolbar-main .fx-tabs-inline') &&
-      !!document.querySelector('.fx-toolbar-sub') &&
+      !document.querySelector('.fx-toolbar-sub') &&
       !document.querySelector('.fx-tabs:not(.fx-tabs-inline)') &&
       !document.querySelector('.fx-bar') &&
       !document.querySelector('.fx-latexwrap')
@@ -3872,7 +3875,35 @@ a^2 + b^2 = c^2
   })()`)
   console.log('MANUAL_CODEX=' + JSON.stringify(manualCodex))
 
+  // Idle durable CLI sessions can be restarted in place. This is the generic
+  // theme-refresh path for a TUI that cached its old appearance; the exact
+  // resume boot and unsent draft survive the PTY replacement.
+  const restartAgent = await win.webContents.executeJavaScript(`(async () => {
+    const g = () => window.__kaisola.getState()
+    g().requestTerminal('sleep 30', { name: 'Restart action probe', singletonKey: 'agent:restart-action-probe', restart: true })
+    await new Promise((resolve) => setTimeout(resolve, 1100))
+    const t = g().terminals.find((candidate) => candidate.singletonKey === 'agent:restart-action-probe')
+    if (!t) return { created: false }
+    g().setTermDraft(t.id, 'draft survives restart')
+    const before = g().termRemounts[t.id] ?? 0
+    const restarted = await g().restartTerminal(t.id, g().activeProjectId)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    const current = g().terminals.find((candidate) => candidate.id === t.id)
+    const result = {
+      created: true,
+      restarted,
+      remounted: (g().termRemounts[t.id] ?? 0) === before + 1,
+      resumeKept: current?.restart === true && current?.boot === 'sleep 30',
+      draftKept: g().termDrafts[t.id] === 'draft survives restart',
+    }
+    g().closeTerminal(t.id)
+    await window.kaisola.terminal.kill(t.id, g().activeProjectId).catch(() => ({ ok: false }))
+    return result
+  })()`)
+  console.log('RESTART_AGENT=' + JSON.stringify(restartAgent))
+
   const failed =
+    !restartAgent.created || !restartAgent.restarted || !restartAgent.remounted || !restartAgent.resumeKept || !restartAgent.draftKept ||
     !manualCodex.upgraded || !manualCodex.exact || !manualCodex.draftKept || !manualCodex.downgraded ||
     !manualClaude.upgraded || !manualClaude.draftKept || !manualClaude.toolKept || !manualClaude.downgraded ||
     !rootChildren || !minimalShell.noWorkflowSidebar || !minimalShell.splitSidebarsDefault || !minimalShell.hasSessions || !minimalShell.railFilesOnly || !minimalShell.hasEmptyLauncher || !minimalShell.stageFiles || !minimalShell.studioDefault || !minimalShell.sidebarFooter || !minimalShell.topViewControls || !accountUi.avatar || !accountUi.headshot || !accountUi.menu || !accountUi.usageInMenu || !accountUi.settingsInMenu || !accountUi.usageOpened || !accountUi.avatarOnly || !accountUi.bottomLeft || !accountUi.menuAbove || !accountUi.menuFits || !accountUi.aligned || !claudeOptIn || !nativeWindow.rendererClippedMaterial || !icon.exists || !icon.usable || !icon.square || !icon.large || !glass.appSamplingLayer || !glass.chromeGlass || !glass.activeTintWhite || !glass.railLayerFlattened || !glass.contentGlassy || !glass.sessionGlassy || !glass.termGlassTint || !glass.blurKeepsGlass || !glass.lightsGray || !glass.nativeWindowRounding ||

@@ -88,6 +88,7 @@ export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orien
   }, [activeProjectId, closedStack, forgetClosedSession])
   const renameThread = useKaisola((s) => s.renameAssistantThread)
   const renameTerminal = useKaisola((s) => s.renameTerminal)
+  const restartTerminal = useKaisola((s) => s.restartTerminal)
   const togglePinSession = useKaisola((s) => s.togglePinSession)
   const saveSessionTemplate = useKaisola((s) => s.saveSessionTemplate)
   const createSessionGroup = useKaisola((s) => s.createSessionGroup)
@@ -301,6 +302,7 @@ export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orien
   }
 
   const menuTab = menu ? tabs.get(menu.id) : undefined
+  const menuTerminal = menu ? terminals.find((terminal) => terminal.id === menu.id) : undefined
   const menuPorts = menu ? terminalMeta[menu.id]?.ports ?? [] : []
   const normalizedFilter = filter.trim().toLocaleLowerCase()
   const orderedTabs = order.flatMap((id) => {
@@ -536,13 +538,25 @@ export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orien
                   </button>
                 ))}
                 {menuTab.kind === 'term' && (
-                  <button
-                    type="button"
-                    className="tree-menu-item"
-                    onClick={() => { popOutTerminal(menuTab.id, menuTab.label, menuTab.hue); setMenu(null) }}
-                  >
-                    <Icon name="PictureInPicture2" size={13} /> Open in its own window
-                  </button>
+                  <>
+                    {menuTerminal?.restart && menuTerminal.boot && (
+                      <button
+                        type="button"
+                        className="tree-menu-item"
+                        title="Refresh this CLI's appearance and resume the same durable session"
+                        onClick={() => { void restartTerminal(menuTab.id, activeProjectId); setMenu(null) }}
+                      >
+                        <Icon name="RotateCw" size={13} /> Restart &amp; resume agent
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="tree-menu-item"
+                      onClick={() => { popOutTerminal(menuTab.id, menuTab.label, menuTab.hue); setMenu(null) }}
+                    >
+                      <Icon name="PictureInPicture2" size={13} /> Open in its own window
+                    </button>
+                  </>
                 )}
               </>
             )}
@@ -563,7 +577,16 @@ export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orien
 export function SessionSidebar() {
   const setTabLayout = useKaisola((s) => s.setTabLayout)
   const setSessionRailWidth = useKaisola((s) => s.setSessionRailWidth)
+  const sessionCount = useKaisola((s) =>
+    s.assistantThreads.reduce((count, thread) => count + (thread.groupParentId ? 0 : 1), 0)
+      + s.terminals.length
+      + s.agentTerminals.length
+      + s.panels.length,
+  )
   const [filter, setFilter] = useState('')
+  useEffect(() => {
+    if (sessionCount <= 20 && filter) setFilter('')
+  }, [filter, sessionCount])
   const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault()
     const handle = event.currentTarget
@@ -591,18 +614,20 @@ export function SessionSidebar() {
           <Icon name="PanelTop" size={13} />
         </button>
       </div>
-      <label className="session-filter">
-        <Icon name="Search" size={12} />
-        <input
-          value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-          onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); setFilter('') } }}
-          placeholder="Filter sessions"
-          aria-label="Filter sessions"
-          spellCheck={false}
-        />
-        {filter && <button type="button" onClick={() => setFilter('')} aria-label="Clear session filter" title="Clear"><Icon name="X" size={11} /></button>}
-      </label>
+      {sessionCount > 20 && (
+        <label className="session-filter">
+          <Icon name="Search" size={12} />
+          <input
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); setFilter('') } }}
+            placeholder="Filter sessions"
+            aria-label="Filter sessions"
+            spellCheck={false}
+          />
+          {filter && <button type="button" onClick={() => setFilter('')} aria-label="Clear session filter" title="Clear"><Icon name="X" size={11} /></button>}
+        </label>
+      )}
       <SessionTabs orientation="vertical" filter={filter} />
       <ShellSidebarFooter />
       <div

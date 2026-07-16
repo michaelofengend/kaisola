@@ -120,6 +120,29 @@ app.whenReady().then(async () => {
     const surface = document.querySelector('.fx-doc-markdown[data-editing] .fx-doc-page')
     const validImageCount = () => [...surface.querySelectorAll('[data-markdown-image-shell]')].filter((shell) => shell.querySelector('img')?.dataset.markdownSrc).length
     const first = surface.querySelector('[data-markdown-image-shell]')
+    const middle = [...surface.children].find((node) => node.textContent?.includes('Middle block.'))
+    const transfer = new DataTransfer()
+    const middleRect = middle.getBoundingClientRect()
+    first.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: transfer }))
+    surface.dispatchEvent(new DragEvent('dragover', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+      clientX: middleRect.left + Math.min(20, middleRect.width / 2),
+      clientY: middleRect.bottom - 1,
+    }))
+    const dragMarker = !!surface.querySelector('[data-markdown-image-drop]')
+    surface.dispatchEvent(new DragEvent('drop', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+      clientX: middleRect.left + Math.min(20, middleRect.width / 2),
+      clientY: middleRect.bottom - 1,
+    }))
+    const firstBlockAfterDrop = first.closest('p')
+    const childrenAfterDrop = [...surface.children]
+    const dragged = childrenAfterDrop.indexOf(middle) < childrenAfterDrop.indexOf(firstBlockAfterDrop) &&
+      !surface.querySelector('[data-markdown-image-drop]')
     first.click()
     const selected = first.dataset.selected === 'true'
     const resize = first.querySelector('[data-markdown-image-resize]')
@@ -147,7 +170,7 @@ app.whenReady().then(async () => {
     document.execCommand('insertText', false, 'Text before image.')
     surface.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'Text before image.' }))
     restored.querySelector('[data-markdown-image-action="delete"]').click()
-    return { selected, resized, moved, deleted, undone, redone, textBelow: surface.textContent.includes('Text below image.'), textBefore: surface.textContent.includes('Text before image.'), finalImageCount: validImageCount() }
+    return { dragMarker, dragged, selected, resized, moved, deleted, undone, redone, textBelow: surface.textContent.includes('Text below image.'), textBefore: surface.textContent.includes('Text before image.'), finalImageCount: validImageCount() }
   })()`) : null
 
   await wait(100)
@@ -177,6 +200,7 @@ app.whenReady().then(async () => {
     twoSafeImages: initial?.imageCount === 2,
     selectionControls: initial?.selectable === true && initial?.actions === true && interactions?.selected === true,
     trailingCaret: initial?.beforeCaret === true && initial?.afterCaret === true,
+    cursorDrag: interactions?.dragMarker === true && interactions?.dragged === true,
     resized: interactions?.resized === true,
     moved: interactions?.moved === true,
     deleteUndoRedo: interactions?.deleted === true && interactions?.undone === true && interactions?.redone === true,

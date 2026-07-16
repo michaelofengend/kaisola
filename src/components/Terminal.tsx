@@ -308,9 +308,11 @@ export function Terminal({ id, attach = false, boot, cwd, projectId: projectIdOv
       preserveTerminalViewport(term, () => {
         term.options.allowTransparency = false // opaque in both modes — no transparent-WebGL per-frame compose
         term.options.theme = xtermTheme(theme, ecoMode, termCursorColor, termBackground)
+        term.refresh(0, Math.max(0, term.rows - 1))
+        void bridge.terminal.resize(id, term.cols, term.rows, projectId).catch(() => {})
       })
     } catch { /* renderer mid-rebuild */ }
-  }, [theme, ecoMode, termCursorColor, termBackground])
+  }, [theme, ecoMode, termCursorColor, termBackground, id, projectId])
 
   // a card being put away / brought back: replay buffered output, and stop the
   // cursor-blink render loop while nobody can see it

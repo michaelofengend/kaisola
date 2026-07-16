@@ -6,9 +6,12 @@ export const everMountedTerminals = new Set<string>()
 
 /** Hidden xterms kept warm for instant back-switches. Everything beyond this
  * small LRU is unmounted; its pty keeps running with disk-backed scrollback. */
+export const defaultHiddenTerminalResidentCap = (mode: 'glass' | 'eco' = 'eco') =>
+  mode === 'eco' ? 2 : 4
+
 export const hiddenTerminalResidentCap = (mode: 'glass' | 'eco' = 'eco') => {
   const saved = localStorage.getItem('kaisola:hidden-terminal-residents')
-  const fallback = mode === 'eco' ? 0 : 1
+  const fallback = defaultHiddenTerminalResidentCap(mode)
   const n = Number(saved ?? fallback)
   return Number.isFinite(n) ? Math.min(8, Math.max(0, Math.round(n))) : fallback
 }

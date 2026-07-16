@@ -653,6 +653,11 @@
   transition: color var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out);
 }
 .inbox-btn:hover { color: var(--text-0); background: var(--hover-overlay); }
+.inbox-btn > svg {
+  /* Lucide's bell includes a low clapper, so geometric centering reads visibly
+     lower than the neighbouring search glyph. Optical alignment wins. */
+  transform: translateY(-0.5px);
+}
 .inbox-count {
   position: absolute;
   top: 1px;
@@ -738,9 +743,13 @@
 }
 .shell-sidebar-footer-tools .btn-icon,
 .shell-sidebar-footer-tools > .btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 28px;
   height: 28px;
   flex: 0 0 28px;
+  line-height: 0;
 }
 .shell-sidebar-footer-tools > button,
 .shell-sidebar-footer-tools > .inbox-wrap {

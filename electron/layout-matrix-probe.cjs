@@ -155,6 +155,24 @@ app.whenReady().then(async () => {
     const body = document.querySelector('.assistant:not(.group-workers .assistant) .assistant-turn.turn-condensed .turn-text')
     return !!body && body.clientHeight <= 48 && body.scrollHeight > body.clientHeight && getComputedStyle(body).overflowY === 'auto'
   })()`)
+  const sessionFilterPolicy = await win.webContents.executeJavaScript(`(async () => {
+    const state = window.__kaisola.getState()
+    const original = state.terminals
+    const visibleThreads = state.assistantThreads.filter((thread) => !thread.groupParentId).length
+    const count = visibleThreads + state.terminals.length + state.agentTerminals.length + state.panels.length
+    const hiddenAtTwentyOrLess = count <= 20 && !document.querySelector('.session-filter')
+    const extras = Array.from({ length: Math.max(0, 21 - count) }, (_, index) => ({
+      id: 'filter-policy-' + index,
+      name: 'Filter policy ' + index,
+      cwd: state.workspacePath,
+    }))
+    window.__kaisola.setState({ terminals: [...original, ...extras] })
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    const shownAboveTwenty = !!document.querySelector('.session-filter [aria-label="Filter sessions"]')
+    window.__kaisola.setState({ terminals: original })
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    return { hiddenAtTwentyOrLess, shownAboveTwenty }
+  })()`)
   const sessionDrag = await win.webContents.executeJavaScript(`(() => {
     const known = ${JSON.stringify(initialLayoutPolicy.ids)}
     const source = document.querySelector('.stab[data-sid="' + known[known.length - 1] + '"]')
@@ -227,7 +245,7 @@ app.whenReady().then(async () => {
     const page = root?.querySelector('.fx-doc-page')
     if (!root || !page) return false
     page.focus()
-    return !getComputedStyle(page).boxShadow.includes('inset') &&
+    return getComputedStyle(page).boxShadow === 'none' &&
       !!root.querySelector('.fx-md-toolbar[role="toolbar"]') &&
       !!root.querySelector('.fx-md-toolbar [aria-label="Bold"]')
   })()`)
@@ -298,9 +316,20 @@ app.whenReady().then(async () => {
     // Guaranteed row: search, inbox, avatar. The usage gauge only joins when a
     // subscription window needs attention, and the gear now lives in the
     // profile menu.
-    if (!footer || controls.length < 3 || footer.querySelector('.app-account-name')) return false
+    if (!footer || controls.length < 3 || footer.querySelector('.app-account-name')) return { ok: false, reason: 'missing footer controls' }
     const tops = controls.map((control) => Math.round(control.getBoundingClientRect().top))
-    return Math.max(...tops) - Math.min(...tops) <= 2
+    const searchIcon = footer.querySelector('[aria-label="Open command palette"] svg')
+    const bellIcon = footer.querySelector('.inbox-btn svg')
+    const glyphDelta = searchIcon && bellIcon
+      ? Math.abs(searchIcon.getBoundingClientRect().top - bellIcon.getBoundingClientRect().top)
+      : Infinity
+    return {
+      ok: Math.max(...tops) - Math.min(...tops) <= 2 && glyphDelta <= 0.75,
+      tops,
+      glyphDelta,
+      searchTop: searchIcon?.getBoundingClientRect().top,
+      bellTop: bellIcon?.getBoundingClientRect().top,
+    }
   })()`)
   await win.webContents.executeJavaScript(`(() => {
     window.confirm = () => true
@@ -319,7 +348,7 @@ app.whenReady().then(async () => {
   const mediumChromeFits = await win.webContents.executeJavaScript(`(() => {
     const rows = [...document.querySelectorAll('.fx-file-chrome .fx-toolbar')]
     const inactiveTabs = [...document.querySelectorAll('.fx-tabs-inline .fx-tab:not([data-active="true"])')]
-    return rows.length === 2 && rows.every((row) => row.scrollWidth <= row.clientWidth + 1) &&
+    return rows.length === 1 && rows.every((row) => row.scrollWidth <= row.clientWidth + 1) &&
       inactiveTabs.every((tab) => getComputedStyle(tab).display === 'none')
   })()`)
 
@@ -360,6 +389,7 @@ app.whenReady().then(async () => {
   const result = {
     wide,
     condensedChat,
+    sessionFilterPolicy,
     initialLayoutPolicy,
     sessionDrag,
     cardLayoutControls,
@@ -392,6 +422,8 @@ app.whenReady().then(async () => {
   const passed = layoutsOk
     && wide.cardCount >= 5
     && condensedChat
+    && sessionFilterPolicy.hiddenAtTwentyOrLess
+    && sessionFilterPolicy.shownAboveTwenty
     && initialLayoutPolicy.stackedPair
     && sessionDrag.ok
     && cardLayoutControls.maximizeStarted
@@ -410,7 +442,7 @@ app.whenReady().then(async () => {
     && settingsGeneral
     && accountOpened
     && accountClosed
-    && footerSingleRow
+    && footerSingleRow.ok
     && signOutRestartsOnboarding
     && mediumChromeFits
     && terminalUsesWorkspace

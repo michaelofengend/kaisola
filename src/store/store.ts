@@ -1176,6 +1176,8 @@ interface KaisolaState {
   setTerminalMeta: (id: string, patch: TerminalMeta) => void
   /** Persist the exact CLI-agent resume command used after restarts/updates. */
   setTerminalResume: (id: string, boot: string) => void
+  /** Restart an idle durable CLI session using its exact persisted resume line. */
+  restartTerminal: (id: string, projectId?: string) => Promise<boolean>
   setTermDraft: (id: string, text: string) => void
   popOutTerminal: (id: string, title?: string, hue?: string) => void
   restorePoppedTerminal: (id: string) => void
@@ -3045,6 +3047,49 @@ export const useKaisola = create<KaisolaState>()(
         terminals: s.terminals.map((terminal) => terminal.id === id ? { ...terminal, restart: true, boot } : terminal),
       }
     })
+  },
+  restartTerminal: async (id, projectId) => {
+    const state = get()
+    const owner = projectId ?? terminalOwnerMap(state)[id] ?? state.activeProjectId
+    const slice = owner === state.activeProjectId ? state : state.projectSlices[owner]
+    const terminal = slice?.terminals.find((candidate) => candidate.id === id)
+    if (!terminal?.restart || !terminal.boot) {
+      state.pushToast('info', 'This terminal has no durable agent session to resume.')
+      return false
+    }
+    if (poppedTerms.has(id)) {
+      state.pushToast('info', 'Bring the detached terminal back before restarting it.')
+      return false
+    }
+    if (state.terminalMeta[id]?.agentBusy) {
+      state.pushToast('warn', 'Wait for the agent’s current turn to finish before restarting it.')
+      return false
+    }
+
+    // Cross the durability boundary before releasing the PTY. The terminal
+    // record already contains the exact resume command, and any composer draft
+    // remains in termDrafts for Terminal's quiet-time retype after remount.
+    flushPersistSync()
+    const result = await bridge.terminal.kill(id, owner).catch(() => ({ ok: false }))
+    if (!result.ok) {
+      get().pushToast('error', 'The terminal could not be restarted; its current session is still available.')
+      return false
+    }
+    set((current) => ({
+      terminalMeta: {
+        ...current.terminalMeta,
+        [id]: {
+          ...current.terminalMeta[id],
+          running: false,
+          fgProcess: null,
+          agentBusy: false,
+          lastExit: null,
+        },
+      },
+      termRemounts: { ...current.termRemounts, [id]: (current.termRemounts[id] ?? 0) + 1 },
+    }))
+    get().pushToast('success', 'Agent terminal restarted and resumed. Its appearance now matches the current theme.')
+    return true
   },
   setTerminalMeta: (id, patch) => {
     if (id === POP_TERMINAL_ID) queuePopTerminalMirror({ meta: patch })

@@ -351,22 +351,22 @@ function ViewControls() {
   return (
     <div className="tabstrip-view-controls" role="group" aria-label="Workspace panels">
       <button type="button"
-        data-active={treeVisible || undefined}
-        aria-pressed={treeVisible}
-        aria-label={treeVisible ? 'Hide file tree' : 'Show file tree'}
-        title={`${treeVisible ? 'Hide' : 'Show'} file tree  ⌘B`}
-        onClick={toggleTree}
-      >
-        <Icon name={treeVisible ? 'PanelLeftClose' : 'PanelLeftOpen'} size={15} />
-      </button>
-      <button type="button"
         data-active={previewVisible || undefined}
         aria-pressed={previewVisible}
         aria-label={previewVisible ? 'Hide file preview' : 'Show file preview'}
         title={`${previewVisible ? 'Hide' : 'Show'} file preview  ⌘.`}
         onClick={togglePreview}
       >
-        <Icon name={previewVisible ? 'PanelRightClose' : 'PanelRightOpen'} size={15} />
+        <Icon name="FileText" size={15} />
+      </button>
+      <button type="button"
+        data-active={treeVisible || undefined}
+        aria-pressed={treeVisible}
+        aria-label={treeVisible ? 'Hide file tree' : 'Show file tree'}
+        title={`${treeVisible ? 'Hide' : 'Show'} file tree  ⌘B`}
+        onClick={toggleTree}
+      >
+        <Icon name="FolderTree" size={15} />
       </button>
     </div>
   )

@@ -12,6 +12,7 @@ import { UsageSettings } from './shell/LimitsButton'
 import { openExtensionsCenter } from '../lib/extensions'
 import { useModalFocus } from '../lib/useModalFocus'
 import { signOutToOnboarding } from '../lib/signOut'
+import { defaultHiddenTerminalResidentCap } from '../lib/terminalResidency'
 
 // Current Claude models (for the direct API path). Checked 2026-07-09.
 const CLAUDE_MODELS = [
@@ -398,8 +399,9 @@ export function Settings() {
   }, [open, setOpen])
   useModalFocus(open, panelRef)
   const [hiddenResidents, setHiddenResidents] = useState(() => {
-    const value = Number(localStorage.getItem('kaisola:hidden-terminal-residents') ?? 0)
-    return Number.isFinite(value) ? Math.min(8, Math.max(0, Math.round(value))) : 0
+    const fallback = defaultHiddenTerminalResidentCap(perfMode)
+    const value = Number(localStorage.getItem('kaisola:hidden-terminal-residents') ?? fallback)
+    return Number.isFinite(value) ? Math.min(8, Math.max(0, Math.round(value))) : fallback
   })
 
   // custom-agent form (hidden until "Custom…")
@@ -1193,10 +1195,10 @@ export function Settings() {
                       ariaLabel="Hidden terminal renderers"
                       value={String(hiddenResidents)}
                       options={[
-                        { value: '0', name: 'Disk only', description: 'Lowest memory; reconstruct hidden terminal views from disk' },
+                        { value: '0', name: 'Disk only', description: 'Lowest memory; rebuild hidden terminal views from disk' },
                         { value: '1', name: 'Keep 1 warm', description: 'Faster recent-tab switching' },
-                        { value: '2', name: 'Keep 2 warm', description: 'More memory, two instant terminal views' },
-                        { value: '4', name: 'Keep 4 warm', description: 'Highest memory; useful on large-memory Macs' },
+                        { value: '2', name: 'Keep 2 warm', description: 'Balanced default; two instant terminal views' },
+                        { value: '4', name: 'Keep 4 warm', description: 'Fastest switching; useful on large-memory Macs' },
                       ]}
                       onSelect={(value) => {
                         const count = Number(value)
@@ -1216,7 +1218,7 @@ export function Settings() {
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => void openConfigFile('keymap')}><Icon name="Keyboard" size={12} /> keymap.json</button>
                   </div>
                 </div>
-                <p className="settings-note">Disk only is the default. Running terminals, agent processes, drafts, scrollback, and histories continue; only invisible renderer canvases are released.</p>
+                <p className="settings-note">Eco keeps two recent terminal views warm by default; Glass keeps four. Hidden PTYs, drafts, scrollback, and histories stay disk-backed, and invisible views do not paint.</p>
               </>
             )}
 

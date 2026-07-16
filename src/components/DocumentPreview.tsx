@@ -326,6 +326,7 @@ function EditableMarkdownSurface({
   const savedRange = useRef<Range | null>(null)
   const emittedText = useRef(text)
   const imageDragRef = useRef<HTMLElement | null>(null)
+  const imageDropRef = useRef<HTMLElement | null>(null)
   const imageHistoryRef = useRef<{ undo: Array<{ before: string; after: string }>; redo: Array<{ before: string; after: string }> }>({ undo: [], redo: [] })
   const [selectionState, setSelectionState] = useState<MarkdownSelectionState>(EMPTY_MARKDOWN_SELECTION)
   const turndown = useMemo(() => {
@@ -623,29 +624,70 @@ function EditableMarkdownSurface({
   const handleImageDragStart = (event: React.DragEvent<HTMLElement>) => {
     const shell = (event.target as HTMLElement).closest<HTMLElement>('[data-markdown-image-shell]')
     if (!shell) return
+    imageDropRef.current?.remove()
+    imageDropRef.current = null
     imageDragRef.current = shell
     selectImage(shell, false)
     event.dataTransfer.effectAllowed = 'move'
     event.dataTransfer.setData('application/x-kaisola-markdown-image', 'move')
   }
 
-  const handleImageDrop = (event: React.DragEvent<HTMLElement>) => {
+  const clearImageDropTarget = () => {
+    imageDropRef.current?.remove()
+    imageDropRef.current = null
+  }
+
+  const handleImageDragOver = (event: React.DragEvent<HTMLElement>) => {
     const surface = surfaceRef.current
     const shell = imageDragRef.current
     if (!surface || !shell || !surface.contains(shell)) return
     event.preventDefault()
-    event.stopPropagation()
-    const before = surface.innerHTML
-    const moving = editableImageBlock(shell, surface)
+    event.dataTransfer.dropEffect = 'move'
     const range = document.caretRangeFromPoint?.(event.clientX, event.clientY) ?? null
-    const target = range && surface.contains(range.startContainer) ? topLevelMarkdownBlock(range.startContainer, surface) : null
-    if (target && target !== moving) {
-      const bounds = target.getBoundingClientRect()
-      if (event.clientY < bounds.top + bounds.height / 2) target.before(moving)
-      else target.after(moving)
+    const target = range && surface.contains(range.startContainer)
+      ? topLevelMarkdownBlock(range.startContainer, surface)
+      : null
+    const moving = topLevelMarkdownBlock(shell, surface)
+    if (!target || target === moving) {
+      clearImageDropTarget()
+      return
+    }
+    if (target === imageDropRef.current || target.dataset.markdownImageDrop === 'true') return
+    const before = event.clientY < target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2
+    let marker = imageDropRef.current
+    if (!marker) {
+      marker = document.createElement('span')
+      marker.className = 'fx-md-image-drop'
+      marker.dataset.markdownImageDrop = 'true'
+      marker.contentEditable = 'false'
+      marker.setAttribute('aria-hidden', 'true')
+      imageDropRef.current = marker
+    }
+    if (before) target.before(marker)
+    else target.after(marker)
+  }
+
+  const handleImageDrop = (event: React.DragEvent<HTMLElement>) => {
+    const surface = surfaceRef.current
+    const shell = imageDragRef.current
+    const marker = imageDropRef.current
+    if (!surface || !shell || !surface.contains(shell)) {
+      clearImageDropTarget()
+      imageDragRef.current = null
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    const cleanSnapshot = surface.cloneNode(true) as HTMLElement
+    cleanSnapshot.querySelectorAll('[data-markdown-image-drop]').forEach((node) => node.remove())
+    const before = cleanSnapshot.innerHTML
+    const moving = editableImageBlock(shell, surface)
+    if (marker?.isConnected) {
+      marker.replaceWith(moving)
       selectImage(shell, false)
       commitImageMutation(before)
     }
+    clearImageDropTarget()
     imageDragRef.current = null
   }
 
@@ -781,13 +823,12 @@ function EditableMarkdownSurface({
         onPointerDown={startImageResize}
         onClick={handleImageClick}
         onDragStart={handleImageDragStart}
-        onDragOver={(event) => {
-          if (!imageDragRef.current) return
-          event.preventDefault()
-          event.dataTransfer.dropEffect = 'move'
-        }}
+        onDragOver={handleImageDragOver}
         onDrop={handleImageDrop}
-        onDragEnd={() => { imageDragRef.current = null }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node)) clearImageDropTarget()
+        }}
+        onDragEnd={() => { clearImageDropTarget(); imageDragRef.current = null }}
         onPaste={onMediaPaste}
         onKeyUp={captureSelection}
         onMouseUp={captureSelection}

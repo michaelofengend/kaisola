@@ -1476,22 +1476,6 @@ export function FilesView() {
             {searchBox}
             {tabStrip}
             <span className="grow" />
-            {latexMode && isDesktop && workspacePath ? (
-              <LatexBar inline />
-            ) : isDesktop && workspacePath ? (
-              <button type="button"
-                className="btn btn-sm fx-changes-chip"
-                data-active={latexMode}
-                onClick={() => setLatexMode(!latexMode)}
-                title="LaTeX mode — build the paper, inspect PDFs"
-              >
-                <Icon name="Sigma" size={13} />
-                LaTeX
-              </button>
-            ) : null}
-          </div>
-          <div className="fx-toolbar fx-toolbar-sub">
-            <span className="grow" />
             {activeActions}
             {changes !== null && (
               <div className="fx-changes-wrap">
@@ -1561,6 +1545,19 @@ export function FilesView() {
             <button type="button" className="btn btn-sm fx-toolbar-icon" onClick={openFolder} title={workspacePath} aria-label="Open another project folder">
               <Icon name="FolderOpen" size={13} />
             </button>
+            {latexMode && isDesktop && workspacePath ? (
+              <LatexBar inline />
+            ) : isDesktop && workspacePath ? (
+              <button type="button"
+                className="btn btn-sm fx-changes-chip fx-latex-mode"
+                data-active={latexMode}
+                onClick={() => setLatexMode(!latexMode)}
+                title="LaTeX mode — build the paper, inspect PDFs"
+              >
+                <Icon name="Sigma" size={13} />
+                <span>LaTeX</span>
+              </button>
+            ) : null}
           </div>
         </div>
 
