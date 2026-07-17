@@ -384,6 +384,10 @@ export interface TermSnapshot {
   continuation?: TermContinuation | null
   agentBusy?: boolean
   agentCompletedAt?: number | null
+  /** Reconstructed private DEC mode state (?2004 etc.) — replayed before
+   * output so a reattached xterm keeps bracketed paste/mouse/cursor modes
+   * whose enable sequences scrolled past the bounded tail. */
+  modePrefix?: string
 }
 /** Live identity of a pty session — who's running, where (diff-broadcast). */
 export interface TerminalMetaEvent {

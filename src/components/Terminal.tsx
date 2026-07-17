@@ -868,6 +868,7 @@ export function Terminal({ id, attach = false, boot, cwd, projectId: projectIdOv
           } catch { /* stale geometry */ }
         }
       }
+      if (snap.modePrefix) term.write(snap.modePrefix)
       if (snap.output) term.write(snap.output, restoreView)
       else restoreView()
     }

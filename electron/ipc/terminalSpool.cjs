@@ -19,6 +19,17 @@ function safeBase(id) {
   return crypto.createHash('sha256').update(String(id)).digest('hex').slice(0, 32)
 }
 
+// Private DEC modes that change how the terminal interprets INPUT (bracketed
+// paste, cursor keys, mouse, focus) or renders the cursor. They are tracked
+// out-of-band because snapshot output must remain an exact stream tail for
+// observer byte cursors — and because the enabling sequence routinely scrolls
+// past the bounded tail, which made reattached renderers paste multi-line text
+// as line-by-line submits (?2004 lost).
+const TRACKED_DEC_MODES = new Set([1, 25, 1000, 1002, 1003, 1004, 1006, 2004])
+const DEC_MODE_DEFAULTS = { 25: true } // cursor visible; every other tracked mode defaults off
+const DEC_MODE_RE = /\x1b\[\?([0-9;]+)([hl])/g
+const DEC_CARRY_RE = /\x1b(?:\[(?:\?[0-9;]{0,12})?)?$/
+
 function atomicJson(file, value) {
   const tmp = `${file}.${process.pid}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 })
@@ -84,10 +95,45 @@ class TerminalSpool {
     this.fallbackChunks = []
     this.fallbackLen = 0
     this.diskError = null
+    this.decModes = new Map()
+    this.decCarry = ''
     try {
       const m = JSON.parse(fs.readFileSync(this.metaFile, 'utf8'))
-      if (m && m.id === this.id) this.viewState = m.viewState || null
+      if (m && m.id === this.id) {
+        this.viewState = m.viewState || null
+        if (m.decModes && typeof m.decModes === 'object') {
+          for (const [mode, set] of Object.entries(m.decModes)) {
+            const n = Number(mode)
+            if (TRACKED_DEC_MODES.has(n)) this.decModes.set(n, !!set)
+          }
+        }
+      }
     } catch { /* no prior state */ }
+  }
+
+  _trackModes(data) {
+    const text = this.decCarry + data
+    DEC_MODE_RE.lastIndex = 0
+    let m
+    while ((m = DEC_MODE_RE.exec(text))) {
+      const set = m[2] === 'h'
+      for (const param of m[1].split(';')) {
+        const mode = Number(param)
+        if (TRACKED_DEC_MODES.has(mode)) this.decModes.set(mode, set)
+      }
+    }
+    const carry = text.slice(-16).match(DEC_CARRY_RE)
+    this.decCarry = carry ? carry[0] : ''
+  }
+
+  _modePrefix() {
+    let prefix = ''
+    for (const mode of [...this.decModes.keys()].sort((a, b) => a - b)) {
+      const set = this.decModes.get(mode)
+      if (set === !!DEC_MODE_DEFAULTS[mode]) continue // default state: nothing to replay
+      prefix += `\x1b[?${mode}${set ? 'h' : 'l'}`
+    }
+    return prefix
   }
 
   _queue(text) {
@@ -156,6 +202,7 @@ class TerminalSpool {
 
   push(data) {
     if (!data) return
+    this._trackModes(data) // input modes matter even when output is not retained
     if (this.retentionCap === 0) { this.truncated = true; return }
     if (!this.visible) {
       this._queue(data)
@@ -183,7 +230,7 @@ class TerminalSpool {
   }
 
   persistMeta() {
-    try { atomicJson(this.metaFile, { id: this.id, viewState: this.viewState, touchedAt: Date.now() }) } catch { /* cache failure is non-fatal */ }
+    try { atomicJson(this.metaFile, { id: this.id, viewState: this.viewState, decModes: Object.fromEntries(this.decModes), touchedAt: Date.now() }) } catch { /* cache failure is non-fatal */ }
   }
 
   snapshot(outputCap = DEFAULT_HOT_CAP) {
@@ -201,7 +248,7 @@ class TerminalSpool {
     for (const file of [this.prevFile, this.file]) {
       try { diskBytes += fs.statSync(file).size } catch { /* absent */ }
     }
-    return { output, truncated: this.truncated || diskBytes + hotBytes + fallbackBytes > cap, viewState: this.viewState }
+    return { output, truncated: this.truncated || diskBytes + hotBytes + fallbackBytes > cap, viewState: this.viewState, modePrefix: this._modePrefix() }
   }
 
   stats() {
