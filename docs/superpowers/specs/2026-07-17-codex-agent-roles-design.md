@@ -52,7 +52,10 @@ design, layout, or UI direction → `design-collab`):
 
 - `MODE: plan-review` — one read-only call: `task` (no `--write`) instructing Codex
   to read the given spec/plan file and critique gaps, risks, ordering problems,
-  simpler alternatives, and ambiguity. Output returned verbatim.
+  simpler alternatives, and ambiguity — as appended findings, never a rewrite —
+  ending with `VERDICT: APPROVED` or `VERDICT: REVISE`. Re-reviews after revisions
+  add `--resume-last`; the orchestrator caps iteration at 2 revision rounds before
+  handing back to the user. Output returned verbatim.
 - `MODE: execute` — `task --write`; add `--background` for long/open-ended jobs,
   `--resume-last` for continuations ("keep going", "apply the fix").
 - `MODE: code-review` — `review` by default; `adversarial-review [focus]` when the
@@ -85,8 +88,23 @@ Appended section instructing the main Claude thread:
 - **Front-end design:** collaborate — Claude drafts direction with the
   frontend-design skill, dispatches `codex` `MODE: design-collab` for an
   independent take, then synthesizes both before implementing.
+- **Proportionality:** skip Codex dispatches for trivial/low-risk changes (simple
+  1–5 file features, isolated bugfixes, throwaway prototypes); use the full
+  cross-model loop when error cost is high (auth, payments, data, migrations,
+  long implementations).
 - **Fallback:** if the plugin/agent is unavailable, Claude does the work itself and
   says so.
+
+## Research notes (2026-07-17)
+
+Ecosystem survey confirmed the design matches the dominant cross-model pattern
+("the writer doesn't review, the reviewer doesn't write"; planner/executor/
+reviewer splits across models with non-overlapping training biases). Adopted from
+the survey: the `VERDICT:` convention with a bounded revise→re-review loop
+(SmartScope), findings-not-rewrites plan review (claude-codex.fr), and the
+proportionality rule. Considered and skipped: stop-hook review gates (plugin
+already offers `/codex:setup --enable-review-gate`), MCP re-registration, and
+JSON pipeline frameworks (overhead without added value here).
 
 ## Testing
 
