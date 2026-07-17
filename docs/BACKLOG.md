@@ -2,4 +2,4 @@
 
   
 
-\- sometimes
+\- sometimes when I copy paste a bunch of text with spaces from some output it co
