@@ -1,0 +1,1 @@
+\- I would like a main homepage window where the first window offical tab could be something like a board where I can see everything that's working what needs me, I'm thinking an even better version of this:
