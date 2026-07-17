@@ -4,10 +4,12 @@
 
 **Status:** desktop observation spine and fixture-only native preview complete;
 live pairing and transport not started. Revised 2026-07-17 after GPT-5.6 sol
-design review round 1 (13 findings folded in: lease acquisition contract,
-at-most-once permission semantics, envelope epoch/negotiation, Noise pairing,
-capability scope, relay routing layer, OSC hardening, revocation honesty,
-lifecycle states, earlier security/accessibility gating, concrete budgets).
+design review rounds 1–2 (19 findings folded in: lease acquisition contract
+with `leaseId` generations, server-enforced permission completeness,
+at-most-once semantics, epoch lifecycle, Ed25519↔X25519 handshake binding,
+capability scope, event-driven revocation with 60 s relay bound, OSC hardening,
+global 5 MiB / 7-day phone cache bounds, earlier security/accessibility gating,
+concrete budgets).
 
 **Working assumption:** iPhone first; the wire protocol remains platform-neutral
 
@@ -253,7 +255,10 @@ It should be split into an `AcpSessionService` plus IPC adapters:
   receipt. The idempotency cache is an optimization, never the correctness
   mechanism — correctness comes from the authoritative pending state;
 - the sanitized payload carries an explicit completeness state — `complete`,
-  `truncated`, `redacted`, or `unavailable` — bound to the permission revision;
+  `truncated`, `redacted`, or `unavailable` — bound to the permission revision.
+  The Mac enforces this server-side: the respond guard permits `allow` only when
+  the stored revision's context is `complete` (the phone UI rule is a courtesy,
+  not the control); reject is always accepted;
 - a resolved broadcast reaches every surface;
 - no mobile persistent-rule or global-autonomy mutation in V1.
 
@@ -285,6 +290,13 @@ Every decrypted frame contains:
 - Event sequence is monotonic per desktop epoch; the replay cursor is the pair
   `{epoch, seq}` and an `ack` names that pair. A cursor from an older epoch gets
   a fresh snapshot, never a partial replay.
+- Epoch lifecycle: the epoch is a persisted, strictly increasing log-generation
+  counter on the Mac. It increments whenever the gateway restarts or the event
+  log resets/truncates, and never repeats or goes backward — so a stale cursor
+  can never alias into a new log. `{epoch, seq}` sequencing applies to
+  desktop→phone event/snapshot frames; commands and receipts are ordered by
+  `commandId` idempotency instead, and `hello`/`ack` frames carry the cursor
+  they reference rather than advancing it.
 - Transport AEAD nonce counters are a separate per-connection, per-direction
   layer and never substitute for—or reset—the application `{epoch, seq}` cursor.
 - Compatibility is negotiated, not inferred: `hello` carries the sender's
@@ -318,13 +330,13 @@ Every decrypted frame contains:
 | `agent.prompt` | `agent-control` | connected, idle session, exact project |
 | `agent.steer` | `agent-control` | provider supports queue, active turn |
 | `agent.cancel` | `agent-control` | exact live session |
-| `permission.respond` | `agent-control` | current unresolved permission id/revision |
+| `permission.respond` | `agent-control` | current unresolved permission id/revision; `allow` additionally requires the stored payload's completeness state to be `complete` — reject is always available |
 | `terminal.acquire-control` | `terminal-control` | live session; no current holder or expired lease |
 | `terminal.renew-control` | `terminal-control` | caller holds an unexpired lease |
-| `terminal.write` | `terminal-control` | live session + caller holds active lease |
-| `terminal.resize` | `terminal-control` | caller holds active lease |
-| `terminal.interrupt` | `terminal-control` | live session; visible confirmation |
-| `terminal.release-control` | `terminal-control` | caller owns lease |
+| `terminal.write` | `terminal-control` | live session + current `leaseId` |
+| `terminal.resize` | `terminal-control` | current `leaseId` |
+| `terminal.interrupt` | `terminal-control` | live session + current `leaseId`; visible confirmation |
+| `terminal.release-control` | `terminal-control` | current `leaseId` |
 | `attention.ack` | `observe` | exact project + exact attention event id |
 | `stream.subscribe` / `stream.unsubscribe` | `observe` | exact project + session |
 | `archive.page` | `observe` | exact project + session; bounded page size |
@@ -332,11 +344,16 @@ Every decrypted frame contains:
 `terminal.kill`, new shell, file writes, git actions, autonomy widening, and
 persistent permission rules are deliberately absent from V1.
 
-**Control-lease semantics.** One lease holder per terminal at a time. A lease has
-a short TTL and must be renewed; expiry, device disconnect, app backgrounding,
-revocation, or desktop revoke ends it immediately. Acquisition is granted only
-when no unexpired lease exists; a denial receipt names the reason but not the
-holder's device details beyond its display name. The lease gates **companion**
+**Control-lease semantics.** One lease holder per terminal at a time.
+`terminal.acquire-control` returns a fresh, non-repeating `leaseId` (a lease
+generation token); every `write`, `resize`, `interrupt`, `renew-control`, and
+`release-control` must present the current `leaseId`, so a delayed command from
+an earlier lease — even one held by the same device — fails after reacquisition.
+The lease TTL is 30 seconds with client renewal every 10 seconds; expiry is
+enforced server-side on the Mac, and device disconnect, app backgrounding,
+revocation, or desktop revoke ends the lease immediately. Acquisition is
+granted only when no unexpired lease exists; a denial receipt names the reason
+but not the holder's device details beyond its display name. The lease gates **companion**
 input only: the desktop renderer is the authority and may always type — the
 desktop never acquires a lease, and simultaneous desktop typing is permitted
 exactly as when two desktop windows share a PTY. While a companion lease is
@@ -366,8 +383,13 @@ and the user retypes.
   agent content and does not persist session transcripts.
 - Routing uses a minimal authenticated outer layer: the Firebase-verified
   identity binds each connection to registered desktop/device records and one
-  room per UID; outer routing ids are checked against revocation on connect and
-  periodically thereafter, and are rate-limited. APNs token registration,
+  room per UID; outer routing ids are rate-limited and checked against
+  revocation on connect. Revocation propagation is event-driven — the desktop
+  both rejects the revoked device immediately itself and notifies the
+  registry/relay to drop its live connections — with a periodic recheck as
+  fallback, bounding worst-case relay propagation at 60 seconds. The
+  authoritative gate is always the Mac: even a not-yet-dropped relay connection
+  cannot execute anything after desktop-side revocation. APNs token registration,
   rotation, targeting, and anti-spam authorization live beside the device
   registry, never inside the encrypted payload path.
 - Clients proactively rotate/reconnect before Cloud Run's request timeout and
@@ -396,10 +418,16 @@ so reconnect always performs state reconciliation.
    Desktop protects its private material with Electron `safeStorage`; iOS
    stores its keys in the Keychain behind system authentication
    (LocalAuthentication-gated access control), not an app-invented passcode.
-2. A single-use QR payload contains protocol version, desktop id/public key,
-   pairing nonce, requested capabilities, transport hint, and a short expiry.
-3. Phone contributes its public key and proves possession. Both sides derive a
-   short authentication phrase from the transcript and require confirmation.
+2. A single-use QR payload contains protocol version, desktop id, the desktop's
+   Ed25519 identity public key, a signed key record binding
+   `{desktopId, role, x25519StaticPublic}` under that identity key, a pairing
+   nonce, requested capabilities, transport hint, and a short expiry.
+3. Phone contributes its own Ed25519-signed key record and proves possession.
+   During the handshake each side signs the Noise handshake hash with its
+   Ed25519 identity key, cryptographically binding the signing identity to the
+   authenticated X25519 static key — Noise authenticates the DH keys; the
+   signature binds them to the device identity. Both sides then derive a short
+   authentication phrase from the transcript and require confirmation.
 4. Each connection uses fresh ephemeral key agreement plus HKDF-SHA256 to derive
    directional keys. ChaCha20-Poly1305 authenticates the encrypted frame and
    bound metadata.
@@ -455,7 +483,11 @@ snapshot, and cleared on sign-out or unpair.
 - Replay buffer: bounded by both count and bytes; a slow consumer gets a snapshot.
 - Phone cache: at most 512 KiB terminal tail per open session and a bounded set
   of structured turns, protected by iOS Data Protection. No provider token or
-  desktop secret is cached.
+  desktop secret is cached. Global bounds: the aggregate durable cache never
+  exceeds 5 MiB across all sessions (structured turns ≤ 2 MiB of that), cached
+  entries expire after a 7-day retention TTL, and eviction is deterministic
+  oldest-session-first LRU. Sign-out or unpair clears the cache entirely —
+  "until its bounded cache expires" therefore has a hard deadline of 7 days.
 - Notifications: completion/needs-you only, deduplicated by project/session and
   quieted during an active foreground connection.
 
