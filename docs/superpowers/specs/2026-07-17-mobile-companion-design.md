@@ -3,7 +3,11 @@
 **Date:** 2026-07-17
 
 **Status:** desktop observation spine and fixture-only native preview complete;
-live pairing and transport not started
+live pairing and transport not started. Revised 2026-07-17 after GPT-5.6 sol
+design review round 1 (13 findings folded in: lease acquisition contract,
+at-most-once permission semantics, envelope epoch/negotiation, Noise pairing,
+capability scope, relay routing layer, OSC hardening, revocation honesty,
+lifecycle states, earlier security/accessibility gating, concrete budgets).
 
 **Working assumption:** iPhone first; the wire protocol remains platform-neutral
 
@@ -34,8 +38,10 @@ companion protocol.
 2. **Attention before remote desktop.** The home screen answers “what is
    running, what finished, and what needs me?” before showing a wall of terminal
    text.
-3. **Honest connection state.** Offline, reconnecting, sleeping Mac, stale
-   snapshot, and live are distinct states. Cached data is never painted as live.
+3. **Honest connection state.** Offline, reconnecting, unreachable ("last seen
+   …" — a sleeping Mac, a quit app, and a dead network are indistinguishable
+   from the phone and never guessed at), stale snapshot, and live are distinct
+   states. Cached data is never painted as live.
 4. **Fail closed.** A missing desktop, expired pairing, replayed command,
    unknown project, stale permission, or protocol mismatch cannot widen access.
 5. **No secret tunnel disguised as convenience.** Electron IPC, the private
@@ -87,7 +93,12 @@ one-column control surface.
 
 ### 4. Permission decision
 
-- Agent, project, tool title, affected paths, options, and actual diff content.
+- Agent, project, tool title, affected paths, options, and diff content when it
+  is available in full. The payload's completeness state (`complete`,
+  `truncated`, `redacted`, `unavailable`) is always shown; approving from the
+  phone requires `complete` context — on anything less the phone offers reject
+  or defer-to-desktop. Permissions with no diff at all (commands, network) show
+  their own full request context instead.
 - Allow-once or reject only in V1. The phone cannot create persistent permission
   rules or silently promote autonomy.
 - The first valid response wins atomically; every other surface immediately
@@ -104,7 +115,11 @@ one-column control surface.
 - Each phone is a separately named and revocable device.
 - Capabilities are independent: `observe`, `agent-control`, and
   `terminal-control`. Pairing defaults to `observe`; widening is a desktop-side
-  choice.
+  choice. In V1 a grant is per device and Mac-wide — it covers all projects on
+  that Mac, current and future — while every command still names an exact
+  project and target. A live downgrade or revoke applies to open connections
+  immediately. Per-project grants and a separate approval-only capability are
+  explicit post-V1 candidates.
 - Face ID/app passcode protects re-entry to a paired control surface.
 
 ## Explicit non-goals for the first release
@@ -213,8 +228,14 @@ path:
 - snapshots have `{ startOffset, endOffset, output, truncated, exitStatus }`;
 - a cursor gap triggers one bounded snapshot, not an unbounded replay queue.
 
-Terminal text remains an opaque VT stream. It is never rendered as HTML, and
-OSC links use the same explicit URL safety policy as desktop.
+Terminal text remains an opaque VT stream fed only to a terminal emulator. It
+is never rendered as HTML. The mobile emulator must be configured against
+emulator-callback abuse: OSC clipboard writes, title-report replies,
+file-transfer extensions, and reply-generating queries are disabled or answered
+with safe defaults, and SwiftTerm's implicit URL/link detection is explicitly
+configured to the same gated URL policy as desktop. Read-only observers render
+the desktop-sized grid with local crop/scroll; a phone without the control
+lease never resizes the shared PTY.
 
 ### ACP fan-out
 
@@ -226,7 +247,14 @@ It should be split into an `AcpSessionService` plus IPC adapters:
   all take an explicit actor and project capability;
 - one active turn per session, as today;
 - sanitized pending-permission payload retained in main with its resolver;
-- exactly-once permission response and a resolved broadcast to every surface;
+- at-most-once, fail-closed permission response: the first valid response wins
+  by atomic compare-and-set against the immutable permission revision;
+  duplicate, late, or replayed responses receive a stable resolved/stale
+  receipt. The idempotency cache is an optimization, never the correctness
+  mechanism — correctness comes from the authoritative pending state;
+- the sanitized payload carries an explicit completeness state — `complete`,
+  `truncated`, `redacted`, or `unavailable` — bound to the permission revision;
+- a resolved broadcast reaches every surface;
 - no mobile persistent-rule or global-autonomy mutation in V1.
 
 ## Companion protocol
@@ -246,6 +274,7 @@ Every decrypted frame contains:
   "desktopId": "...",
   "deviceId": "...",
   "connectionId": "...",
+  "epoch": 3,
   "seq": 42,
   "id": "uuid",
   "sentAt": 1784250000000,
@@ -253,7 +282,14 @@ Every decrypted frame contains:
 }
 ```
 
-- Event sequence is monotonic per desktop epoch.
+- Event sequence is monotonic per desktop epoch; the replay cursor is the pair
+  `{epoch, seq}` and an `ack` names that pair. A cursor from an older epoch gets
+  a fresh snapshot, never a partial replay.
+- Transport AEAD nonce counters are a separate per-connection, per-direction
+  layer and never substitute for—or reset—the application `{epoch, seq}` cursor.
+- Compatibility is negotiated, not inferred: `hello` carries the sender's
+  supported feature list, and a peer missing a feature the sender marked
+  required fails closed at handshake. Unknown *optional* fields are ignored.
 - Commands carry `commandId`, `projectId`, `targetId`, required capability,
   and optional expected revision.
 - Desktop keeps a bounded idempotency cache. A repeated command returns the
@@ -283,13 +319,31 @@ Every decrypted frame contains:
 | `agent.steer` | `agent-control` | provider supports queue, active turn |
 | `agent.cancel` | `agent-control` | exact live session |
 | `permission.respond` | `agent-control` | current unresolved permission id/revision |
-| `terminal.write` | `terminal-control` | live session + active control lease |
-| `terminal.resize` | `terminal-control` | active control lease |
+| `terminal.acquire-control` | `terminal-control` | live session; no current holder or expired lease |
+| `terminal.renew-control` | `terminal-control` | caller holds an unexpired lease |
+| `terminal.write` | `terminal-control` | live session + caller holds active lease |
+| `terminal.resize` | `terminal-control` | caller holds active lease |
 | `terminal.interrupt` | `terminal-control` | live session; visible confirmation |
 | `terminal.release-control` | `terminal-control` | caller owns lease |
+| `attention.ack` | `observe` | exact project + exact attention event id |
+| `stream.subscribe` / `stream.unsubscribe` | `observe` | exact project + session |
+| `archive.page` | `observe` | exact project + session; bounded page size |
 
 `terminal.kill`, new shell, file writes, git actions, autonomy widening, and
 persistent permission rules are deliberately absent from V1.
+
+**Control-lease semantics.** One lease holder per terminal at a time. A lease has
+a short TTL and must be renewed; expiry, device disconnect, app backgrounding,
+revocation, or desktop revoke ends it immediately. Acquisition is granted only
+when no unexpired lease exists; a denial receipt names the reason but not the
+holder's device details beyond its display name. The lease gates **companion**
+input only: the desktop renderer is the authority and may always type — the
+desktop never acquires a lease, and simultaneous desktop typing is permitted
+exactly as when two desktop windows share a PTY. While a companion lease is
+active the PTY geometry follows the phone viewport; on release or expiry the
+desktop's last geometry is restored. Terminal input is never automatically
+retried after an uncertain result — an uncertain write surfaces as `unknown`
+and the user retypes.
 
 ## Connectivity and lifecycle
 
@@ -304,12 +358,18 @@ persistent permission rules are deliberately absent from V1.
 - This proves real phone rendering and control without first deploying relay
   infrastructure.
 
-### Remote mode — production default after the direct slice
+### Remote mode — after the direct slice (single-instance alpha until a real synchronization layer lands)
 
 - Desktop and phone each make outbound `wss:` connections to a small Cloud Run
   relay authenticated by Firebase ID tokens and registered device ids.
 - The relay routes opaque encrypted envelopes. It cannot decrypt terminal or
   agent content and does not persist session transcripts.
+- Routing uses a minimal authenticated outer layer: the Firebase-verified
+  identity binds each connection to registered desktop/device records and one
+  room per UID; outer routing ids are checked against revocation on connect and
+  periodically thereafter, and are rate-limited. APNs token registration,
+  rotation, targeting, and anti-spam authorization live beside the device
+  registry, never inside the encrypted payload path.
 - Clients proactively rotate/reconnect before Cloud Run's request timeout and
   resume from acknowledged sequence numbers.
 - Initial rollout can run one bounded instance. A multi-instance release adds
@@ -331,9 +391,11 @@ so reconnect always performs state reconciliation.
 
 ## Pairing and cryptography
 
-1. Desktop and phone each create a Curve25519 identity key. Desktop protects
-   its private material with Electron `safeStorage`; iOS stores its key in the
-   Keychain.
+1. Desktop and phone each create two distinct keys: an Ed25519 identity
+   signing key and an X25519 agreement key — never one key for both roles.
+   Desktop protects its private material with Electron `safeStorage`; iOS
+   stores its keys in the Keychain behind system authentication
+   (LocalAuthentication-gated access control), not an app-invented passcode.
 2. A single-use QR payload contains protocol version, desktop id/public key,
    pairing nonce, requested capabilities, transport hint, and a short expiry.
 3. Phone contributes its public key and proves possession. Both sides derive a
@@ -346,6 +408,13 @@ so reconnect always performs state reconciliation.
 6. Remote relay access also requires a current Firebase identity for the same
    account and an unrevoked paired-device record. Account login alone cannot
    pair or control a Mac.
+
+The handshake is a reviewed Noise pattern (Noise `XX` with QR-pinned static
+keys is the working choice; the final pattern is fixed at Task 8 with published
+Node/Swift transcript test vectors covering message order, role binding, key
+confirmation, SAS derivation entropy, nonce/AAD construction, clock skew,
+simultaneous-pairing, and re-pair behavior) — not a bespoke construction. It is
+security-reviewed before any control capability ships.
 
 The relay still observes connection timing, approximate ciphertext sizes, and
 device routing ids. The privacy copy should say this plainly.
@@ -366,7 +435,14 @@ device routing ids. The privacy copy should say this plainly.
 | Desktop/phone version skew | Independent protocol version and fail-closed capability negotiation |
 
 Device revocation closes live relay/direct connections, invalidates future
-commands, and removes the device public key. It does not delete project data.
+commands, and removes the device public key. It does not delete project data,
+and it cannot reach into an offline phone: content already cached there — which
+may itself contain secrets that appeared in terminal output, prompts, or diffs;
+structural token exclusion does not change that — survives until the device
+next connects or its bounded cache expires. The product copy states this
+residual risk plainly. The mobile cache is encrypted with iOS Data Protection
+(complete protection), excluded from backups, hidden from the app-switcher
+snapshot, and cleared on sign-out or unpair.
 
 ## Performance and storage budgets
 
@@ -382,6 +458,13 @@ commands, and removes the device public key. It does not delete project data.
   desktop secret is cached.
 - Notifications: completion/needs-you only, deduplicated by project/session and
   quieted during an active foreground connection.
+
+Initial hard budgets (tune with measurements; the caps themselves never go
+away): replay log ≤ 5,000 events and ≤ 2 MiB per device; structured-turn
+projection ≤ 200 turns per session; ≤ 8 observers per terminal; relay send
+queue ≤ 1 MiB per connection with disconnect-on-overflow; notification debounce
+≥ 30 s per session; audit log ≤ 10,000 entries / 30 days; paste cap 32 KiB with
+confirmation above 2 KiB.
 
 ## Delivery slices
 
@@ -401,8 +484,12 @@ cross-project/replay tests fail closed.
 
 - SwiftUI shell, QR pairing, Bonjour discovery, Keychain identity.
 - Now dashboard, Needs You list, structured agent transcript, SwiftTerm view.
-- Foreground reconnect and stale/offline behavior.
+- Foreground reconnect and stale/offline behavior, including an explicit
+  recovery path for denied/revoked local-network permission, blocked mDNS, and
+  VPN interference.
 - Desktop Companion settings and per-device revoke.
+- Accessibility (VoiceOver labels, Dynamic Type) begins with the first SwiftUI
+  components, not at polish time.
 
 **Exit:** walk away from the Mac, watch a real Codex/Claude session and terminal,
 background/foreground the phone, and recover without duplicated or missing tail
@@ -415,8 +502,11 @@ output beyond the declared bounded snapshot.
 - Face ID gate, action receipts, and desktop/mobile resolution fan-out.
 
 **Exit:** one real permission can be reviewed and resolved from either surface
-exactly once; phone terminal input never changes project/owner identity; a lost
-connection cannot replay input after reconnect.
+at most once, never twice; phone terminal input never changes project/owner
+identity; a lost connection cannot replay input after reconnect. Control ships
+only after the pairing/crypto security review (threat model, cross-language
+vectors, terminal escape/OSC fuzzing) passes — that review starts during this
+slice, not in Slice E.
 
 ### Slice D — remote-anywhere and push
 
@@ -430,8 +520,11 @@ the exact current session without carrying sensitive content.
 
 ### Slice E — polish and release
 
-- TestFlight, accessibility, Dynamic Type, VoiceOver labels, terminal keyboard
-  ergonomics, privacy settings, device management, audit export.
+- TestFlight, accessibility completion, terminal keyboard ergonomics, privacy
+  settings, device management, audit export.
+- App Store sign-in decision before external TestFlight: Guideline 4.8 requires
+  an equivalent privacy-preserving login (e.g. Sign in with Apple) alongside
+  Google sign-in unless an exception applies.
 - Battery/CPU/memory measurements and security review.
 - Product docs, support diagnostics, staged rollout, crash/relay observability
   with plaintext redaction.
@@ -444,7 +537,7 @@ The feature is not done because a phone displayed a terminal. It is done when:
 - every sensitive action is scoped, authenticated, idempotent, and receipted;
 - a compromised relay cannot read session content;
 - backgrounding and reconnect are normal tested flows;
-- permission decisions remain exactly-once and fail closed;
+- permission decisions resolve at most once, never twice, and fail closed;
 - terminal history and all queues remain bounded under a slow/disconnected phone;
 - offline/stale/live state is visually unambiguous;
 - the UI is useful one-handed and accessible, not a shrunk desktop;
