@@ -1,1 +1,1 @@
-\- I would like a main homepage window where the first window offical tab could be something like a board where I can see everything that's working what needs me, I'm thinking an even better version of this:
+\- I would like a main homepage window where the first window offical tab could be something like a board where I can see everything that's working what needs me, I'm thinking an even better version of this:![Screenshot 2026-07-17 at 12.43.39 AM](backlog-media/Screenshot%202026-07-17%20at%2012.43.39%E2%80%AFAM.png)
