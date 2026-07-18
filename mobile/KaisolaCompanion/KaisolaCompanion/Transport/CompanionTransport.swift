@@ -74,6 +74,7 @@ final class CompanionTransport: ObservableObject {
     }
 
     func connect(to desktop: CompanionDiscoveredDesktop) {
+        intentionallyStopped = false
         selectedEndpoint = desktop.endpoint
         reconnectAttempt = 0
         connect(to: desktop.endpoint, reconnecting: false)
@@ -90,11 +91,12 @@ final class CompanionTransport: ObservableObject {
             throw CompanionWireError.connectionUnavailable
         }
         let framed = try CompanionLengthFrameDecoder.encode(payload)
-        connection.send(content: framed, completion: .contentProcessed { [weak self] error in
+        connection.send(content: framed, completion: .contentProcessed { [weak self, weak connection] error in
             guard let error else { return }
-            Task { @MainActor [weak self] in
-                self?.onError?(error)
-                self?.scheduleReconnect()
+            Task { @MainActor [weak self, weak connection] in
+                guard let self, let connection, connection === self.connection else { return }
+                self.onError?(error)
+                self.scheduleReconnect()
             }
         })
     }

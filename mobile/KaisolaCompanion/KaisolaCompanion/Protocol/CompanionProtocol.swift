@@ -346,7 +346,7 @@ struct CompanionPermissionRequestedBody: Codable, Hashable, Sendable {
     let targetId: String?
     let sessionId: String?
     let permId: String
-    let revision: Int64
+    let revision: Int64?
     let completeness: String?
     let agent: String
     let title: String

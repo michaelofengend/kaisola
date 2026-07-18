@@ -12,6 +12,8 @@ final class CompanionStore: ObservableObject {
     @Published private(set) var transportState: CompanionTransportState
     @Published private(set) var lastAckCursor: CompanionAckCursor?
 
+    private var projectIdsByWindowId: [String: Set<String>]
+
     let isPreview: Bool
     let canControlAgents: Bool
     let canControlTerminals: Bool
@@ -39,6 +41,7 @@ final class CompanionStore: ObservableObject {
         self.canControlTerminals = canControlTerminals
         self.transportState = transportState
         lastAckCursor = nil
+        projectIdsByWindowId = [:]
     }
 
     static func preview(now: Date = .now) -> CompanionStore {
@@ -88,6 +91,7 @@ final class CompanionStore: ObservableObject {
             sessions = snapshot.projection.sessions
             attention = snapshot.projection.attention
             permissions = snapshot.projection.permissions
+            projectIdsByWindowId = [:]
             if selectedProjectId == nil || !projects.contains(where: { $0.id == selectedProjectId }) {
                 selectedProjectId = projects.first?.id
             }
@@ -120,15 +124,18 @@ final class CompanionStore: ObservableObject {
         let fields = envelope.body.fields
         switch envelope.body.type {
         case "project.updated":
+            if fields["removed"]?.boolValue == true {
+                removeProjects(for: fields)
+                return
+            }
             guard let projectionValue = fields["projection"] else {
-                connection = .stale
                 return
             }
             let projection = try JSONDecoder().decode(
                 CompanionProjection.self,
                 from: CanonicalJSON.data(from: projectionValue)
             )
-            merge(projection: projection)
+            merge(projection: projection, windowId: fields["windowId"]?.stringValue)
         case "session.updated":
             if let sessionValue = fields["session"] {
                 let session = try JSONDecoder().decode(
@@ -203,6 +210,13 @@ final class CompanionStore: ObservableObject {
                     replace: true,
                     sentAt: envelope.sentAt
                 )
+            } else if fields["snapshotRequired"]?.boolValue == true,
+                      let terminalId = fields["terminalId"]?.stringValue,
+                      let index = sessions.firstIndex(where: { $0.id == terminalId }) {
+                sessions[index].terminalLines = []
+                sessions[index].terminalStreamEpoch = fields["streamEpoch"]?.stringValue
+                sessions[index].terminalEndOffset = fields["endOffset"]?.intValue
+                sessions[index].updatedAt = envelope.sentAt
             }
         case "terminal.exit":
             if let terminalId = fields["terminalId"]?.stringValue,
@@ -216,16 +230,102 @@ final class CompanionStore: ObservableObject {
         }
     }
 
-    private func merge(projection: CompanionProjection) {
+    private func merge(projection: CompanionProjection, windowId: String?) {
         let projectIds = Set(projection.projects.map(\.id))
+        if let windowId {
+            let removedProjectIds = (projectIdsByWindowId[windowId] ?? []).subtracting(projectIds)
+            removeProjects(withIds: removedProjectIds)
+            for owner in Array(projectIdsByWindowId.keys) where owner != windowId {
+                projectIdsByWindowId[owner]?.subtract(projectIds)
+                if projectIdsByWindowId[owner]?.isEmpty == true { projectIdsByWindowId.removeValue(forKey: owner) }
+            }
+            projectIdsByWindowId[windowId] = projectIds
+        }
+        let existingSessions = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        let reconciledSessions = projection.sessions.map { incoming in
+            reconcile(incoming: incoming, existing: existingSessions[incoming.id])
+        }
         projects.removeAll { projectIds.contains($0.id) }
         projects.append(contentsOf: projection.projects)
         sessions.removeAll { projectIds.contains($0.projectId) }
-        sessions.append(contentsOf: projection.sessions)
+        sessions.append(contentsOf: reconciledSessions)
         attention.removeAll { projectIds.contains($0.projectId) }
         attention.append(contentsOf: projection.attention)
         permissions.removeAll { projectIds.contains($0.projectId) }
         permissions.append(contentsOf: projection.permissions)
+    }
+
+    private func reconcile(incoming: CompanionSession, existing: CompanionSession?) -> CompanionSession {
+        guard let existing else { return incoming }
+        var reconciled = incoming
+        if reconciled.terminalLines == nil { reconciled.terminalLines = existing.terminalLines }
+        if reconciled.terminalStreamEpoch == nil { reconciled.terminalStreamEpoch = existing.terminalStreamEpoch }
+        if reconciled.terminalEndOffset == nil { reconciled.terminalEndOffset = existing.terminalEndOffset }
+        reconciled.turns = reconcile(projectedTurns: reconciled.turns, existingTurns: existing.turns)
+        return reconciled
+    }
+
+    private func reconcile(
+        projectedTurns: [CompanionTurn]?,
+        existingTurns: [CompanionTurn]?
+    ) -> [CompanionTurn]? {
+        guard let existingTurns, !existingTurns.isEmpty else { return projectedTurns }
+        guard var projectedTurns else { return existingTurns }
+
+        var matchedExisting = Set<Int>()
+        for projectedIndex in projectedTurns.indices.reversed() {
+            guard projectedTurns[projectedIndex].wireId == nil,
+                  let existingIndex = existingTurns.indices.reversed().first(where: { index in
+                      !matchedExisting.contains(index)
+                          && existingTurns[index].wireId != nil
+                          && turnsShareIdentity(projectedTurns[projectedIndex], existingTurns[index])
+                  }) else { continue }
+            let existing = existingTurns[existingIndex]
+            projectedTurns[projectedIndex].wireId = existing.wireId
+            if existing.text.hasPrefix(projectedTurns[projectedIndex].text),
+               existing.text.count > projectedTurns[projectedIndex].text.count {
+                projectedTurns[projectedIndex].text = existing.text
+            }
+            matchedExisting.insert(existingIndex)
+        }
+
+        for (index, turn) in existingTurns.enumerated()
+        where turn.wireId != nil && turn.status == "streaming" && !matchedExisting.contains(index) {
+            projectedTurns.append(turn)
+        }
+        return projectedTurns
+    }
+
+    private func turnsShareIdentity(_ projected: CompanionTurn, _ existing: CompanionTurn) -> Bool {
+        guard projected.role == existing.role else { return false }
+        if projected.text == existing.text { return true }
+        guard !projected.text.isEmpty, !existing.text.isEmpty else { return false }
+        return projected.text.hasPrefix(existing.text) || existing.text.hasPrefix(projected.text)
+    }
+
+    private func removeProjects(for fields: [String: JSONValue]) {
+        var projectIds = Set<String>()
+        if let projectId = fields["projectId"]?.stringValue { projectIds.insert(projectId) }
+        if let windowId = fields["windowId"]?.stringValue {
+            projectIds.formUnion(projectIdsByWindowId.removeValue(forKey: windowId) ?? [])
+            if projects.contains(where: { $0.id == windowId }) { projectIds.insert(windowId) }
+        }
+        removeProjects(withIds: projectIds)
+    }
+
+    private func removeProjects(withIds projectIds: Set<String>) {
+        guard !projectIds.isEmpty else { return }
+        projects.removeAll { projectIds.contains($0.id) }
+        sessions.removeAll { projectIds.contains($0.projectId) }
+        attention.removeAll { projectIds.contains($0.projectId) }
+        permissions.removeAll { projectIds.contains($0.projectId) }
+        for owner in Array(projectIdsByWindowId.keys) {
+            projectIdsByWindowId[owner]?.subtract(projectIds)
+            if projectIdsByWindowId[owner]?.isEmpty == true { projectIdsByWindowId.removeValue(forKey: owner) }
+        }
+        if let selectedProjectId, projectIds.contains(selectedProjectId) {
+            self.selectedProjectId = projects.first?.id
+        }
     }
 
     private func upsert(_ session: CompanionSession) {
@@ -311,18 +411,21 @@ final class CompanionStore: ObservableObject {
     }
 
     func resolvePermission(_ permissionId: String, decision: String) {
-        guard isPreview, let permission = permissions.first(where: { $0.id == permissionId }) else { return }
+        guard isPreview,
+              decision == "allow" || decision == "reject",
+              let permission = permissions.first(where: { $0.id == permissionId }) else { return }
+        let allowed = decision == "allow"
         permissions.removeAll { $0.id == permissionId }
         if let sessionId = permission.sessionId,
            let index = sessions.firstIndex(where: { $0.id == sessionId }) {
             sessions[index].needsYou = false
             sessions[index].unread = false
-            sessions[index].status = decision == "Allow once" ? .running : .done
-            sessions[index].summary = decision == "Allow once"
+            sessions[index].status = allowed ? .running : .done
+            sessions[index].summary = allowed
                 ? "Preview decision applied; agent resumed locally"
                 : "Preview decision rejected locally"
         }
-        previewReceipt = "Preview only: \(decision.lowercased())"
+        previewReceipt = "Preview only: \(decision)"
     }
 
     func acknowledge(_ attentionId: String) {

@@ -38,12 +38,19 @@ final class ProjectionFixtureTests: XCTestCase {
     }
 
     @MainActor
-    func testPreviewPermissionDecisionIsLocalAndExactlyRemovesOneCard() {
-        let store = CompanionStore.preview(now: Date(timeIntervalSince1970: 1_784_250_001))
-        store.resolvePermission("permission-1", decision: "Reject")
+    func testPreviewPermissionDecisionUsesCanonicalDecisionStrings() {
+        let allowedStore = CompanionStore.preview(now: Date(timeIntervalSince1970: 1_784_250_001))
+        allowedStore.resolvePermission("permission-1", decision: "allow")
 
-        XCTAssertTrue(store.permissions.isEmpty)
-        XCTAssertEqual(store.previewReceipt, "Preview only: reject")
-        XCTAssertEqual(store.session(for: "session-review")?.status, .done)
+        XCTAssertTrue(allowedStore.permissions.isEmpty)
+        XCTAssertEqual(allowedStore.previewReceipt, "Preview only: allow")
+        XCTAssertEqual(allowedStore.session(for: "session-review")?.status, .running)
+
+        let rejectedStore = CompanionStore.preview(now: Date(timeIntervalSince1970: 1_784_250_001))
+        rejectedStore.resolvePermission("permission-1", decision: "reject")
+
+        XCTAssertTrue(rejectedStore.permissions.isEmpty)
+        XCTAssertEqual(rejectedStore.previewReceipt, "Preview only: reject")
+        XCTAssertEqual(rejectedStore.session(for: "session-review")?.status, .done)
     }
 }
