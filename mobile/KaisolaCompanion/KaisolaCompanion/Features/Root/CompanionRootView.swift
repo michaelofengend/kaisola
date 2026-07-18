@@ -50,6 +50,7 @@ struct CompanionRootView: View {
             }
             .tabItem { Label("Home", systemImage: "square.grid.2x2") }
             .tag(Tab.home)
+            .task { deepLinkForScreenshots() }
 
             NavigationStack(path: $sessionsPath) {
                 SessionsView()
@@ -73,6 +74,18 @@ struct CompanionRootView: View {
 
     private func pushSession(_ session: CompanionSession, into tab: Tab) {
         if tab == .home { homePath.append(session) } else { sessionsPath.append(session) }
+    }
+
+    /// Debug-only: push a session so a screenshot launch can reach the transcript
+    /// or terminal without a tap. Inert in release.
+    private func deepLinkForScreenshots() {
+        #if DEBUG
+        guard homePath.isEmpty else { return }
+        let kind = ProcessInfo.processInfo.environment["KAISOLA_UI_DEEPLINK"]
+        let wantKind: CompanionSessionKind? = kind == "agent" ? .agent : kind == "terminal" ? .terminal : nil
+        guard let wantKind, let session = store.sessions.first(where: { $0.kind == wantKind }) else { return }
+        homePath.append(session)
+        #endif
     }
     private func openPermission(_ permission: CompanionPermission) {
         homePath.append(permission)
