@@ -282,11 +282,11 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					065C0E0C58BA9952B43BC5D2 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = KBD9RS8425;
 						ProvisioningStyle = Automatic;
 					};
 					E24EE3A99A2BF34E9A6511D1 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = KBD9RS8425;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -422,7 +422,7 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = KBD9RS8425;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -456,7 +456,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = app.kaisola.companion.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kaisola.companion.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/KaisolaCompanion.app/KaisolaCompanion";
@@ -478,7 +478,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = app.kaisola.companion;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kaisola.companion;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -521,7 +521,7 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = KBD9RS8425;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -566,7 +566,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = app.kaisola.companion;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kaisola.companion;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -584,7 +584,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = app.kaisola.companion.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kaisola.companion.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/KaisolaCompanion.app/KaisolaCompanion";
