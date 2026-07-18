@@ -2,7 +2,7 @@
 
 const { CompanionEventLog } = require('./eventLog.cjs')
 const { validateIdentifier } = require('./protocol.cjs')
-const { PROJECTION_KIND, sanitizeAcpPermissionEvent, sanitizeProjection } = require('./redaction.cjs')
+const { PROJECTION_KIND, sanitizeAcpSessionEvent, sanitizeProjection } = require('./redaction.cjs')
 const { DEFAULT_SNAPSHOT_BYTES, makeBoundedSnapshot } = require('./terminalCursor.cjs')
 
 const ACP_EVENT_TYPES = new Set([
@@ -109,7 +109,7 @@ class CompanionDesktopState {
     return this.#append({ type, payload: cleanPayload, at: this.now() })
   }
 
-  terminalObserverSnapshot(projectId, terminalId, result = {}) {
+  terminalObserverSnapshot(projectId, terminalId, result = {}, { audience } = {}) {
     if (typeof projectId !== 'string' || !projectId || typeof terminalId !== 'string' || !terminalId) return null
     let snapshot
     try {
@@ -146,7 +146,29 @@ class CompanionDesktopState {
         ...(typeof result.resetReason === 'string' ? { resetReason: result.resetReason.slice(0, 80) } : {}),
       },
       at: this.now(),
+      audience,
     })
+  }
+
+  projectIds() {
+    const projects = new Set()
+    for (const record of this.projectionStore.list()) {
+      for (const project of record.projection.projects) projects.add(project.id)
+    }
+    return [...projects]
+  }
+
+  projectIdsForWindow(windowId) {
+    const claimed = new Set()
+    const owned = []
+    for (const record of this.projectionStore.list()) {
+      for (const project of record.projection.projects) {
+        if (claimed.has(project.id)) continue
+        claimed.add(project.id)
+        if (record.windowId === windowId) owned.push(project.id)
+      }
+    }
+    return owned
   }
 
   snapshot() {
@@ -205,24 +227,17 @@ class CompanionDesktopState {
 
   acpSessionEvent(event, { recordReplay = true } = {}) {
     if (!event || !ACP_EVENT_TYPES.has(event.type) || typeof event.projectId !== 'string' || !event.projectId) return null
-    let clean = event
-    if (event.type === 'agent.permission.requested') {
-      try {
-        clean = sanitizeAcpPermissionEvent(event, { requestedAt: this.now() })
-      } catch {
-        this.attentionService?.handleAcpEvent?.(event)
-        return null
-      }
-    }
+    let clean
+    try { clean = sanitizeAcpSessionEvent(event, { requestedAt: this.now() }) } catch { return null }
     if (!recordReplay) {
       this.eventLog.invalidate()
-      this.attentionService?.handleAcpEvent?.(event)
+      this.attentionService?.handleAcpEvent?.(clean)
       return null
     }
     const { type, ...payload } = clean
     let appended
     try { appended = this.#append({ type, payload, at: this.now() }) } catch { appended = null }
-    this.attentionService?.handleAcpEvent?.(event)
+    this.attentionService?.handleAcpEvent?.(clean)
     return appended
   }
 

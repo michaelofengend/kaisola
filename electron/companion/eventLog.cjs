@@ -63,14 +63,23 @@ class CompanionEventLog {
     this.acknowledgements = new Map()
   }
 
-  append({ type, payload = {}, id, at = Date.now() }) {
+  append({ type, payload = {}, id, at = Date.now(), audience }) {
     if (!EVENT_TYPES.has(type)) fail('unknown_event', `unsupported event type: ${String(type || '')}`)
     if (!isPlainObject(payload)) fail('invalid_event', 'payload must be an object')
     safeInteger(at, 'at')
 
     const seq = this.currentSeq + 1
     const eventId = id == null ? `event-${seq}` : safeId(id, 'id')
-    const encoded = encodeJson({ epoch: this.epoch, seq, id: eventId, at, type, payload }, 'event')
+    const cleanAudience = audience == null ? null : safeId(audience, 'audience')
+    const encoded = encodeJson({
+      epoch: this.epoch,
+      seq,
+      id: eventId,
+      at,
+      type,
+      payload,
+      ...(cleanAudience ? { audience: cleanAudience } : {}),
+    }, 'event')
     const bytes = Buffer.byteLength(encoded, 'utf8')
     if (bytes > this.maxBytes) fail('event_too_large', 'event exceeds the replay byte limit')
 

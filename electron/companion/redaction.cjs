@@ -13,6 +13,8 @@ const MAX_TURNS_PER_SESSION = 40
 const MAX_TURN_TEXT = 16 * 1024
 const MAX_DIFF_TEXT = 16 * 1024
 const MAX_DISPLAY = 240
+const MAX_ACP_COLLECTION = 64
+const MAX_ACP_EVENT_BYTES = 512 * 1024
 
 const FORBIDDEN_KEYS = new Set([
   'apikey',
@@ -44,6 +46,18 @@ const ATTENTION_KINDS = new Set(['permission', 'question', 'review', 'blocked', 
 const SEVERITIES = new Set(['info', 'warning', 'critical'])
 const PERMISSION_COMPLETENESS = new Set(['complete', 'truncated', 'redacted', 'unavailable'])
 const PERMISSION_COMPLETENESS_RANK = Object.freeze({ complete: 0, truncated: 1, redacted: 2, unavailable: 3 })
+const ACP_EVENT_TYPES = new Set([
+  'agent.turn.delta',
+  'agent.turn.completed',
+  'agent.permission.requested',
+  'agent.permission.resolved',
+])
+const ACP_CONTENT_UPDATES = new Set(['user_message_chunk', 'agent_message_chunk', 'agent_thought_chunk'])
+const ACP_TOOL_KINDS = new Set(['read', 'edit', 'delete', 'move', 'search', 'execute', 'think', 'fetch', 'switch_mode', 'other'])
+const ACP_TOOL_STATUSES = new Set(['pending', 'in_progress', 'completed', 'failed'])
+const ACP_PLAN_PRIORITIES = new Set(['high', 'medium', 'low'])
+const ACP_PLAN_STATUSES = new Set(['pending', 'in_progress', 'completed'])
+const ACP_STOP_REASONS = new Set(['end_turn', 'max_tokens', 'max_turn_requests', 'refusal', 'cancelled'])
 
 class CompanionProjectionError extends Error {
   constructor(code, message) {
@@ -81,6 +95,12 @@ function plain(value, label) {
   return value
 }
 
+function assertAllowedKeys(value, allowed, label) {
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) projectionFail('unknown_projection_field', `${label}.${key} is not allowed`)
+  }
+}
+
 function safeId(value, label, max = 240) {
   try { return validateIdentifier(value, label, max) } catch { projectionFail('invalid_projection', `${label} is invalid`) }
 }
@@ -103,9 +123,17 @@ function safeBool(value) {
   return value === true
 }
 
+function unsafePath(text) {
+  return path.isAbsolute(text)
+    || path.win32.isAbsolute(text)
+    || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(text)
+    || /^~(?:[\\/]|$)/.test(text)
+    || text.split(/[\\/]/).includes('..')
+}
+
 function safeRelativePath(value, label) {
   const text = safeString(value, label, 1024)
-  if (!text || path.isAbsolute(text) || text.split(/[\\/]/).includes('..')) {
+  if (!text || unsafePath(text)) {
     projectionFail('unsafe_path', `${label} must be workspace-relative`)
   }
   return text.replace(/\\/g, '/')
@@ -121,6 +149,330 @@ function displayText(value, fallback, label, max = MAX_DISPLAY) {
   return safeString(value, label, max, { optional: true }) ?? fallback
 }
 
+function strictText(value, label, max, { optional = false, empty = false } = {}) {
+  if (value == null && optional) return undefined
+  if (typeof value !== 'string' || /[\0\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) {
+    projectionFail('invalid_projection', `${label} must be safe text`)
+  }
+  if ((!empty && value.length === 0) || Buffer.byteLength(value, 'utf8') > max) {
+    projectionFail('invalid_projection', `${label} exceeds its bound`)
+  }
+  return value
+}
+
+function strictRelativePath(value, label) {
+  const text = strictText(value, label, 1024)
+  if (unsafePath(text)) {
+    projectionFail('unsafe_path', `${label} must be workspace-relative`)
+  }
+  return text.replace(/\\/g, '/')
+}
+
+function strictFinite(value, label, { integer = false, min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
+  if (!Number.isFinite(value) || (integer && !Number.isSafeInteger(value)) || value < min || value > max) {
+    projectionFail('invalid_projection', `${label} is invalid`)
+  }
+  return value
+}
+
+function strictArray(value, label, max = MAX_ACP_COLLECTION) {
+  if (!Array.isArray(value) || value.length > max) projectionFail('invalid_projection', `${label} is invalid`)
+  return value
+}
+
+function boundedAcpEvent(value) {
+  if (Buffer.byteLength(JSON.stringify(value), 'utf8') > MAX_ACP_EVENT_BYTES) {
+    projectionFail('projection_too_large', 'ACP event exceeds the companion limit')
+  }
+  return value
+}
+
+function sanitizeAcpTextContent(raw, label) {
+  const content = plain(raw, label)
+  assertAllowedKeys(content, new Set(['type', 'text']), label)
+  if (content.type != null && content.type !== 'text') projectionFail('invalid_projection', `${label}.type is unsupported`)
+  return { type: 'text', text: strictText(content.text, `${label}.text`, MAX_TURN_TEXT, { empty: true }) }
+}
+
+function sanitizeAcpPlanEntries(value, label) {
+  return strictArray(value, label).map((raw, index) => {
+    const entryLabel = `${label}.${index}`
+    const entry = plain(raw, entryLabel)
+    assertAllowedKeys(entry, new Set(['content', 'priority', 'status']), entryLabel)
+    if (!ACP_PLAN_PRIORITIES.has(entry.priority) || !ACP_PLAN_STATUSES.has(entry.status)) {
+      projectionFail('invalid_projection', `${entryLabel} has an invalid state`)
+    }
+    return {
+      content: strictText(entry.content, `${entryLabel}.content`, 2_000),
+      priority: entry.priority,
+      status: entry.status,
+    }
+  })
+}
+
+function sanitizeAcpToolContent(raw, label) {
+  const item = plain(raw, label)
+  if (item.type === 'content') {
+    assertAllowedKeys(item, new Set(['type', 'content']), label)
+    return { type: 'content', content: sanitizeAcpTextContent(item.content, `${label}.content`) }
+  }
+  if (item.type === 'diff') {
+    assertAllowedKeys(item, new Set(['type', 'path', 'oldText', 'newText']), label)
+    return {
+      type: 'diff',
+      path: strictRelativePath(item.path, `${label}.path`),
+      ...(item.oldText == null ? {} : { oldText: strictText(item.oldText, `${label}.oldText`, MAX_DIFF_TEXT, { empty: true }) }),
+      newText: strictText(item.newText, `${label}.newText`, MAX_DIFF_TEXT, { empty: true }),
+    }
+  }
+  if (item.type === 'terminal') {
+    assertAllowedKeys(item, new Set(['type', 'terminalId']), label)
+    return { type: 'terminal', terminalId: safeId(item.terminalId, `${label}.terminalId`) }
+  }
+  projectionFail('invalid_projection', `${label}.type is unsupported`)
+}
+
+function sanitizeAcpToolUpdate(raw, label) {
+  const update = plain(raw, label)
+  assertAllowedKeys(update, new Set(['sessionUpdate', 'toolCallId', 'title', 'kind', 'status', 'content', 'locations']), label)
+  const clean = {
+    sessionUpdate: update.sessionUpdate,
+    toolCallId: safeId(update.toolCallId, `${label}.toolCallId`),
+  }
+  if (update.sessionUpdate === 'tool_call') clean.title = strictText(update.title, `${label}.title`, 500)
+  else if (update.title != null) clean.title = strictText(update.title, `${label}.title`, 500)
+  if (update.kind != null) {
+    if (!ACP_TOOL_KINDS.has(update.kind)) projectionFail('invalid_projection', `${label}.kind is invalid`)
+    clean.kind = update.kind
+  }
+  if (update.status != null) {
+    if (!ACP_TOOL_STATUSES.has(update.status)) projectionFail('invalid_projection', `${label}.status is invalid`)
+    clean.status = update.status
+  }
+  if (update.content != null) {
+    clean.content = strictArray(update.content, `${label}.content`, 32)
+      .map((item, index) => sanitizeAcpToolContent(item, `${label}.content.${index}`))
+  }
+  if (update.locations != null) {
+    clean.locations = strictArray(update.locations, `${label}.locations`, 32).map((rawLocation, index) => {
+      const locationLabel = `${label}.locations.${index}`
+      const location = plain(rawLocation, locationLabel)
+      assertAllowedKeys(location, new Set(['path', 'line']), locationLabel)
+      return {
+        path: strictRelativePath(location.path, `${locationLabel}.path`),
+        ...(location.line == null ? {} : { line: strictFinite(location.line, `${locationLabel}.line`, { integer: true }) }),
+      }
+    })
+  }
+  return clean
+}
+
+function sanitizeAcpAvailableCommands(value, label) {
+  return strictArray(value, label).map((raw, index) => {
+    const commandLabel = `${label}.${index}`
+    const command = plain(raw, commandLabel)
+    assertAllowedKeys(command, new Set(['name', 'description', 'input']), commandLabel)
+    const clean = {
+      name: strictText(command.name, `${commandLabel}.name`, 120),
+      description: strictText(command.description, `${commandLabel}.description`, 500, { empty: true }),
+    }
+    if (command.input != null) {
+      const input = plain(command.input, `${commandLabel}.input`)
+      assertAllowedKeys(input, new Set(['hint']), `${commandLabel}.input`)
+      clean.input = { hint: strictText(input.hint, `${commandLabel}.input.hint`, 240, { empty: true }) }
+    }
+    return clean
+  })
+}
+
+function sanitizeAcpConfigSelectOptions(value, label, depth = 0) {
+  return strictArray(value, label, 32).map((raw, index) => {
+    const optionLabel = `${label}.${index}`
+    const option = plain(raw, optionLabel)
+    if (Object.hasOwn(option, 'group')) {
+      if (depth >= 1) projectionFail('invalid_projection', `${optionLabel} exceeds the group depth limit`)
+      assertAllowedKeys(option, new Set(['group', 'name', 'options']), optionLabel)
+      return {
+        group: safeId(option.group, `${optionLabel}.group`, 120),
+        name: strictText(option.name, `${optionLabel}.name`, 160),
+        options: sanitizeAcpConfigSelectOptions(option.options, `${optionLabel}.options`, depth + 1),
+      }
+    }
+    assertAllowedKeys(option, new Set(['value', 'name', 'description']), optionLabel)
+    return {
+      value: safeId(option.value, `${optionLabel}.value`, 160),
+      name: strictText(option.name, `${optionLabel}.name`, 160),
+      ...(option.description == null ? {} : { description: strictText(option.description, `${optionLabel}.description`, 300, { empty: true }) }),
+    }
+  })
+}
+
+function sanitizeAcpConfigOptions(value, label) {
+  return strictArray(value, label, 32).map((raw, index) => {
+    const optionLabel = `${label}.${index}`
+    const option = plain(raw, optionLabel)
+    assertAllowedKeys(option, new Set(['type', 'id', 'name', 'description', 'category', 'currentValue', 'options']), optionLabel)
+    if (option.type !== 'select' && option.type !== 'boolean') projectionFail('invalid_projection', `${optionLabel}.type is invalid`)
+    const clean = {
+      type: option.type,
+      id: safeId(option.id, `${optionLabel}.id`, 160),
+      name: strictText(option.name, `${optionLabel}.name`, 160),
+      ...(option.description == null ? {} : { description: strictText(option.description, `${optionLabel}.description`, 300, { empty: true }) }),
+      ...(option.category == null ? {} : { category: strictText(option.category, `${optionLabel}.category`, 120) }),
+    }
+    if (option.type === 'boolean') {
+      if (typeof option.currentValue !== 'boolean' || option.options != null) projectionFail('invalid_projection', `${optionLabel} is invalid`)
+      clean.currentValue = option.currentValue
+    } else {
+      clean.currentValue = safeId(option.currentValue, `${optionLabel}.currentValue`, 160)
+      clean.options = sanitizeAcpConfigSelectOptions(option.options, `${optionLabel}.options`)
+    }
+    return clean
+  })
+}
+
+function sanitizeAcpDelta(raw) {
+  if (typeof raw === 'string') return strictText(raw, 'agent.turn.delta.delta', MAX_TURN_TEXT, { empty: true })
+  const update = plain(raw, 'agent.turn.delta.delta')
+  assertNoForbiddenKeys(update)
+  if (update.sessionUpdate == null) {
+    assertAllowedKeys(update, new Set(['text']), 'agent.turn.delta.delta')
+    return { text: strictText(update.text, 'agent.turn.delta.delta.text', MAX_TURN_TEXT, { empty: true }) }
+  }
+  const kind = update.sessionUpdate
+  if (ACP_CONTENT_UPDATES.has(kind)) {
+    assertAllowedKeys(update, new Set(['sessionUpdate', 'content', 'text', 'messageId']), 'agent.turn.delta.delta')
+    if ((update.content == null) === (update.text == null)) {
+      projectionFail('invalid_projection', 'agent.turn.delta.delta must contain exactly one text source')
+    }
+    return {
+      sessionUpdate: kind,
+      content: update.content == null
+        ? { type: 'text', text: strictText(update.text, 'agent.turn.delta.delta.text', MAX_TURN_TEXT, { empty: true }) }
+        : sanitizeAcpTextContent(update.content, 'agent.turn.delta.delta.content'),
+      ...(update.messageId == null ? {} : { messageId: safeId(update.messageId, 'agent.turn.delta.delta.messageId') }),
+    }
+  }
+  if (kind === 'tool_call' || kind === 'tool_call_update') return sanitizeAcpToolUpdate(update, 'agent.turn.delta.delta')
+  if (kind === 'plan') {
+    assertAllowedKeys(update, new Set(['sessionUpdate', 'entries']), 'agent.turn.delta.delta')
+    return { sessionUpdate: kind, entries: sanitizeAcpPlanEntries(update.entries, 'agent.turn.delta.delta.entries') }
+  }
+  if (kind === 'plan_update') {
+    assertAllowedKeys(update, new Set(['sessionUpdate', 'plan']), 'agent.turn.delta.delta')
+    const plan = plain(update.plan, 'agent.turn.delta.delta.plan')
+    if (plan.type === 'items') {
+      assertAllowedKeys(plan, new Set(['type', 'planId', 'entries']), 'agent.turn.delta.delta.plan')
+      return { sessionUpdate: kind, plan: { type: 'items', planId: safeId(plan.planId, 'agent.turn.delta.delta.plan.planId'), entries: sanitizeAcpPlanEntries(plan.entries, 'agent.turn.delta.delta.plan.entries') } }
+    }
+    if (plan.type === 'markdown') {
+      assertAllowedKeys(plan, new Set(['type', 'planId', 'content']), 'agent.turn.delta.delta.plan')
+      return { sessionUpdate: kind, plan: { type: 'markdown', planId: safeId(plan.planId, 'agent.turn.delta.delta.plan.planId'), content: strictText(plan.content, 'agent.turn.delta.delta.plan.content', MAX_TURN_TEXT, { empty: true }) } }
+    }
+    if (plan.type === 'file') {
+      assertAllowedKeys(plan, new Set(['type', 'planId', 'uri']), 'agent.turn.delta.delta.plan')
+      return { sessionUpdate: kind, plan: { type: 'file', planId: safeId(plan.planId, 'agent.turn.delta.delta.plan.planId'), uri: strictRelativePath(plan.uri, 'agent.turn.delta.delta.plan.uri') } }
+    }
+    projectionFail('invalid_projection', 'agent.turn.delta.delta.plan.type is unsupported')
+  }
+  if (kind === 'plan_removed') {
+    assertAllowedKeys(update, new Set(['sessionUpdate', 'planId']), 'agent.turn.delta.delta')
+    return { sessionUpdate: kind, planId: safeId(update.planId, 'agent.turn.delta.delta.planId') }
+  }
+  if (kind === 'available_commands_update') {
+    assertAllowedKeys(update, new Set(['sessionUpdate', 'availableCommands']), 'agent.turn.delta.delta')
+    return { sessionUpdate: kind, availableCommands: sanitizeAcpAvailableCommands(update.availableCommands, 'agent.turn.delta.delta.availableCommands') }
+  }
+  if (kind === 'current_mode_update') {
+    assertAllowedKeys(update, new Set(['sessionUpdate', 'currentModeId', 'modeId']), 'agent.turn.delta.delta')
+    return { sessionUpdate: kind, currentModeId: safeId(update.currentModeId ?? update.modeId, 'agent.turn.delta.delta.currentModeId') }
+  }
+  if (kind === 'current_model_update') {
+    assertAllowedKeys(update, new Set(['sessionUpdate', 'currentModelId', 'modelId']), 'agent.turn.delta.delta')
+    return { sessionUpdate: kind, currentModelId: safeId(update.currentModelId ?? update.modelId, 'agent.turn.delta.delta.currentModelId') }
+  }
+  if (kind === 'config_option_update') {
+    assertAllowedKeys(update, new Set(['sessionUpdate', 'configOptions']), 'agent.turn.delta.delta')
+    return { sessionUpdate: kind, configOptions: sanitizeAcpConfigOptions(update.configOptions, 'agent.turn.delta.delta.configOptions') }
+  }
+  if (kind === 'session_info_update') {
+    assertAllowedKeys(update, new Set(['sessionUpdate', 'title', 'updatedAt']), 'agent.turn.delta.delta')
+    return {
+      sessionUpdate: kind,
+      ...(update.title == null ? {} : { title: strictText(update.title, 'agent.turn.delta.delta.title', 500, { empty: true }) }),
+      ...(update.updatedAt == null ? {} : { updatedAt: strictText(update.updatedAt, 'agent.turn.delta.delta.updatedAt', 64) }),
+    }
+  }
+  if (kind === 'usage_update') {
+    assertAllowedKeys(update, new Set(['sessionUpdate', 'used', 'size', 'usedTokens', 'maxTokens', 'contextWindow', 'cost']), 'agent.turn.delta.delta')
+    let contextWindow
+    if (update.contextWindow != null) {
+      contextWindow = plain(update.contextWindow, 'agent.turn.delta.delta.contextWindow')
+      assertAllowedKeys(contextWindow, new Set(['used', 'size']), 'agent.turn.delta.delta.contextWindow')
+    }
+    const clean = {
+      sessionUpdate: kind,
+      used: strictFinite(update.used ?? update.usedTokens ?? contextWindow?.used, 'agent.turn.delta.delta.used', { integer: true }),
+      size: strictFinite(update.size ?? update.maxTokens ?? contextWindow?.size, 'agent.turn.delta.delta.size', { integer: true, min: 1 }),
+    }
+    if (update.cost != null) {
+      const cost = plain(update.cost, 'agent.turn.delta.delta.cost')
+      assertAllowedKeys(cost, new Set(['amount', 'currency']), 'agent.turn.delta.delta.cost')
+      clean.cost = {
+        amount: strictFinite(cost.amount, 'agent.turn.delta.delta.cost.amount', { max: 1_000_000_000 }),
+        currency: strictText(cost.currency, 'agent.turn.delta.delta.cost.currency', 8),
+      }
+    }
+    return clean
+  }
+  projectionFail('invalid_projection', `agent.turn.delta.delta update type is unsupported: ${String(kind || '')}`)
+}
+
+function sanitizeAcpSessionEvent(raw, { requestedAt = Date.now() } = {}) {
+  const event = plain(raw, 'ACP event')
+  assertNoForbiddenKeys(event)
+  if (!ACP_EVENT_TYPES.has(event.type)) projectionFail('invalid_projection', 'ACP event type is invalid')
+  if (event.type === 'agent.permission.requested') {
+    return boundedAcpEvent(sanitizeAcpPermissionEvent(event, { requestedAt }))
+  }
+
+  const baseKeys = ['type', 'projectId', 'targetId', 'sessionId']
+  const clean = {
+    type: event.type,
+    projectId: safeId(event.projectId, 'acp.event.projectId'),
+    ...(event.targetId == null ? {} : { targetId: safeId(event.targetId, 'acp.event.targetId') }),
+    ...(event.sessionId == null ? {} : { sessionId: safeId(event.sessionId, 'acp.event.sessionId') }),
+  }
+  if (!clean.targetId && !clean.sessionId) projectionFail('invalid_projection', 'ACP event target is missing')
+
+  if (event.type === 'agent.turn.delta') {
+    assertAllowedKeys(event, new Set([...baseKeys, 'turnId', 'delta']), 'agent.turn.delta')
+    return boundedAcpEvent({ ...clean, turnId: safeId(event.turnId, 'agent.turn.delta.turnId'), delta: sanitizeAcpDelta(event.delta) })
+  }
+  if (event.type === 'agent.turn.completed') {
+    assertAllowedKeys(event, new Set([...baseKeys, 'attentionSessionId', 'turnId', 'ok', 'agent', 'stopReason']), 'agent.turn.completed')
+    if (typeof event.ok !== 'boolean') projectionFail('invalid_projection', 'agent.turn.completed.ok is invalid')
+    if (event.stopReason != null && !ACP_STOP_REASONS.has(event.stopReason)) projectionFail('invalid_projection', 'agent.turn.completed.stopReason is invalid')
+    return boundedAcpEvent({
+      ...clean,
+      ...(event.attentionSessionId == null ? {} : { attentionSessionId: safeId(event.attentionSessionId, 'agent.turn.completed.attentionSessionId') }),
+      turnId: safeId(event.turnId, 'agent.turn.completed.turnId'),
+      ok: event.ok,
+      ...(event.agent == null ? {} : { agent: strictText(event.agent, 'agent.turn.completed.agent', 160) }),
+      ...(event.stopReason == null ? {} : { stopReason: event.stopReason }),
+    })
+  }
+
+  assertAllowedKeys(event, new Set([...baseKeys, 'permId', 'revision', 'resolution', 'actorId']), 'agent.permission.resolved')
+  return boundedAcpEvent({
+    ...clean,
+    permId: safeId(event.permId, 'agent.permission.resolved.permId'),
+    ...(event.revision == null ? {} : { revision: safeTime(event.revision, 'agent.permission.resolved.revision') }),
+    ...(event.resolution == null ? {} : { resolution: strictText(event.resolution, 'agent.permission.resolved.resolution', 80) }),
+    ...(event.actorId == null ? {} : { actorId: safeId(event.actorId, 'agent.permission.resolved.actorId') }),
+  })
+}
+
 /** Normalize the authoritative ACP permission event once for both snapshot and
  * live-event delivery. Provider-only fields stay desktop-side, unsafe paths are
  * omitted, and any context loss is reflected in completeness. */
@@ -132,6 +484,11 @@ function sanitizeAcpPermissionEvent(raw, {
   const event = plain(raw, 'agent.permission.requested')
   if (event.type !== 'agent.permission.requested') projectionFail('invalid_projection', 'ACP permission event type is invalid')
   assertNoForbiddenKeys(event)
+  assertAllowedKeys(event, new Set([
+    'type', 'permId', 'revision', 'completeness', 'projectId', 'targetId', 'sessionId',
+    'attentionSessionId', 'key', 'agent', 'title', 'kind', 'sensitive', 'requestedAt',
+    'options', 'diffs',
+  ]), 'agent.permission.requested')
 
   const cleanProjectId = safeId(projectId, 'acp.permission.projectId')
   const permId = safeId(event.permId, 'acp.permission.permId')
@@ -146,6 +503,7 @@ function sanitizeAcpPermissionEvent(raw, {
   const diffs = []
   for (const [index, rawDiff] of rawDiffs.slice(0, 8).entries()) {
     if (!isPlainObject(rawDiff)) { contextReduced = true; continue }
+    assertAllowedKeys(rawDiff, new Set(['type', 'path', 'relativePath', 'oldText', 'newText']), `agent.permission.requested.diffs.${index}`)
     let relativePath
     try {
       relativePath = safeRelativePath(rawDiff.relativePath ?? rawDiff.path, `acp.permission.diffs.${index}.relativePath`)
@@ -169,6 +527,7 @@ function sanitizeAcpPermissionEvent(raw, {
   const options = []
   for (const [index, rawOption] of rawOptions.slice(0, 12).entries()) {
     if (!isPlainObject(rawOption)) { contextReduced = true; continue }
+    assertAllowedKeys(rawOption, new Set(['id', 'optionId', 'label', 'name', 'kind']), `agent.permission.requested.options.${index}`)
     const id = optionalId(rawOption.id ?? rawOption.optionId, `acp.permission.options.${index}.id`, 120)
     if (!id) { contextReduced = true; continue }
     options.push({
@@ -447,5 +806,6 @@ module.exports = {
   buildBoard,
   safeRelativePath,
   sanitizeAcpPermissionEvent,
+  sanitizeAcpSessionEvent,
   sanitizeProjection,
 }

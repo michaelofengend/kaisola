@@ -10,6 +10,7 @@ function handlerHarness() {
   const sent = []
   const badges = []
   const storage = new Map()
+  let ownedProjects = new Set()
   let senderDestroyed = false
   const sender = {
     id: 7_001,
@@ -47,13 +48,16 @@ function handlerHarness() {
     Notification: { isSupported: () => false },
     service,
     platform: 'darwin',
+    projectIdsForWindow: () => ownedProjects,
   })
   const event = { sender }
   return {
     badges,
     destroy: () => { senderDestroyed = true; for (const callback of destroyed) callback() },
     dispose,
+    call: (channel, payload) => handles.get(channel)?.(event, payload),
     invoke: (channel, payload) => listeners.get(channel)?.(event, payload),
+    setOwnedProjects: (...projectIds) => { ownedProjects = new Set(projectIds) },
     sent,
     service,
     storage,
@@ -90,6 +94,7 @@ test('native notification payloads are bounded and carry safe navigation ids', (
 
 test('dock badge counts only projects attached to live windows without clearing durable records', async () => {
   const h = handlerHarness()
+  h.setOwnedProjects('project-live')
   h.invoke('attention:surface', {
     projectId: 'project-live',
     projects: [{ projectId: 'project-live', alias: '/repo/live' }],
@@ -125,6 +130,7 @@ test('dock badge counts only projects attached to live windows without clearing 
 
 test('renderer permission echoes never duplicate the authoritative record and resolution clears it everywhere', async () => {
   const h = handlerHarness()
+  h.setOwnedProjects('project-a')
   h.invoke('attention:surface', {
     projectId: 'project-a',
     projects: [{ projectId: 'project-a' }],
@@ -165,5 +171,45 @@ test('renderer permission echoes never duplicate the authoritative record and re
   await Promise.resolve()
   const persisted = JSON.parse(h.storage.get(STORE_KEY))
   assert.equal(persisted.records.filter((record) => record.status === 'active').length, 0)
+  h.dispose()
+})
+
+test('desktop attention acknowledgement and event fan-out stay inside authoritative window projects', () => {
+  const h = handlerHarness()
+  h.setOwnedProjects('project-owned')
+  h.invoke('attention:surface', {
+    projectId: 'project-owned',
+    projects: [
+      { projectId: 'project-owned', alias: '/repo/owned' },
+      { projectId: 'project-other', alias: '/repo/other' },
+    ],
+    visibleSessionIds: [],
+    documentVisible: true,
+    documentFocused: false,
+  })
+  const owned = h.service.raise({
+    projectId: 'project-owned',
+    source: 'ledger',
+    sourceId: 'owned-review',
+    kind: 'review',
+    title: 'Review owned project',
+  }).event
+  const other = h.service.raise({
+    projectId: 'project-other',
+    source: 'ledger',
+    sourceId: 'other-review',
+    kind: 'review',
+    title: 'Review other project',
+  }).event
+
+  assert.deepEqual(h.sent.filter(({ channel }) => channel === 'attention:raised').map(({ payload }) => payload.projectId), ['project-owned'])
+  const crossProject = h.call('attention:ack', { projectId: 'project-other', eventId: other.eventId })
+  assert.equal(crossProject.status, 'rejected')
+  assert.match(crossProject.message, /does not own/)
+  assert.equal(h.service.activeEvents('project-other').length, 1)
+
+  const applied = h.call('attention:ack', { projectId: 'project-owned', eventId: owned.eventId })
+  assert.equal(applied.status, 'applied')
+  assert.equal(h.service.activeEvents('project-owned').length, 0)
   h.dispose()
 })

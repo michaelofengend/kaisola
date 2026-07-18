@@ -3,6 +3,7 @@
 const DEFAULT_OBSERVER_QUEUE_BYTES = 256 * 1024
 const MIN_OBSERVER_QUEUE_BYTES = 64 * 1024
 const MAX_OBSERVER_QUEUE_BYTES = 2 * 1024 * 1024
+const MAX_TERMINAL_OBSERVERS = 8
 
 function queueLimit(value) {
   if (!Number.isFinite(Number(value))) return DEFAULT_OBSERVER_QUEUE_BYTES
@@ -20,6 +21,9 @@ class TerminalObservers {
   subscribe(owner, { maxQueueBytes } = {}) {
     const key = String(owner || '')
     if (!key || key.length > 500) throw new Error('terminal subscriber is invalid')
+    if (!this.subscribers.has(key) && this.subscribers.size >= MAX_TERMINAL_OBSERVERS) {
+      throw new Error(`terminal observer limit of ${MAX_TERMINAL_OBSERVERS} reached`)
+    }
     this.subscribers.set(key, { maxQueueBytes: queueLimit(maxQueueBytes), paused: false })
     return { subscriberCount: this.subscribers.size, maxQueueBytes: this.subscribers.get(key).maxQueueBytes }
   }
@@ -75,8 +79,8 @@ class TerminalObservers {
 module.exports = {
   DEFAULT_OBSERVER_QUEUE_BYTES,
   MAX_OBSERVER_QUEUE_BYTES,
+  MAX_TERMINAL_OBSERVERS,
   MIN_OBSERVER_QUEUE_BYTES,
   TerminalObservers,
   queueLimit,
 }
-

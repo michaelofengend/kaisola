@@ -173,13 +173,42 @@ function sanitizePermissionEvent({ permId, revision, entry, agent, key, toolCall
   })
 }
 
-function providerDecision(displayPayload, { optionId, decision } = {}) {
-  if (typeof optionId === 'string' && optionId) {
-    if (!displayPayload.options.some((option) => option.optionId === optionId)) return null
-    return { optionId }
+function providerDecision(displayPayload, { optionId, decision } = {}, surface = 'desktop') {
+  const matching = typeof optionId === 'string' && optionId
+    ? displayPayload.options.filter((option) => option.optionId === optionId)
+    : []
+  const selected = matching.length === 1 ? matching[0] : null
+
+  if (surface === 'companion') {
+    const uniqueOptionOfKind = (kind) => {
+      const candidates = displayPayload.options.filter((option) => option.kind === kind)
+      if (candidates.length !== 1) return null
+      return displayPayload.options.filter((option) => option.optionId === candidates[0].optionId).length === 1
+        ? candidates[0]
+        : null
+    }
+    // The phone can always fail closed, but it must never create a persistent
+    // rule. Prefer an explicit reject-once option and otherwise cancel the
+    // provider request, which is still a denial without widening future access.
+    if (decision === 'reject') {
+      const rejectOnce = uniqueOptionOfKind('reject_once')
+      return { answer: rejectOnce ? { optionId: rejectOnce.optionId } : 'cancel', rejected: true }
+    }
+    if (selected?.kind === 'reject_once') return { answer: { optionId: selected.optionId }, rejected: true }
+    if (selected?.kind === 'allow_once' && displayPayload.completeness === 'complete') {
+      return { answer: { optionId: selected.optionId }, rejected: false }
+    }
+    if (decision === 'allow' && displayPayload.completeness === 'complete') {
+      const allowOnce = uniqueOptionOfKind('allow_once')
+      return allowOnce ? { answer: { optionId: allowOnce.optionId }, rejected: false } : null
+    }
+    return null
   }
-  if (decision === 'reject') return 'reject'
-  if (decision === 'allow') return 'allow'
+
+  if (selected) return { answer: { optionId: selected.optionId }, rejected: selected.kind?.startsWith('reject_') === true }
+  if (typeof optionId === 'string' && optionId) return null
+  if (decision === 'reject') return { answer: 'reject', rejected: true }
+  if (decision === 'allow') return { answer: 'allow', rejected: false }
   return null
 }
 
@@ -379,8 +408,8 @@ class AcpSessionService {
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision !== pending.revision) {
       return this.#staleRevisionReceipt(permId, expectedRevision, pending.revision)
     }
-    const answer = providerDecision(pending.displayPayload, { optionId, decision })
-    if (answer == null) return this.#failure('rejected', 'Permission response is invalid.')
+    const providerResponse = providerDecision(pending.displayPayload, { optionId, decision }, cleanActor.surface)
+    if (providerResponse == null) return this.#failure('rejected', 'Permission response is invalid for this surface and context.')
 
     const receipt = Object.freeze({
       ok: true,
@@ -388,9 +417,9 @@ class AcpSessionService {
       permId,
       revision: pending.revision,
       resolution: 'responded',
-      message: decision === 'reject' ? 'Permission rejected.' : 'Permission response applied.',
+      message: providerResponse.rejected ? 'Permission rejected.' : 'Permission response applied.',
     })
-    if (!this.#settlePermission(pending, answer, 'responded', cleanActor.id)) {
+    if (!this.#settlePermission(pending, providerResponse.answer, 'responded', cleanActor.id)) {
       return this.#latePermissionReceipt(cleanActor, { projectId, targetId, permId, expectedRevision })
     }
     return cloneReceipt(receipt)

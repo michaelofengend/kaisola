@@ -9,6 +9,7 @@ const { CompanionGateway } = require('./gateway.cjs')
 const { LoopbackCompanionTransport } = require('./loopbackTransport.cjs')
 const { CompanionProjectionStore } = require('./projectionStore.cjs')
 const { CompanionStateHub } = require('./stateHub.cjs')
+const { AcpSessionService } = require('../ipc/acpSessionService.cjs')
 
 const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'snapshot-board.json'), 'utf8')).body.projection
 
@@ -48,15 +49,20 @@ function setup({
   })
   const transport = new LoopbackCompanionTransport({ ...(queueBytes ? { maxQueueBytes: queueBytes } : {}) })
   const session = gateway.attach(transport, { deviceId: 'device-michael-iphone', capabilities: deviceCapabilities })
-  const hello = ({ lastAck, capabilities = ['observe'] } = {}) => ({
+  const hello = ({
+    lastAck,
+    capabilities = ['observe'],
+    deviceId = 'device-michael-iphone',
+    connectionId = `connection-${lastAck ?? 'new'}`,
+  } = {}) => ({
     v: 1,
     kind: 'hello',
     desktopId: 'desktop-michael-mac',
-    deviceId: 'device-michael-iphone',
-    connectionId: `connection-${lastAck ?? 'new'}`,
+    deviceId,
+    connectionId,
     epoch: 'desktop-epoch-7',
     seq: 0,
-    id: `hello-${lastAck ?? 'new'}`,
+    id: `hello-${deviceId}-${lastAck ?? 'new'}`,
     sentAt: now,
     body: { type: 'hello', role: 'device', protocolMinor: 0, capabilities, ...(lastAck == null ? {} : { lastAck }) },
   })
@@ -76,12 +82,13 @@ function command({
   targetId = 'terminal-codex',
   payload = {},
   connectionId = 'connection-new',
+  deviceId = 'device-michael-iphone',
 }) {
   return {
     v: 1,
     kind: 'command',
     desktopId: 'desktop-michael-mac',
-    deviceId: 'device-michael-iphone',
+    deviceId,
     connectionId,
     epoch: 'desktop-epoch-7',
     seq: 1,
@@ -111,9 +118,12 @@ test('reconnect from an acknowledged cursor receives only the ordered live suffi
   first.publish()
   await first.transport.sendFromDevice(first.hello())
   first.transport.receiveForDevice()
-  first.desktopState.terminalObserverEvent('project-kaisola', {
-    channel: 'terminal:observer-output',
-    payload: { id: 'terminal-codex', streamEpoch: 'terminal-epoch-3', startOffset: 3, endOffset: 7, data: '🙂' },
+  first.gateway.acpSessionEvent({
+    type: 'agent.turn.delta',
+    projectId: 'project-kaisola',
+    targetId: 'session-codex',
+    turnId: 'turn-reconnect',
+    delta: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'resume me' } },
   })
   first.session.close('device_reconnect')
 
@@ -122,8 +132,8 @@ test('reconnect from an acknowledged cursor receives only the ordered live suffi
   await reconnectTransport.sendFromDevice(first.hello({ lastAck: 1 }))
   const frames = reconnectTransport.receiveForDevice()
   assert.deepEqual(frames.map(({ kind }) => kind), ['hello', 'event'])
-  assert.equal(frames[1].body.type, 'terminal.output')
-  assert.equal(frames[1].body.data, '🙂')
+  assert.equal(frames[1].body.type, 'agent.turn.delta')
+  assert.equal(frames[1].body.delta.content.text, 'resume me')
   assert.equal(reconnect.stats().lastSentSeq, 2)
 })
 
@@ -333,6 +343,56 @@ test('live permission events use the exact snapshot redaction boundary', async (
   assert.equal(desktopState.stats().eventLog.currentSeq, before)
 })
 
+test('secret-shaped ACP deltas are rejected from both live and replay delivery', async () => {
+  const { desktopState, gateway, hello, publish, session, transport } = setup()
+  publish()
+  await transport.sendFromDevice(hello())
+  transport.receiveForDevice()
+  const before = desktopState.stats().eventLog.currentSeq
+  const base = {
+    type: 'agent.turn.delta',
+    projectId: 'project-kaisola',
+    targetId: 'session-codex',
+    turnId: 'turn-secret',
+  }
+  const rejected = [
+    {
+      ...base,
+      delta: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hidden', environment: { API_TOKEN: 'live-secret' } } },
+    },
+    {
+      ...base,
+      delta: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tool-secret',
+        title: 'Edit secret',
+        content: [{ type: 'diff', path: '/Users/michael/.env', oldText: 'old-token', newText: 'new-token' }],
+      },
+    },
+    {
+      ...base,
+      delta: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'safe', unknownNested: 'secret' } },
+    },
+    {
+      ...base,
+      delta: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'x'.repeat(16 * 1024 + 1) } },
+    },
+  ]
+  for (const event of rejected) assert.equal(gateway.acpSessionEvent(event), null)
+  await Promise.resolve()
+  assert.equal(desktopState.stats().eventLog.currentSeq, before)
+  assert.deepEqual(transport.receiveForDevice(), [])
+
+  session.close('secret-replay-check')
+  const replayTransport = new LoopbackCompanionTransport()
+  gateway.attach(replayTransport, { deviceId: 'device-michael-iphone', capabilities: ['observe'] })
+  await replayTransport.sendFromDevice(hello({ lastAck: before, connectionId: 'connection-secret-replay' }))
+  const replayFrames = replayTransport.receiveForDevice()
+  assert.deepEqual(replayFrames.map(({ kind }) => kind), ['hello'])
+  assert.equal(JSON.stringify(replayFrames).includes('live-secret'), false)
+  assert.equal(JSON.stringify(replayFrames).includes('/Users/michael'), false)
+})
+
 test('observe stream commands deliver bounded snapshots and live output, then unsubscribe exactly', async () => {
   let observerArgs
   let unsubscribed = 0
@@ -398,6 +458,143 @@ test('observe stream commands deliver bounded snapshots and live output, then un
   await session.gateway.settle()
   assert.equal(unsubscribed, 2)
   assert.equal(session.stats().terminalSubscriptions, 0)
+})
+
+test('one terminal observer fans each byte range once only to subscribed companion sessions', async () => {
+  let observerArgs
+  let observerCalls = 0
+  let upstreamUnsubscribed = 0
+  const terminalObserver = async (args) => {
+    observerCalls++
+    observerArgs = args
+    return {
+      ok: true,
+      mode: 'snapshot',
+      snapshot: {
+        streamEpoch: 'stream-shared',
+        output: 'ready\n',
+        startOffset: 0,
+        endOffset: 6,
+        truncated: false,
+        exited: false,
+      },
+      unsubscribe: async () => { upstreamUnsubscribed++; return { ok: true } },
+    }
+  }
+  const first = setup({ terminalObserver })
+  first.publish()
+  await first.transport.sendFromDevice(first.hello())
+  first.transport.receiveForDevice()
+
+  const secondTransport = new LoopbackCompanionTransport()
+  const second = first.gateway.attach(secondTransport, { deviceId: 'device-second-phone', capabilities: ['observe'] })
+  await secondTransport.sendFromDevice(first.hello({ deviceId: 'device-second-phone', connectionId: 'connection-second' }))
+  secondTransport.receiveForDevice()
+  const thirdTransport = new LoopbackCompanionTransport()
+  first.gateway.attach(thirdTransport, { deviceId: 'device-no-stream', capabilities: ['observe'] })
+  await thirdTransport.sendFromDevice(first.hello({ deviceId: 'device-no-stream', connectionId: 'connection-third' }))
+  thirdTransport.receiveForDevice()
+
+  await first.transport.sendFromDevice(command({
+    type: 'stream.subscribe',
+    commandId: 'shared-subscribe-first',
+    capability: 'observe',
+    payload: { streamEpoch: 'stream-shared', afterOffset: 6 },
+  }))
+  await Promise.resolve()
+  const firstSubscribeFrames = first.transport.receiveForDevice()
+  assert.equal(firstSubscribeFrames.filter((frame) => frame.body.type === 'terminal.snapshot').length, 1)
+  secondTransport.receiveForDevice()
+  thirdTransport.receiveForDevice()
+
+  await secondTransport.sendFromDevice(command({
+    type: 'stream.subscribe',
+    commandId: 'shared-subscribe-second',
+    capability: 'observe',
+    payload: { streamEpoch: 'stream-shared', afterOffset: 6 },
+    deviceId: 'device-second-phone',
+    connectionId: 'connection-second',
+  }))
+  await Promise.resolve()
+  assert.equal(observerCalls, 1)
+  assert.equal(first.transport.receiveForDevice().filter((frame) => frame.body.type === 'terminal.snapshot').length, 0)
+  assert.equal(secondTransport.receiveForDevice().filter((frame) => frame.body.type === 'terminal.snapshot').length, 1)
+  assert.deepEqual(thirdTransport.receiveForDevice(), [])
+  assert.equal(first.session.stats().terminalSubscriptions, 1)
+  assert.equal(second.stats().terminalSubscriptions, 1)
+
+  const beforeOutput = first.desktopState.stats().eventLog.currentSeq
+  observerArgs.onEvent({
+    channel: 'terminal:observer-output',
+    payload: { id: 'terminal-codex', streamEpoch: 'stream-shared', startOffset: 6, endOffset: 10, data: 'live' },
+  })
+  await Promise.resolve()
+  await Promise.resolve()
+  const firstOutput = first.transport.receiveForDevice().filter((frame) => frame.body.type === 'terminal.output')
+  const secondOutput = secondTransport.receiveForDevice().filter((frame) => frame.body.type === 'terminal.output')
+  assert.equal(firstOutput.length, 1)
+  assert.equal(secondOutput.length, 1)
+  assert.equal(firstOutput[0].body.data, 'live')
+  assert.equal(firstOutput[0].seq, secondOutput[0].seq)
+  assert.equal(first.desktopState.stats().eventLog.currentSeq, beforeOutput + 1)
+  assert.deepEqual(thirdTransport.receiveForDevice(), [])
+
+  observerArgs.onEvent({
+    channel: 'terminal:observer-output',
+    payload: { id: 'terminal-codex', streamEpoch: 'stream-shared', startOffset: 6, endOffset: 10, data: 'live' },
+  })
+  await Promise.resolve()
+  assert.equal(first.desktopState.stats().eventLog.currentSeq, beforeOutput + 1)
+  assert.deepEqual(first.transport.receiveForDevice(), [])
+  assert.deepEqual(secondTransport.receiveForDevice(), [])
+
+  first.session.close('shared-first-close')
+  second.close('shared-second-close')
+  await first.gateway.settle()
+  assert.equal(upstreamUnsubscribed, 1)
+})
+
+test('unsubscribe supersedes an in-flight terminal subscribe and disposes its late observer', async () => {
+  let resolveObserver
+  let observerStarted
+  const started = new Promise((resolve) => { observerStarted = resolve })
+  let unsubscribed = 0
+  const terminalObserver = async () => {
+    observerStarted()
+    return new Promise((resolve) => { resolveObserver = resolve })
+  }
+  const { gateway, hello, publish, session, transport } = setup({ terminalObserver })
+  publish()
+  await transport.sendFromDevice(hello())
+  transport.receiveForDevice()
+
+  const subscribing = transport.sendFromDevice(command({
+    type: 'stream.subscribe',
+    commandId: 'racing-subscribe',
+    capability: 'observe',
+  }))
+  await started
+  const removed = await transport.sendFromDevice(command({
+    type: 'stream.unsubscribe',
+    commandId: 'racing-unsubscribe',
+    capability: 'observe',
+  }))
+  assert.equal(removed.status, 'applied')
+  assert.equal(session.stats().terminalSubscriptions, 0)
+
+  resolveObserver({
+    ok: true,
+    mode: 'current',
+    cursor: { streamEpoch: 'stream-race', offset: 0 },
+    unsubscribe: async () => { unsubscribed++; return { ok: true } },
+  })
+  const late = await subscribing
+  await gateway.settle()
+  assert.equal(late.status, 'unavailable')
+  assert.match(late.message, /superseded/)
+  assert.equal(unsubscribed, 1)
+  assert.equal(session.stats().terminalSubscriptions, 0)
+  assert.equal(gateway.stats().terminalStreams, 0)
 })
 
 test('ACP and ledger adapters share the live ordered gateway replay', async () => {
@@ -475,6 +672,57 @@ test('agent commands filter terminal-control from ACP actors and return normal r
   const receipt = transport.receiveForDevice().find((frame) => frame.kind === 'receipt')
   assert.equal(receipt.body.status, 'applied')
   assert.equal(receipt.body.message, 'Agent cancelled.')
+})
+
+test('connected companion project subscription keeps an orphaned ACP permission pending', async () => {
+  const targetId = 'codex-orphan@@project-kaisola'
+  const entry = {
+    sender: { id: 91, isDestroyed: () => true },
+    meta: {
+      key: targetId,
+      presetId: 'codex',
+      scope: 'project-kaisola',
+      name: 'Codex',
+      sessionId: 'session-codex',
+    },
+    current: { actorId: null, turnId: null },
+    inFlightTurns: 0,
+    conn: { alive: true },
+  }
+  const pendingPermissions = new Map()
+  const acpSessionService = new AcpSessionService({
+    connections: new Map([[`91|${targetId}`, entry]]),
+    pendingPermissions,
+    permissionTimeoutMs: 5_000,
+  })
+  const { hello, publish, session, transport } = setup({ acpSessionService })
+  publish()
+  await transport.sendFromDevice(hello())
+  transport.receiveForDevice()
+  assert.equal(session.stats().acpSubscriptions, 1)
+
+  const keptAlive = acpSessionService.requestPermission(entry, {
+    agent: 'Codex',
+    key: targetId,
+    toolCall: { title: 'Run tests', kind: 'execute', content: [] },
+    options: [
+      { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+      { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+    ],
+  })
+  assert.equal(pendingPermissions.size, 1)
+
+  session.close('companion-disconnected')
+  assert.equal(session.stats().acpSubscriptions, 0)
+  assert.equal(acpSessionService.cancelPendingFor(entry, 'test_cleanup'), 1)
+  assert.equal(await keptAlive, 'cancel')
+  assert.equal(await acpSessionService.requestPermission(entry, {
+    agent: 'Codex',
+    key: targetId,
+    toolCall: { title: 'Run tests', kind: 'execute', content: [] },
+    options: [{ optionId: 'reject', name: 'Reject', kind: 'reject_once' }],
+  }), 'cancel')
+  acpSessionService.dispose()
 })
 
 test('observe-only device cannot use a well-formed agent or terminal command', async () => {

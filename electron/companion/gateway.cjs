@@ -9,10 +9,13 @@ const {
 } = require('./protocol.cjs')
 const { CompanionCommandRouter } = require('./commandRouter.cjs')
 const { sanitizeAcpPermissionEvent, sanitizeProjection } = require('./redaction.cjs')
+const { DEFAULT_SNAPSHOT_BYTES, classifyResume, makeBoundedSnapshot } = require('./terminalCursor.cjs')
 const { createAcpActorCapability } = require('../ipc/acpSessionService.cjs')
 const { createAttentionActorCapability } = require('../ipc/attentionService.cjs')
 
 const ACP_ACTOR_CAPABILITIES = new Set(['observe', 'agent-control'])
+const MAX_TERMINAL_OBSERVERS = 8
+const TERMINAL_EVENT_TYPES = new Set(['terminal.snapshot', 'terminal.output', 'terminal.exit'])
 
 function grantedCapabilities(device, requested) {
   const granted = new Set(validateCapabilities(device.capabilities ?? []))
@@ -209,6 +212,8 @@ class CompanionGatewaySession {
     this.lastSentSeq = 0
     this.frameCounter = 0
     this.terminalSubscriptions = new Map()
+    this.terminalGenerations = new Map()
+    this.acpSubscriptions = new Map()
   }
 
   async receive(frame) {
@@ -258,6 +263,7 @@ class CompanionGatewaySession {
       capabilities: [...this.capabilities],
       lastSentSeq: this.lastSentSeq,
       terminalSubscriptions: this.terminalSubscriptions.size,
+      acpSubscriptions: this.acpSubscriptions.size,
       transport: this.transport.stats?.(),
     }
   }
@@ -274,7 +280,9 @@ class CompanionGatewaySession {
       capabilities: this.capabilities,
     }, this.#nextId('hello'), 0)
     const cursor = frame.body.lastAck == null ? null : { epoch: frame.epoch, afterSeq: frame.body.lastAck }
-    this.#sendSynchronization(this.gateway.synchronize(cursor))
+    const synchronization = this.gateway.synchronize(cursor)
+    this.gateway.reconcileAcpSubscriptions(this, synchronization)
+    this.#sendSynchronization(synchronization)
     return { ok: true, capabilities: [...this.capabilities] }
   }
 
@@ -290,12 +298,22 @@ class CompanionGatewaySession {
       return sent
     }
     for (const event of result.events) {
+      if (!this.#acceptsEvent(event)) continue
       const sent = this.#send('event', { ...event.payload, type: event.type }, event.id, event.seq, event.at)
       if (!sent) return false
       this.lastSentSeq = event.seq
     }
     this.lastSentSeq = result.toSeq
     return true
+  }
+
+  #acceptsEvent(event) {
+    if (event.audience && event.audience !== this.connectionId) return false
+    if (!TERMINAL_EVENT_TYPES.has(event.type)
+      && !(event.type === 'session.updated' && event.payload?.streamEpoch && event.payload?.sessionId)) return true
+    const terminalId = event.payload?.terminalId ?? event.payload?.sessionId
+    const subscription = this.terminalSubscriptions.get(`${event.payload?.projectId}\0${terminalId}`)
+    return !!subscription && event.seq > subscription.afterSeq
   }
 
   #send(kind, body, id, seq, sentAt = this.gateway.now()) {
@@ -350,6 +368,7 @@ class CompanionGateway {
     this.now = now
     this.logger = logger && typeof logger.warn === 'function' ? logger : console
     this.sessions = new Set()
+    this.terminalStreams = new Map()
     this.cleanupTasks = new Set()
     this.syncQueued = false
     this.disposed = false
@@ -400,11 +419,15 @@ class CompanionGateway {
   }
 
   projectionPublished(windowId, result) {
-    return this.stateHub.projectionPublished?.(windowId, result) ?? null
+    const published = this.stateHub.projectionPublished?.(windowId, result) ?? null
+    this.#reconcileAllAcpSubscriptions()
+    return published
   }
 
   projectionRemoved(windowId) {
-    return this.stateHub.projectionRemoved?.(windowId) ?? null
+    const removed = this.stateHub.projectionRemoved?.(windowId) ?? null
+    this.#reconcileAllAcpSubscriptions()
+    return removed
   }
 
   acpSessionEvent(event) {
@@ -419,15 +442,56 @@ class CompanionGateway {
     return this.stateHub.ledgerEvent?.(event) ?? null
   }
 
+  reconcileAcpSubscriptions(session, synchronization) {
+    if (!session || session.closed || !session.connected || !this.acpSessionService?.subscribe) return 0
+    const source = synchronization?.kind === 'snapshot'
+      ? synchronization.projection?.projects?.map((project) => project.id)
+      : this.stateHub.projectIds?.()
+    const desired = new Set()
+    if (session.capabilities.includes('observe')) {
+      for (const projectId of Array.isArray(source) ? source : []) {
+        const clean = validId(projectId, 'acp.subscription.projectId', 240)
+        if (clean) desired.add(clean)
+      }
+    }
+    for (const [projectId, unsubscribe] of session.acpSubscriptions) {
+      if (desired.has(projectId)) continue
+      session.acpSubscriptions.delete(projectId)
+      try { unsubscribe() } catch { /* fail closed on stale subscriber cleanup */ }
+    }
+    for (const projectId of desired) {
+      if (session.acpSubscriptions.has(projectId)) continue
+      try {
+        const unsubscribe = this.acpSessionService.subscribe(
+          acpActor(session.device.deviceId, projectId, ['observe']),
+          { onEvent: () => {} },
+        )
+        session.acpSubscriptions.set(projectId, unsubscribe)
+      } catch (error) {
+        this.#recordAdapterDiagnostic({ source: 'acp.subscription', entryId: projectId, error })
+      }
+    }
+    return session.acpSubscriptions.size
+  }
+
   releaseSession(session) {
     this.sessions.delete(session)
-    const subscriptions = [...session.terminalSubscriptions.values()]
-    session.terminalSubscriptions.clear()
-    for (const subscription of subscriptions) {
-      if (typeof subscription?.unsubscribe !== 'function') continue
-      this.#trackCleanup(Promise.resolve().then(() => subscription.unsubscribe()))
+    for (const key of session.terminalGenerations.keys()) {
+      session.terminalGenerations.set(key, (session.terminalGenerations.get(key) ?? 0) + 1)
     }
-    return subscriptions.length
+    const terminalKeys = [...session.terminalSubscriptions.keys()]
+    for (const key of terminalKeys) this.#trackCleanup(this.#detachTerminalMember(session, key))
+    for (const stream of this.terminalStreams.values()) {
+      for (const interest of [...stream.interests]) {
+        if (interest.session === session) stream.interests.delete(interest)
+      }
+      this.#maybeDisposeTerminalStream(stream)
+    }
+    for (const unsubscribe of session.acpSubscriptions.values()) {
+      try { unsubscribe() } catch { /* one subscription cannot block disconnect */ }
+    }
+    session.acpSubscriptions.clear()
+    return terminalKeys.length
   }
 
   async settle() {
@@ -450,6 +514,8 @@ class CompanionGateway {
       epoch: this.epoch,
       sessions: [...this.sessions].filter((session) => !session.closed).length,
       terminalSubscriptions: [...this.sessions].reduce((count, session) => count + session.terminalSubscriptions.size, 0),
+      terminalStreams: this.terminalStreams.size,
+      acpSubscriptions: [...this.sessions].reduce((count, session) => count + session.acpSubscriptions.size, 0),
       adapters: {
         projection: true,
         terminal: typeof this.terminalObserver === 'function',
@@ -518,54 +584,251 @@ class CompanionGateway {
   async #subscribeTerminal(session, device, command) {
     if (!session || session.closed) return { ok: false, status: 'unavailable', message: 'Companion session is closed.' }
     const key = `${command.projectId}\0${command.targetId}`
-    await this.#unsubscribeTerminal(session, command)
-    let subscription
+    const generation = (session.terminalGenerations.get(key) ?? 0) + 1
+    session.terminalGenerations.set(key, generation)
+    await this.#detachTerminalMember(session, key)
+    let stream
     try {
-      subscription = await this.terminalObserver({
-        id: command.targetId,
-        projectId: command.projectId,
-        subscriberId: `${device.deviceId}:${session.connectionId}`,
-        streamEpoch: command.payload?.streamEpoch,
-        afterOffset: command.payload?.afterOffset,
-        maxQueueBytes: command.payload?.maxQueueBytes,
-        onEvent: (event) => {
-          if (session.closed || event?.payload?.id !== command.targetId) return
-          this.stateHub.terminalObserverEvent?.(command.projectId, event)
-        },
-      })
+      stream = await this.#terminalStreamFor(key, command, device)
     } catch (error) {
       this.adapterErrors++
       return { ok: false, status: 'rejected', message: String(error?.message || error).slice(0, 800) }
     }
+    if (session.closed || session.terminalGenerations.get(key) !== generation) {
+      await this.#maybeDisposeTerminalStream(stream)
+      return { ok: false, status: 'unavailable', message: 'Terminal subscription was superseded.' }
+    }
+
+    const interest = { session, generation }
+    stream.interests.add(interest)
+    let subscription
+    try { subscription = await stream.setup } catch (error) {
+      subscription = { ok: false, message: String(error?.message || error) }
+    } finally {
+      stream.interests.delete(interest)
+    }
     if (!subscription?.ok) {
+      await this.#maybeDisposeTerminalStream(stream)
       return {
         ok: false,
         status: subscription?.unavailable ? 'unavailable' : 'rejected',
         message: String(subscription?.message || 'Terminal stream is unavailable.').slice(0, 800),
       }
     }
-    if (session.closed) {
-      if (typeof subscription.unsubscribe === 'function') await subscription.unsubscribe()
-      return { ok: false, status: 'unavailable', message: 'Companion session closed while subscribing.' }
+    if (session.closed || session.terminalGenerations.get(key) !== generation) {
+      await this.#maybeDisposeTerminalStream(stream)
+      return { ok: false, status: 'unavailable', message: 'Terminal subscription was superseded.' }
     }
-    session.terminalSubscriptions.set(key, subscription)
-    this.stateHub.terminalObserverSnapshot?.(command.projectId, command.targetId, subscription)
+    if (stream.members.size >= MAX_TERMINAL_OBSERVERS) {
+      await this.#maybeDisposeTerminalStream(stream)
+      return { ok: false, status: 'rejected', message: `Terminal observer limit of ${MAX_TERMINAL_OBSERVERS} reached.` }
+    }
+
+    let resume
+    try {
+      resume = this.#terminalResume(stream, command.payload)
+    } catch (error) {
+      await this.#maybeDisposeTerminalStream(stream)
+      return { ok: false, status: 'rejected', message: String(error?.message || error).slice(0, 800) }
+    }
+    const currentSeq = this.stateHub.stats?.()?.eventLog?.currentSeq
+    const afterSeq = Number.isSafeInteger(currentSeq) && currentSeq >= 0 ? currentSeq : 0
+    stream.members.add(session)
+    session.terminalSubscriptions.set(key, { stream, generation, afterSeq })
+    this.stateHub.terminalObserverSnapshot?.(
+      command.projectId,
+      command.targetId,
+      resume,
+      { audience: session.connectionId },
+    )
     return { ok: true, status: 'applied', message: 'Terminal stream subscribed.' }
   }
 
   async #unsubscribeTerminal(session, command) {
     if (!session) return { ok: false, status: 'unavailable', message: 'Companion session is unavailable.' }
     const key = `${command.projectId}\0${command.targetId}`
-    const subscription = session.terminalSubscriptions.get(key)
-    if (!subscription) return { ok: true, status: 'applied', message: 'Terminal stream was already unsubscribed.' }
-    session.terminalSubscriptions.delete(key)
+    session.terminalGenerations.set(key, (session.terminalGenerations.get(key) ?? 0) + 1)
+    const hadSubscription = session.terminalSubscriptions.has(key)
     try {
-      if (typeof subscription.unsubscribe === 'function') await subscription.unsubscribe()
-      return { ok: true, status: 'applied', message: 'Terminal stream unsubscribed.' }
+      await this.#detachTerminalMember(session, key)
+      return {
+        ok: true,
+        status: 'applied',
+        message: hadSubscription ? 'Terminal stream unsubscribed.' : 'Terminal stream was already unsubscribed.',
+      }
     } catch (error) {
       this.adapterErrors++
       return { ok: false, status: 'unavailable', message: String(error?.message || error).slice(0, 800) }
     }
+  }
+
+  async #terminalStreamFor(key, command, device) {
+    let current = this.terminalStreams.get(key)
+    if (current?.closing) {
+      await current.disposePromise
+      current = this.terminalStreams.get(key)
+    }
+    if (current) return current
+
+    const stream = {
+      key,
+      projectId: command.projectId,
+      terminalId: command.targetId,
+      members: new Set(),
+      interests: new Set(),
+      pendingEvents: [],
+      pendingOverflow: false,
+      snapshot: null,
+      subscription: null,
+      closing: false,
+      disposePromise: null,
+      setup: null,
+    }
+    this.terminalStreams.set(key, stream)
+    stream.setup = (async () => {
+      let result
+      try {
+        result = await this.terminalObserver({
+          id: command.targetId,
+          projectId: command.projectId,
+          subscriberId: `gateway:${this.desktopId}:${device.deviceId}:${command.targetId}`,
+          maxQueueBytes: command.payload?.maxQueueBytes,
+          onEvent: (event) => this.#handleTerminalStreamEvent(stream, event),
+        })
+        if (!result?.ok) return result
+        stream.subscription = result
+        stream.snapshot = this.#terminalSnapshot(result)
+        if (stream.pendingOverflow) throw new Error('Terminal observer emitted too many events during setup.')
+        for (const event of stream.pendingEvents.splice(0)) this.#applyTerminalStreamEvent(stream, event)
+        return result
+      } catch (error) {
+        if (typeof result?.unsubscribe === 'function') {
+          try { await result.unsubscribe() } catch { /* setup failure still closes the observer */ }
+        }
+        throw error
+      }
+    })()
+    return stream
+  }
+
+  #terminalSnapshot(result) {
+    if (result?.mode === 'snapshot' && result.snapshot) {
+      const snapshot = makeBoundedSnapshot({
+        streamEpoch: result.snapshot.streamEpoch,
+        output: result.snapshot.output ?? '',
+        endOffset: result.snapshot.endOffset,
+        maxBytes: DEFAULT_SNAPSHOT_BYTES,
+        truncated: result.snapshot.truncated,
+        exited: result.snapshot.exited,
+        exitStatus: result.snapshot.exitStatus,
+      })
+      if (Number.isSafeInteger(result.snapshot.startOffset) && result.snapshot.startOffset !== snapshot.startOffset) {
+        throw new Error('Terminal snapshot offsets are inconsistent.')
+      }
+      return snapshot
+    }
+    if (result?.mode === 'current' && result.cursor) {
+      return makeBoundedSnapshot({
+        streamEpoch: result.cursor.streamEpoch,
+        output: '',
+        endOffset: result.cursor.offset,
+        maxBytes: DEFAULT_SNAPSHOT_BYTES,
+        truncated: result.cursor.offset > 0,
+        exited: false,
+      })
+    }
+    throw new Error('Terminal observer did not return a bounded cursor snapshot.')
+  }
+
+  #terminalResume(stream, payload = {}) {
+    if (!stream.snapshot) throw new Error('Terminal stream snapshot is unavailable.')
+    const hasEpoch = payload?.streamEpoch != null
+    const hasOffset = payload?.afterOffset != null
+    if (hasEpoch !== hasOffset) throw new Error('Terminal observer cursor is incomplete.')
+    if (!hasEpoch) return { mode: 'snapshot', snapshot: stream.snapshot }
+    const classified = classifyResume(stream.snapshot, {
+      streamEpoch: payload.streamEpoch,
+      offset: payload.afterOffset,
+    })
+    if (classified.kind === 'current') {
+      return { mode: 'current', cursor: { streamEpoch: classified.streamEpoch, offset: classified.offset } }
+    }
+    return { mode: 'snapshot', resetReason: classified.reason, snapshot: classified.snapshot }
+  }
+
+  #handleTerminalStreamEvent(stream, event) {
+    if (this.terminalStreams.get(stream.key) !== stream || stream.closing) return
+    if (!stream.snapshot) {
+      if (stream.pendingEvents.length < 64) stream.pendingEvents.push(event)
+      else stream.pendingOverflow = true
+      return
+    }
+    this.#applyTerminalStreamEvent(stream, event)
+  }
+
+  #applyTerminalStreamEvent(stream, event) {
+    if (!event || event?.payload?.id !== stream.terminalId) return
+    try {
+      if (event.channel === 'terminal:observer-output') {
+        const payload = event.payload
+        const dataBytes = Buffer.byteLength(typeof payload.data === 'string' ? payload.data : '', 'utf8')
+        if (!dataBytes || payload.endOffset - payload.startOffset !== dataBytes) throw new Error('Terminal output offsets are invalid.')
+        if (payload.streamEpoch === stream.snapshot.streamEpoch && payload.endOffset <= stream.snapshot.endOffset) return
+        if (payload.streamEpoch !== stream.snapshot.streamEpoch || payload.startOffset !== stream.snapshot.endOffset) {
+          throw new Error('Terminal output cursor is not contiguous.')
+        }
+        stream.snapshot = makeBoundedSnapshot({
+          streamEpoch: payload.streamEpoch,
+          output: stream.snapshot.output + payload.data,
+          endOffset: payload.endOffset,
+          maxBytes: DEFAULT_SNAPSHOT_BYTES,
+          truncated: stream.snapshot.truncated || payload.startOffset > 0,
+          exited: false,
+        })
+      } else if (event.channel === 'terminal:observer-exit') {
+        const payload = event.payload
+        if (payload.streamEpoch !== stream.snapshot.streamEpoch || payload.offset !== stream.snapshot.endOffset) {
+          throw new Error('Terminal exit cursor is invalid.')
+        }
+        stream.snapshot = makeBoundedSnapshot({
+          ...stream.snapshot,
+          endOffset: payload.offset,
+          maxBytes: DEFAULT_SNAPSHOT_BYTES,
+          exited: true,
+          exitStatus: payload.exitStatus,
+        })
+      }
+    } catch (error) {
+      this.#recordAdapterDiagnostic({ source: 'terminal.stream', entryId: stream.terminalId, error })
+      return
+    }
+    if (stream.members.size > 0) this.stateHub.terminalObserverEvent?.(stream.projectId, event)
+  }
+
+  async #detachTerminalMember(session, key) {
+    const marker = session.terminalSubscriptions.get(key)
+    if (!marker) return false
+    session.terminalSubscriptions.delete(key)
+    marker.stream.members.delete(session)
+    await this.#maybeDisposeTerminalStream(marker.stream)
+    return true
+  }
+
+  #maybeDisposeTerminalStream(stream) {
+    if (!stream || stream.members.size > 0 || stream.interests.size > 0) return Promise.resolve(false)
+    if (stream.closing) return stream.disposePromise
+    stream.closing = true
+    stream.disposePromise = (async () => {
+      try {
+        await stream.setup
+        if (typeof stream.subscription?.unsubscribe === 'function') await stream.subscription.unsubscribe()
+      } finally {
+        if (this.terminalStreams.get(stream.key) === stream) this.terminalStreams.delete(stream.key)
+      }
+      return true
+    })()
+    this.#trackCleanup(stream.disposePromise)
+    return stream.disposePromise
   }
 
   #queueSynchronization() {
@@ -574,10 +837,15 @@ class CompanionGateway {
     queueMicrotask(() => {
       this.syncQueued = false
       if (this.disposed) return
+      this.#reconcileAllAcpSubscriptions()
       for (const session of [...this.sessions]) {
         try { session.synchronize() } catch { session.close('synchronization_failed') }
       }
     })
+  }
+
+  #reconcileAllAcpSubscriptions() {
+    for (const session of this.sessions) this.reconcileAcpSubscriptions(session)
   }
 
   #recordAdapterDiagnostic({ source = 'adapter', entryId = 'unknown', error } = {}) {

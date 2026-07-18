@@ -6,6 +6,7 @@ const {
   CompanionProjectionError,
   MAX_PROJECTION_BYTES,
   PROJECTION_KIND,
+  sanitizeAcpSessionEvent,
   sanitizeProjection,
 } = require('./redaction.cjs')
 
@@ -61,6 +62,67 @@ test('allowlist rejects raw stores and secret-bearing normalized shapes', () => 
   assert.throws(() => sanitizeProjection(projection({ nested: { env: { API_KEY: 'secret' } } })), /forbidden key: env/)
 })
 
+test('ACP event schemas allow bounded update types and reject secret-shaped or unsafe deltas', () => {
+  const base = {
+    type: 'agent.turn.delta',
+    projectId: 'project-kaisola',
+    targetId: 'codex-session',
+    sessionId: 'session-codex',
+    turnId: 'turn-safe',
+  }
+  assert.deepEqual(sanitizeAcpSessionEvent({
+    ...base,
+    delta: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'bounded output' }, messageId: 'message-1' },
+  }).delta, {
+    sessionUpdate: 'agent_message_chunk',
+    content: { type: 'text', text: 'bounded output' },
+    messageId: 'message-1',
+  })
+  assert.deepEqual(sanitizeAcpSessionEvent({
+    ...base,
+    delta: { sessionUpdate: 'current_model_update', modelId: 'claude-sonnet' },
+  }).delta, { sessionUpdate: 'current_model_update', currentModelId: 'claude-sonnet' })
+  assert.deepEqual(sanitizeAcpSessionEvent({
+    ...base,
+    delta: { sessionUpdate: 'usage_update', usedTokens: 68_000, maxTokens: 200_000 },
+  }).delta, { sessionUpdate: 'usage_update', used: 68_000, size: 200_000 })
+  assert.throws(() => sanitizeAcpSessionEvent({
+    ...base,
+    delta: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'leak', environment: { API_TOKEN: 'secret' } } },
+  }), /forbidden key: environment/)
+  assert.throws(() => sanitizeAcpSessionEvent({
+    ...base,
+    delta: {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tool-1',
+      title: 'Edit file',
+      content: [{ type: 'diff', path: '/Users/michael/private.ts', oldText: 'token-old', newText: 'token-new' }],
+    },
+  }), /workspace-relative/)
+  assert.throws(() => sanitizeAcpSessionEvent({
+    ...base,
+    delta: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'safe', extra: 'unknown' } },
+  }), /not allowed/)
+  assert.throws(() => sanitizeAcpSessionEvent({
+    ...base,
+    delta: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'x'.repeat(16 * 1024 + 1) } },
+  }), /exceeds its bound/)
+  assert.throws(() => sanitizeAcpSessionEvent({
+    ...base,
+    delta: {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tool-aggregate',
+      title: 'Large but individually bounded diff set',
+      content: Array.from({ length: 32 }, (_, index) => ({
+        type: 'diff',
+        path: `src/file-${index}.ts`,
+        oldText: 'a'.repeat(16 * 1024),
+        newText: 'b'.repeat(16 * 1024),
+      })),
+    },
+  }), /ACP event exceeds the companion limit/)
+})
+
 test('permissions keep bounded relative diffs and reject path escape', () => {
   const permission = {
     permId: 'permission-1',
@@ -86,6 +148,10 @@ test('permissions keep bounded relative diffs and reject path escape', () => {
   )
   assert.throws(
     () => sanitizeProjection(projection({ permissions: [{ ...permission, diffs: [{ ...permission.diffs[0], relativePath: '/Users/michael/.ssh/config' }] }] })),
+    /workspace-relative/,
+  )
+  assert.throws(
+    () => sanitizeProjection(projection({ permissions: [{ ...permission, diffs: [{ ...permission.diffs[0], relativePath: 'file:///Users/michael/.ssh/config' }] }] })),
     /workspace-relative/,
   )
 })

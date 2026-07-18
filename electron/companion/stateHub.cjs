@@ -56,8 +56,12 @@ class CompanionStateHub {
     return this.desktopState.terminalObserverEvent?.(projectId, event) ?? null
   }
 
-  terminalObserverSnapshot(projectId, terminalId, result) {
-    return this.desktopState.terminalObserverSnapshot?.(projectId, terminalId, result) ?? null
+  terminalObserverSnapshot(projectId, terminalId, result, options) {
+    return this.desktopState.terminalObserverSnapshot?.(projectId, terminalId, result, options) ?? null
+  }
+
+  projectIds() {
+    return this.desktopState.projectIds?.() ?? []
   }
 
   acpSessionEvent(event, options) {

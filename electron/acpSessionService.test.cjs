@@ -299,7 +299,57 @@ test('every stored permission revision has an explicit immutable completeness st
       decision: 'reject',
     })
     assert.equal(receipt.status, 'applied')
-    assert.equal(await result, 'reject')
+    assert.deepEqual(await result, { optionId: 'reject' })
+  }
+})
+
+test('companion permission policy covers every completeness and option-kind combination', async () => {
+  const contexts = [
+    ['complete', permissionInput()],
+    ['truncated', permissionInput({ toolCall: { title: 'x'.repeat(700), kind: 'edit', content: [] } })],
+    ['redacted', permissionInput({ toolCall: { title: 'Run command', kind: 'execute', content: [{ type: 'text', text: 'not displayable' }] } })],
+    ['unavailable', permissionInput({ toolCall: null })],
+  ]
+  const optionKinds = ['allow_once', 'allow_always', 'reject_once', 'reject_always']
+
+  for (const [completeness, baseInput] of contexts) {
+    for (const kind of optionKinds) {
+      const h = harness({ hasDesktop: false })
+      const actor = companion(PROJECT, `phone-${completeness}-${kind}`)
+      const events = []
+      h.service.subscribe(actor, { onEvent: (event) => events.push(event) })
+      const optionId = `${kind}-option`
+      const providerResult = h.service.requestPermission(h.entry, {
+        ...baseInput,
+        options: [{ optionId, name: kind, kind }],
+      })
+      const requested = events.at(-1)
+      assert.equal(requested.completeness, completeness)
+      const receipt = h.service.respondPermission(actor, {
+        projectId: PROJECT,
+        targetId: TARGET,
+        permId: requested.permId,
+        expectedRevision: requested.revision,
+        optionId,
+      })
+      const shouldApply = kind === 'reject_once' || (kind === 'allow_once' && completeness === 'complete')
+      assert.equal(receipt.status, shouldApply ? 'applied' : 'rejected', `${completeness} x ${kind}`)
+      if (shouldApply) {
+        assert.deepEqual(await providerResult, { optionId })
+      } else {
+        assert.equal(h.pendingPermissions.has(requested.permId), true)
+        const rejected = h.service.respondPermission(actor, {
+          projectId: PROJECT,
+          targetId: TARGET,
+          permId: requested.permId,
+          expectedRevision: requested.revision,
+          decision: 'reject',
+        })
+        assert.equal(rejected.status, 'applied')
+        assert.equal(await providerResult, 'cancel')
+      }
+      h.service.dispose()
+    }
   }
 })
 

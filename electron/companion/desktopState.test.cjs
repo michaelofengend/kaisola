@@ -55,6 +55,8 @@ test('latest window wins a moved project without duplicating sessions', () => {
   const snapshot = state.snapshot()
   assert.equal(snapshot.projects.length, 1)
   assert.deepEqual(snapshot.sessions.map(({ title }) => title), ['Moved live session'])
+  assert.deepEqual(state.projectIdsForWindow('saved-primary'), [])
+  assert.deepEqual(state.projectIdsForWindow('saved-window-2'), ['project-kaisola'])
 })
 
 test('terminal observer channels normalize into replay events without exposing a listener', () => {
@@ -130,7 +132,7 @@ test('ACP deltas skip replay cloning with no companion while attention authority
   assert.equal(state.stats().eventLog.currentSeq, 1)
   assert.equal(state.stats().eventLog.droppedThrough, 1)
   assert.equal(state.stats().eventLog.retainedEvents, 0)
-  assert.equal(observed[0], event)
+  assert.deepEqual(observed[0], event)
 
   state.acpSessionEvent(event)
   assert.equal(state.stats().eventLog.currentSeq, 2)

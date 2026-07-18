@@ -1747,7 +1747,13 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   registerUpdateHandlers(ipcMain, { waitForRestartSafe: waitForAcpRestartSafe })
   registerGlassHandlers(ipcMain)
   registerAssistantArchiveHandlers(ipcMain, path.join(app.getPath('userData'), 'assistant-archives'))
-  registerAttentionHandlers(ipcMain, { app, BrowserWindow, Notification, service: attentionService })
+  registerAttentionHandlers(ipcMain, {
+    app,
+    BrowserWindow,
+    Notification,
+    service: attentionService,
+    projectIdsForWindow: (win) => companionDesktopState.projectIdsForWindow(win.__kaisolaSavedId),
+  })
   restoreSavedWindowsOnLaunch()
   app.on('activate', () => {
     if (visibleFullWindows().length === 0) activateSavedWindows()

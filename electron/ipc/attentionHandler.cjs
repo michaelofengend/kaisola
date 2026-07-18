@@ -49,10 +49,27 @@ function scopedActiveCount(service, projectSets) {
   return service.activeEvents().reduce((count, event) => count + Number(projects.has(event.projectId)), 0)
 }
 
-function registerAttentionHandlers(ipcMain, { app, BrowserWindow, Notification, service = null, platform = process.platform }) {
+function registerAttentionHandlers(ipcMain, {
+  app,
+  BrowserWindow,
+  Notification,
+  service = null,
+  platform = process.platform,
+  projectIdsForWindow = () => [],
+}) {
   const surfaceOwners = new Map()
   const surfaceProjects = new Map()
   const surfaceRenderers = new Set()
+  const ownedProjectsFor = (owner) => {
+    if (!owner || owner.isDestroyed?.() || owner.__kaisolaPop || !owner.__kaisolaSavedId) return new Set()
+    let values
+    try { values = projectIdsForWindow(owner) } catch { return new Set() }
+    const projects = new Set()
+    for (const value of values instanceof Set || Array.isArray(values) ? values : []) {
+      if (exactId(value, 240)) projects.add(value)
+    }
+    return projects
+  }
   const syncBadge = () => {
     if (platform !== 'darwin' || !app.dock?.setBadge) return
     const total = service
@@ -86,6 +103,7 @@ function registerAttentionHandlers(ipcMain, { app, BrowserWindow, Notification, 
     if (notifiedEventIds.has(payload.eventId)) return
     const owner = ownerFor(payload, fallbackSender)
     if (!owner || owner.isDestroyed?.()) return
+    if (!ownedProjectsFor(owner).has(payload.projectId)) return
     notifiedEventIds.set(payload.eventId, now)
     if (notifiedEventIds.size > 512) {
       for (const [id, at] of notifiedEventIds) if (now - at > 7 * 24 * 60 * 60_000) notifiedEventIds.delete(id)
@@ -114,6 +132,7 @@ function registerAttentionHandlers(ipcMain, { app, BrowserWindow, Notification, 
     const channel = payload.type === 'attention.raised' ? 'attention:raised' : 'attention:cleared'
     for (const win of BrowserWindow.getAllWindows?.() ?? []) {
       if (win.__kaisolaPop || win.isDestroyed?.() || win.webContents.isDestroyed()) continue
+      if (!ownedProjectsFor(win).has(payload.projectId)) continue
       win.webContents.send(channel, payload)
     }
     if (payload.type === 'attention.raised' && payload.updated !== true) showNotice(payload)
@@ -136,19 +155,18 @@ function registerAttentionHandlers(ipcMain, { app, BrowserWindow, Notification, 
     const windowId = owner.__kaisolaSavedId
     surfaceOwners.set(windowId, event.sender.id)
     try {
+      const ownedProjects = ownedProjectsFor(owner)
+      const activeProjectId = ownedProjects.has(raw.projectId) ? raw.projectId : null
+      const projects = (Array.isArray(raw.projects) ? raw.projects : [])
+        .filter((item) => ownedProjects.has(item?.projectId))
       service.updateSurface({
         windowId,
         focused: raw.documentVisible === true && raw.documentFocused === true && owner.isFocused?.() === true,
-        projectId: raw.projectId,
+        projectId: activeProjectId,
         visibleSessionIds: raw.visibleSessionIds,
-        projects: raw.projects,
+        projects,
       })
-      const projects = new Set()
-      if (exactId(raw.projectId, 240)) projects.add(raw.projectId)
-      for (const item of Array.isArray(raw.projects) ? raw.projects.slice(0, 64) : []) {
-        if (exactId(item?.projectId, 240)) projects.add(item.projectId)
-      }
-      surfaceProjects.set(windowId, projects)
+      surfaceProjects.set(windowId, ownedProjects)
       syncBadge()
     } catch { /* malformed renderer projection is ignored */ }
     if (!surfaceRenderers.has(event.sender.id)) {
@@ -170,6 +188,9 @@ function registerAttentionHandlers(ipcMain, { app, BrowserWindow, Notification, 
     const owner = BrowserWindow.fromWebContents(event.sender)
     if (!owner || owner.isDestroyed?.() || owner.__kaisolaPop || !owner.__kaisolaSavedId) {
       return { ok: false, status: 'rejected', message: 'This window cannot acknowledge attention.' }
+    }
+    if (!ownedProjectsFor(owner).has(projectId)) {
+      return { ok: false, status: 'rejected', message: 'This window does not own the attention project.' }
     }
     try {
       const { createAttentionActorCapability } = require('./attentionService.cjs')
