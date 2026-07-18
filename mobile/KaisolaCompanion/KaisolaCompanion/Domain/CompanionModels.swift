@@ -1,6 +1,6 @@
 import Foundation
 
-enum CompanionConnectionState: String, Codable, Hashable {
+enum CompanionConnectionState: String, Codable, Hashable, Sendable {
     case preview
     case live
     case reconnecting
@@ -18,13 +18,13 @@ enum CompanionConnectionState: String, Codable, Hashable {
     }
 }
 
-enum CompanionSessionKind: String, Codable, Hashable {
+enum CompanionSessionKind: String, Codable, Hashable, Sendable {
     case agent
     case terminal
     case panel
 }
 
-enum CompanionSessionStatus: String, Codable, Hashable, CaseIterable {
+enum CompanionSessionStatus: String, Codable, Hashable, CaseIterable, Sendable {
     case idle
     case running
     case waiting
@@ -42,7 +42,7 @@ enum CompanionSessionStatus: String, Codable, Hashable, CaseIterable {
     }
 }
 
-struct CompanionProjectCounts: Codable, Hashable {
+struct CompanionProjectCounts: Codable, Hashable, Sendable {
     var running: Int
     var waiting: Int
     var done: Int
@@ -51,7 +51,7 @@ struct CompanionProjectCounts: Codable, Hashable {
     static let zero = CompanionProjectCounts(running: 0, waiting: 0, done: 0, failed: 0)
 }
 
-struct CompanionProject: Identifiable, Codable, Hashable {
+struct CompanionProject: Identifiable, Codable, Hashable, Sendable {
     let id: String
     var name: String
     var repo: String?
@@ -61,8 +61,8 @@ struct CompanionProject: Identifiable, Codable, Hashable {
     var counts: CompanionProjectCounts?
 }
 
-struct CompanionTurn: Identifiable, Codable, Hashable {
-    enum Role: String, Codable, Hashable {
+struct CompanionTurn: Identifiable, Codable, Hashable, Sendable {
+    enum Role: String, Codable, Hashable, Sendable {
         case user
         case assistant
         case thought
@@ -73,18 +73,20 @@ struct CompanionTurn: Identifiable, Codable, Hashable {
     var text: String
     var status: String?
     var at: Int64?
+    var wireId: String? = nil
 
-    var id: String { "\(role.rawValue):\(at ?? 0):\(text)" }
+    var id: String { wireId ?? "\(role.rawValue):\(at ?? 0):\(text)" }
 
     enum CodingKeys: String, CodingKey {
         case role = "kind"
         case text
         case status
         case at
+        case wireId = "id"
     }
 }
 
-struct CompanionSession: Identifiable, Codable, Hashable {
+struct CompanionSession: Identifiable, Codable, Hashable, Sendable {
     let id: String
     var projectId: String
     var kind: CompanionSessionKind
@@ -102,9 +104,11 @@ struct CompanionSession: Identifiable, Codable, Hashable {
     var startedAt: Int64?
     var turns: [CompanionTurn]?
     var terminalLines: [String]?
+    var terminalStreamEpoch: String? = nil
+    var terminalEndOffset: Int64? = nil
 }
 
-struct CompanionAttention: Identifiable, Codable, Hashable {
+struct CompanionAttention: Identifiable, Codable, Hashable, Sendable {
     let id: String
     var projectId: String
     var sessionId: String?
@@ -115,18 +119,18 @@ struct CompanionAttention: Identifiable, Codable, Hashable {
     var severity: String
 }
 
-struct CompanionPermissionOption: Identifiable, Codable, Hashable {
+struct CompanionPermissionOption: Identifiable, Codable, Hashable, Sendable {
     let id: String
     var label: String
 }
 
-struct CompanionPermissionDiff: Codable, Hashable {
+struct CompanionPermissionDiff: Codable, Hashable, Sendable {
     var relativePath: String
     var oldText: String
     var newText: String
 }
 
-struct CompanionPermission: Identifiable, Codable, Hashable {
+struct CompanionPermission: Identifiable, Codable, Hashable, Sendable {
     var id: String { permId }
 
     let permId: String
@@ -138,9 +142,11 @@ struct CompanionPermission: Identifiable, Codable, Hashable {
     var requestedAt: Int64
     var options: [CompanionPermissionOption]
     var diffs: [CompanionPermissionDiff]
+    var revision: Int64? = nil
+    var completeness: String? = nil
 }
 
-struct CompanionBoardCard: Identifiable, Codable, Hashable {
+struct CompanionBoardCard: Identifiable, Codable, Hashable, Sendable {
     let id: String
     var type: String
     var projectId: String
@@ -152,7 +158,7 @@ struct CompanionBoardCard: Identifiable, Codable, Hashable {
     var summary: String?
 }
 
-struct CompanionBoardColumn: Identifiable, Codable, Hashable {
+struct CompanionBoardColumn: Identifiable, Codable, Hashable, Sendable {
     let id: String
     var title: String
     var sourceLabel: String?
@@ -160,11 +166,11 @@ struct CompanionBoardColumn: Identifiable, Codable, Hashable {
     var cards: [CompanionBoardCard]
 }
 
-struct CompanionBoard: Codable, Hashable {
+struct CompanionBoard: Codable, Hashable, Sendable {
     var columns: [CompanionBoardColumn]
 }
 
-struct CompanionProjection: Codable, Hashable {
+struct CompanionProjection: Codable, Hashable, Sendable {
     var projectionKind: String
     var revision: Int
     var generatedAt: Int64
@@ -176,13 +182,13 @@ struct CompanionProjection: Codable, Hashable {
     var board: CompanionBoard
 }
 
-struct CompanionSnapshotBody: Codable, Hashable {
+struct CompanionSnapshotBody: Codable, Hashable, Sendable {
     var type: String
     var revision: Int
     var projection: CompanionProjection
 }
 
-struct CompanionSnapshotEnvelope: Codable, Hashable {
+struct CompanionSnapshotEnvelope: Codable, Hashable, Sendable {
     var v: Int
     var kind: String
     var desktopId: String

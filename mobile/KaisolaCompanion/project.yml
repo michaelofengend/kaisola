@@ -31,6 +31,9 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: Kaisola
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Kaisola discovers and securely connects to your paired Mac on the local network.
+        INFOPLIST_KEY_NSBonjourServices:
+          - _kaisola._tcp
         # Standard-algorithm end-to-end encryption qualifies for the mass-market
         # exemption; declaring it here skips the per-build compliance prompt.
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO

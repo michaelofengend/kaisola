@@ -8,10 +8,14 @@
 
 /* Begin PBXBuildFile section */
 		01CE4D4B98D9C3E6223D723F /* agent-delta.json in Resources */ = {isa = PBXBuildFile; fileRef = BAD6C8487CA84F964A165DF8 /* agent-delta.json */; };
+		06B7334BB43F48C26F51E158 /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 080DF1108C5BA892C7F13309 /* JSONValue.swift */; };
+		1AEEAC91EF2A1670DB8D1BF1 /* CompanionIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98DE11C5FAB40CD2B4715652 /* CompanionIdentity.swift */; };
 		275432D529916BD0A755B063 /* stale-revision-error.json in Resources */ = {isa = PBXBuildFile; fileRef = 6EED132F2C6069F2431D6C28 /* stale-revision-error.json */; };
 		284F19847EB5DA253C09A74B /* KaisolaCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE45291BDB007777F7C5D9D /* KaisolaCompanionApp.swift */; };
+		28C4DD4AEC0268A7222FFEF4 /* SecureFrameChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF99755F918FE5467BF72EC9 /* SecureFrameChannel.swift */; };
 		2CF946846F770D846CF496A8 /* CompanionModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25FF5E9EE50F0B47F4A36A04 /* CompanionModels.swift */; };
 		2F6E004D5F5513F3D3FA4E85 /* crypto-noise-xx-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 7D7C0E68F5BA06C2B3197DEC /* crypto-noise-xx-v1.json */; };
+		35EEDBED8D619F530E40EAAA /* CompanionTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 223F0B22AE769EFE9BFF760D /* CompanionTransport.swift */; };
 		3607DA57F576C5CC858FB1F5 /* protocol-mismatch.json in Resources */ = {isa = PBXBuildFile; fileRef = 5FA9249683775B12F12B0ABB /* protocol-mismatch.json */; };
 		3BB2686931DA8EC347B240D2 /* command-receipt.json in Resources */ = {isa = PBXBuildFile; fileRef = E1AEC14B1A2D0CEB6CDF0D07 /* command-receipt.json */; };
 		4232AA0DDBC1B9F8561B27AB /* protocol-mismatch.json in Resources */ = {isa = PBXBuildFile; fileRef = 5FA9249683775B12F12B0ABB /* protocol-mismatch.json */; };
@@ -20,6 +24,7 @@
 		53BB5C637C246E3D2EC6EF8B /* terminal-cursor.json in Resources */ = {isa = PBXBuildFile; fileRef = 4CA283D22F067CAA4858F577 /* terminal-cursor.json */; };
 		58DD12995120700BCB4D3A13 /* terminal-cursor.json in Resources */ = {isa = PBXBuildFile; fileRef = 4CA283D22F067CAA4858F577 /* terminal-cursor.json */; };
 		5A92D5E5F43D4CC09CA9F5A0 /* command-receipt.json in Resources */ = {isa = PBXBuildFile; fileRef = E1AEC14B1A2D0CEB6CDF0D07 /* command-receipt.json */; };
+		5CC11648ED4D54E8876D0F0E /* NoiseXX.swift in Sources */ = {isa = PBXBuildFile; fileRef = C868CB2C1FA7AA6618CD8291 /* NoiseXX.swift */; };
 		607BAB76F3F9B3B9A04F7FDA /* CompanionPreviewData.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD396B7001732DDC07EC0878 /* CompanionPreviewData.swift */; };
 		640ADF1A2342CAB85C83DA76 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74907E2AA6DEFB4DE3F3A1F5 /* Components.swift */; };
 		65A92AD4DC26322E25C3F29C /* crypto-noise-xx-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 7D7C0E68F5BA06C2B3197DEC /* crypto-noise-xx-v1.json */; };
@@ -29,7 +34,12 @@
 		78FB0FA0BB3ECE8BBE2A1CAD /* agent-delta.json in Resources */ = {isa = PBXBuildFile; fileRef = BAD6C8487CA84F964A165DF8 /* agent-delta.json */; };
 		85D524D0AD7BCB46556D1DD5 /* snapshot-board.json in Resources */ = {isa = PBXBuildFile; fileRef = C12FD715842B93B073324EF0 /* snapshot-board.json */; };
 		85EF6FD4832E9C492AEC9EC0 /* AgentSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CC89D2B67726BE7E2C087DB /* AgentSessionView.swift */; };
+		870DD0EE6C573BED9219E2A8 /* CompanionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC5BE46EF4A28B3506C0AF88 /* CompanionClient.swift */; };
+		8CEF7D6FCA7B1BAF7B93641E /* CryptoNoiseVectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485B243F17DF73AB60584C92 /* CryptoNoiseVectorTests.swift */; };
+		8E4E827A0D7E5AC11499222C /* CompanionCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0033BD0FD59F9BFEF7360A9F /* CompanionCrypto.swift */; };
 		93F5BD069A0700CEFFAF314D /* terminal-output.json in Resources */ = {isa = PBXBuildFile; fileRef = D99A39F1417D084BCB902598 /* terminal-output.json */; };
+		98CF5566C28FB9F47C1629D0 /* TransportFramingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8720C781C8D2D8A9C95C4268 /* TransportFramingTests.swift */; };
+		9D3F54EF06D9CB014C17331C /* ProtocolFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB48F8E61C17561464244FC8 /* ProtocolFixtureTests.swift */; };
 		A65F91BF6BD9DD28932BBA85 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F3E24D7D1EC4E30B65BD94A2 /* Assets.xcassets */; };
 		A93E88B2C3CB81E6786489F0 /* terminal-output.json in Resources */ = {isa = PBXBuildFile; fileRef = D99A39F1417D084BCB902598 /* terminal-output.json */; };
 		AC2E226862D76BB83513201C /* hello.json in Resources */ = {isa = PBXBuildFile; fileRef = 39E6EFBC687AFC544D2A0758 /* hello.json */; };
@@ -37,11 +47,14 @@
 		B219E2A44715999A43C5DB73 /* KaisolaTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC552FAB4C3E746B92613FAD /* KaisolaTheme.swift */; };
 		BD90ABBC1EEA7D2BAD8C38CB /* NowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 674185F4949ADFE5AFBDCA4D /* NowView.swift */; };
 		C245C5F9F6C3777FACD34AF2 /* stale-revision-error.json in Resources */ = {isa = PBXBuildFile; fileRef = 6EED132F2C6069F2431D6C28 /* stale-revision-error.json */; };
+		C40EB939F9E54A14DB6492EF /* LengthFraming.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6F6D271749DB37E8FAF6B46 /* LengthFraming.swift */; };
 		CD8A2A0385F1AB702202CA06 /* NeedsYouView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF8146910ED9B45E8A6689A9 /* NeedsYouView.swift */; };
 		D68BA3929DF6A6284DA6A0AF /* CompanionRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1D7F31C8FD1F4DF0D73499 /* CompanionRootView.swift */; };
 		E12FBB66CA5492D9CAC7478C /* snapshot-board.json in Resources */ = {isa = PBXBuildFile; fileRef = C12FD715842B93B073324EF0 /* snapshot-board.json */; };
 		F018EAC0AB3C96491F3A2225 /* ProjectionFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 154C7BA59E2B46D5CA6441B7 /* ProjectionFixtureTests.swift */; };
 		F3E1657D9D5368619E6F2C22 /* CompanionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0965CFBA47AE943E0569F687 /* CompanionStore.swift */; };
+		F4DCF538350A442D857FFDA4 /* PairingModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3737EDD8846E73635FA40603 /* PairingModels.swift */; };
+		F94145964B2496E5A723E4E4 /* CompanionProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5028C75386F43576D318BD00 /* CompanionProtocol.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -55,32 +68,45 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0033BD0FD59F9BFEF7360A9F /* CompanionCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCrypto.swift; sourceTree = "<group>"; };
 		01FF0D8B88D7B3360A938A15 /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
+		080DF1108C5BA892C7F13309 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
 		0965CFBA47AE943E0569F687 /* CompanionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionStore.swift; sourceTree = "<group>"; };
 		0F1D7F31C8FD1F4DF0D73499 /* CompanionRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionRootView.swift; sourceTree = "<group>"; };
 		154C7BA59E2B46D5CA6441B7 /* ProjectionFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectionFixtureTests.swift; sourceTree = "<group>"; };
 		1CC89D2B67726BE7E2C087DB /* AgentSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionView.swift; sourceTree = "<group>"; };
+		223F0B22AE769EFE9BFF760D /* CompanionTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionTransport.swift; sourceTree = "<group>"; };
 		25FF5E9EE50F0B47F4A36A04 /* CompanionModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionModels.swift; sourceTree = "<group>"; };
+		3737EDD8846E73635FA40603 /* PairingModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingModels.swift; sourceTree = "<group>"; };
 		39E6EFBC687AFC544D2A0758 /* hello.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = hello.json; sourceTree = "<group>"; };
+		485B243F17DF73AB60584C92 /* CryptoNoiseVectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoNoiseVectorTests.swift; sourceTree = "<group>"; };
 		4CA283D22F067CAA4858F577 /* terminal-cursor.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "terminal-cursor.json"; sourceTree = "<group>"; };
+		5028C75386F43576D318BD00 /* CompanionProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionProtocol.swift; sourceTree = "<group>"; };
 		5FA9249683775B12F12B0ABB /* protocol-mismatch.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "protocol-mismatch.json"; sourceTree = "<group>"; };
 		674185F4949ADFE5AFBDCA4D /* NowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowView.swift; sourceTree = "<group>"; };
 		6EED132F2C6069F2431D6C28 /* stale-revision-error.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "stale-revision-error.json"; sourceTree = "<group>"; };
 		6FC8DDA36658D1F7FA09BC13 /* DevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesView.swift; sourceTree = "<group>"; };
 		74907E2AA6DEFB4DE3F3A1F5 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
 		7D7C0E68F5BA06C2B3197DEC /* crypto-noise-xx-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "crypto-noise-xx-v1.json"; sourceTree = "<group>"; };
+		8720C781C8D2D8A9C95C4268 /* TransportFramingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportFramingTests.swift; sourceTree = "<group>"; };
+		98DE11C5FAB40CD2B4715652 /* CompanionIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionIdentity.swift; sourceTree = "<group>"; };
 		9918CA0A5650E1A28829E741 /* TerminalSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSessionView.swift; sourceTree = "<group>"; };
+		AB48F8E61C17561464244FC8 /* ProtocolFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolFixtureTests.swift; sourceTree = "<group>"; };
 		AC552FAB4C3E746B92613FAD /* KaisolaTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaisolaTheme.swift; sourceTree = "<group>"; };
 		AD396B7001732DDC07EC0878 /* CompanionPreviewData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionPreviewData.swift; sourceTree = "<group>"; };
+		AF99755F918FE5467BF72EC9 /* SecureFrameChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureFrameChannel.swift; sourceTree = "<group>"; };
 		B033B705F8829D1F00E5611E /* permission-requested.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "permission-requested.json"; sourceTree = "<group>"; };
 		B48B16F368714573C910DEA0 /* KaisolaCompanion.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = KaisolaCompanion.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BAD6C8487CA84F964A165DF8 /* agent-delta.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "agent-delta.json"; sourceTree = "<group>"; };
 		C12FD715842B93B073324EF0 /* snapshot-board.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "snapshot-board.json"; sourceTree = "<group>"; };
+		C6F6D271749DB37E8FAF6B46 /* LengthFraming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LengthFraming.swift; sourceTree = "<group>"; };
+		C868CB2C1FA7AA6618CD8291 /* NoiseXX.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoiseXX.swift; sourceTree = "<group>"; };
 		CAE45291BDB007777F7C5D9D /* KaisolaCompanionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaisolaCompanionApp.swift; sourceTree = "<group>"; };
 		D99A39F1417D084BCB902598 /* terminal-output.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "terminal-output.json"; sourceTree = "<group>"; };
 		E1AEC14B1A2D0CEB6CDF0D07 /* command-receipt.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "command-receipt.json"; sourceTree = "<group>"; };
 		F10B41590DFE608508B80BB1 /* KaisolaCompanionTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KaisolaCompanionTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3E24D7D1EC4E30B65BD94A2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		FC5BE46EF4A28B3506C0AF88 /* CompanionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionClient.swift; sourceTree = "<group>"; };
 		FF8146910ED9B45E8A6689A9 /* NeedsYouView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeedsYouView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -128,6 +154,18 @@
 			path = App;
 			sourceTree = "<group>";
 		};
+		5353489F76C79D42DF9100A7 /* Security */ = {
+			isa = PBXGroup;
+			children = (
+				0033BD0FD59F9BFEF7360A9F /* CompanionCrypto.swift */,
+				98DE11C5FAB40CD2B4715652 /* CompanionIdentity.swift */,
+				C868CB2C1FA7AA6618CD8291 /* NoiseXX.swift */,
+				3737EDD8846E73635FA40603 /* PairingModels.swift */,
+				AF99755F918FE5467BF72EC9 /* SecureFrameChannel.swift */,
+			);
+			path = Security;
+			sourceTree = "<group>";
+		};
 		5BC2286DE901D455F729E7EC /* NeedsYou */ = {
 			isa = PBXGroup;
 			children = (
@@ -151,6 +189,15 @@
 				AC552FAB4C3E746B92613FAD /* KaisolaTheme.swift */,
 			);
 			path = UI;
+			sourceTree = "<group>";
+		};
+		751B748336B1537F87E86B74 /* Protocol */ = {
+			isa = PBXGroup;
+			children = (
+				5028C75386F43576D318BD00 /* CompanionProtocol.swift */,
+				080DF1108C5BA892C7F13309 /* JSONValue.swift */,
+			);
+			path = Protocol;
 			sourceTree = "<group>";
 		};
 		75ABCA3FA0D2BA079F40828F /* Features */ = {
@@ -182,7 +229,10 @@
 				664995C11EACA1DA604593BA /* Domain */,
 				75ABCA3FA0D2BA079F40828F /* Features */,
 				B80FD1A29FCA6106E3EAEE7C /* Preview */,
+				751B748336B1537F87E86B74 /* Protocol */,
+				5353489F76C79D42DF9100A7 /* Security */,
 				F6063D447899A29FE0116307 /* Store */,
+				F5E9DB31ED9EBBE6C73A9E82 /* Transport */,
 				70AFD67F2F494A9FFA0D1DEB /* UI */,
 				F3E24D7D1EC4E30B65BD94A2 /* Assets.xcassets */,
 			);
@@ -208,9 +258,22 @@
 		F5CC77EB3FEC243321EE1225 /* KaisolaCompanionTests */ = {
 			isa = PBXGroup;
 			children = (
+				485B243F17DF73AB60584C92 /* CryptoNoiseVectorTests.swift */,
 				154C7BA59E2B46D5CA6441B7 /* ProjectionFixtureTests.swift */,
+				AB48F8E61C17561464244FC8 /* ProtocolFixtureTests.swift */,
+				8720C781C8D2D8A9C95C4268 /* TransportFramingTests.swift */,
 			);
 			path = KaisolaCompanionTests;
+			sourceTree = "<group>";
+		};
+		F5E9DB31ED9EBBE6C73A9E82 /* Transport */ = {
+			isa = PBXGroup;
+			children = (
+				FC5BE46EF4A28B3506C0AF88 /* CompanionClient.swift */,
+				223F0B22AE769EFE9BFF760D /* CompanionTransport.swift */,
+				C6F6D271749DB37E8FAF6B46 /* LengthFraming.swift */,
+			);
+			path = Transport;
 			sourceTree = "<group>";
 		};
 		F6063D447899A29FE0116307 /* Store */ = {
@@ -361,7 +424,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8CEF7D6FCA7B1BAF7B93641E /* CryptoNoiseVectorTests.swift in Sources */,
 				F018EAC0AB3C96491F3A2225 /* ProjectionFixtureTests.swift in Sources */,
+				9D3F54EF06D9CB014C17331C /* ProtocolFixtureTests.swift in Sources */,
+				98CF5566C28FB9F47C1629D0 /* TransportFramingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -370,16 +436,26 @@
 			buildActionMask = 2147483647;
 			files = (
 				85EF6FD4832E9C492AEC9EC0 /* AgentSessionView.swift in Sources */,
+				870DD0EE6C573BED9219E2A8 /* CompanionClient.swift in Sources */,
+				8E4E827A0D7E5AC11499222C /* CompanionCrypto.swift in Sources */,
+				1AEEAC91EF2A1670DB8D1BF1 /* CompanionIdentity.swift in Sources */,
 				2CF946846F770D846CF496A8 /* CompanionModels.swift in Sources */,
 				607BAB76F3F9B3B9A04F7FDA /* CompanionPreviewData.swift in Sources */,
+				F94145964B2496E5A723E4E4 /* CompanionProtocol.swift in Sources */,
 				D68BA3929DF6A6284DA6A0AF /* CompanionRootView.swift in Sources */,
 				F3E1657D9D5368619E6F2C22 /* CompanionStore.swift in Sources */,
+				35EEDBED8D619F530E40EAAA /* CompanionTransport.swift in Sources */,
 				640ADF1A2342CAB85C83DA76 /* Components.swift in Sources */,
 				530C53FE7D815AD1BAE68F91 /* DevicesView.swift in Sources */,
+				06B7334BB43F48C26F51E158 /* JSONValue.swift in Sources */,
 				284F19847EB5DA253C09A74B /* KaisolaCompanionApp.swift in Sources */,
 				B219E2A44715999A43C5DB73 /* KaisolaTheme.swift in Sources */,
+				C40EB939F9E54A14DB6492EF /* LengthFraming.swift in Sources */,
 				CD8A2A0385F1AB702202CA06 /* NeedsYouView.swift in Sources */,
+				5CC11648ED4D54E8876D0F0E /* NoiseXX.swift in Sources */,
 				BD90ABBC1EEA7D2BAD8C38CB /* NowView.swift in Sources */,
+				F4DCF538350A442D857FFDA4 /* PairingModels.swift in Sources */,
+				28C4DD4AEC0268A7222FFEF4 /* SecureFrameChannel.swift in Sources */,
 				AC871C80111F68A72A00571B /* SessionsView.swift in Sources */,
 				6B34D071320508AF0A05C519 /* TerminalSessionView.swift in Sources */,
 			);
@@ -483,6 +559,10 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Kaisola;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSBonjourServices = (
+					_kaisola._tcp,
+				);
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Kaisola discovers and securely connects to your paired Mac on the local network.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -573,6 +653,10 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Kaisola;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSBonjourServices = (
+					_kaisola._tcp,
+				);
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Kaisola discovers and securely connects to your paired Mac on the local network.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				LD_RUNPATH_SEARCH_PATHS = (

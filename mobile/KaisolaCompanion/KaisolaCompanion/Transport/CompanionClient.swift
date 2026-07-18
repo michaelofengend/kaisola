@@ -1,0 +1,336 @@
+import CryptoKit
+import Foundation
+
+@MainActor
+final class CompanionClient: ObservableObject {
+    @Published private(set) var sas: CompanionSAS?
+    @Published private(set) var lastError: String?
+    @Published private(set) var pairedDesktop: CompanionPairedDesktop?
+
+    var onEnvelope: ((CompanionEnvelope) -> Void)?
+    var onTransportState: ((CompanionTransportState) -> Void)?
+    var onPairedDesktop: ((CompanionPairedDesktop) -> Void)?
+
+    let transport: CompanionTransport
+
+    private enum Mode { case pairing(CompanionPairingPayload), resume(CompanionPairedDesktop) }
+    private var mode: Mode?
+    private var identity: CompanionIdentity?
+    private var initiator: NoiseXXInitiator?
+    private var handshakeResult: NoiseHandshakeResult?
+    private var channel: SecureFrameChannel?
+    private var connectionContext: CompanionConnectionContext?
+    private var sessionId: String?
+    private var localSASConfirmed = false
+    private var remoteSASConfirmed = false
+    private(set) var ackCursor: CompanionAckCursor?
+
+    init(transport: CompanionTransport = CompanionTransport()) {
+        self.transport = transport
+        transport.onWireFrame = { [weak self] data in try self?.receive(data) }
+        transport.onStateChange = { [weak self] state in
+            guard let self else { return }
+            self.onTransportState?(state)
+            if state == .handshaking, case .resume = self.mode {
+                do { try self.startHandshake() } catch { self.fail(error) }
+            }
+        }
+        transport.onError = { [weak self] error in self?.fail(error) }
+    }
+
+    func beginPairing(payload: CompanionPairingPayload, identity: CompanionIdentity) throws {
+        try payload.validate()
+        guard identity.role == .device else { throw CompanionCryptoError.roleMismatch }
+        self.identity = identity
+        mode = .pairing(payload)
+        try startHandshake()
+    }
+
+    func configureResume(
+        desktop: CompanionPairedDesktop,
+        identity: CompanionIdentity,
+        cursor: CompanionAckCursor?
+    ) throws {
+        guard identity.role == .device else { throw CompanionCryptoError.roleMismatch }
+        self.identity = identity
+        pairedDesktop = desktop
+        mode = .resume(desktop)
+        ackCursor = cursor
+        if transport.state == .handshaking { try startHandshake() }
+    }
+
+    func confirmSAS() throws {
+        guard case .pairing = mode,
+              let channel,
+              let result = handshakeResult,
+              !localSASConfirmed else { throw CompanionCryptoError.handshakeOrder }
+        let payload: JSONValue = .object([
+            "type": .string("sas-confirm"),
+            "role": .string(CompanionPeerRole.device.rawValue),
+            "transcriptHash": .string(result.handshakeHash.base64URLEncodedString()),
+        ])
+        try sendSecureFrame(channel.encrypt(payload))
+        localSASConfirmed = true
+    }
+
+    func acknowledge(_ cursor: CompanionAckCursor) throws {
+        guard let channel, let context = connectionContext else { throw CompanionWireError.connectionUnavailable }
+        let envelope = try CompanionEnvelope(
+            kind: .ack,
+            desktopId: context.desktopId,
+            deviceId: context.deviceId,
+            connectionId: context.connectionId,
+            epoch: cursor.epoch,
+            seq: cursor.seq,
+            id: "ack-\(UUID().uuidString.lowercased())",
+            sentAt: Self.nowMilliseconds,
+            body: CompanionBody(CompanionAckBody(ackSeq: cursor.seq))
+        )
+        try sendSecureFrame(channel.encrypt(CompanionProtocolCodec.encode(envelope)))
+        ackCursor = cursor
+    }
+
+    private func startHandshake() throws {
+        guard transport.state == .handshaking, let identity, let mode else {
+            throw CompanionWireError.connectionUnavailable
+        }
+        sas = nil
+        channel = nil
+        handshakeResult = nil
+        sessionId = nil
+        localSASConfirmed = false
+        remoteSASConfirmed = false
+
+        let connectionId = "connection-\(UUID().uuidString.lowercased())"
+        let desktopId: String
+        let pin: CompanionIdentityPin
+        let contextValue: JSONValue
+        switch mode {
+        case let .pairing(payload):
+            desktopId = payload.desktopId
+            pin = payload.desktopPin
+            contextValue = try payload.handshakeContext(connectionId: connectionId)
+        case let .resume(desktop):
+            desktopId = desktop.desktopId
+            pin = desktop.pin
+            contextValue = try desktop.resumeHandshakeContext(deviceId: identity.id, connectionId: connectionId)
+        }
+        let context = CompanionConnectionContext(
+            desktopId: desktopId,
+            deviceId: identity.id,
+            connectionId: connectionId
+        )
+        connectionContext = context
+        let initiator = try NoiseXXInitiator(
+            identity: identity,
+            prologue: createNoisePrologue(contextValue),
+            peerPin: pin
+        )
+        self.initiator = initiator
+        let message1 = try initiator.writeMessage1().base64URLEncodedString()
+
+        let start: JSONValue
+        switch mode {
+        case let .pairing(payload):
+            start = .object([
+                "v": .integer(1),
+                "type": .string("pair.start"),
+                "qrPayload": try JSONValue.from(payload),
+                "connectionId": .string(connectionId),
+                "message1": .string(message1),
+            ])
+        case .resume:
+            start = .object([
+                "v": .integer(1),
+                "type": .string("resume.start"),
+                "deviceId": .string(identity.id),
+                "connectionId": .string(connectionId),
+                "message1": .string(message1),
+            ])
+        }
+        try transport.send(CanonicalJSON.data(from: start))
+    }
+
+    private func receive(_ data: Data) throws {
+        if transport.state == .live {
+            try receiveApplicationFrame(data)
+            return
+        }
+        guard let value = try? JSONDecoder().decode(JSONValue.self, from: data),
+              let object = value.objectValue else { throw CompanionWireError.invalidFrame }
+
+        if let type = object["type"]?.stringValue {
+            if type.hasSuffix(".message2") { try receiveMessage2(object, type: type); return }
+            if type.hasSuffix(".confirmation") { try receiveConfirmation(object, type: type); return }
+        }
+        try receiveSecureHandshakeFrame(value)
+    }
+
+    private func receiveMessage2(_ object: [String: JSONValue], type: String) throws {
+        guard let initiator,
+              let sessionId = object["sessionId"]?.stringValue,
+              let message = object["message2"]?.stringValue,
+              let messageData = Data(base64URLString: message),
+              (type == "pair.message2") == isPairing else {
+            throw CompanionWireError.invalidFrame
+        }
+        self.sessionId = sessionId
+        try initiator.readMessage2(messageData)
+        let message3 = try initiator.writeMessage3()
+        let result = try initiator.result()
+        handshakeResult = result
+        guard let context = connectionContext else { throw CompanionCryptoError.handshakeOrder }
+        channel = try SecureFrameChannel(result: result, context: context, role: .device)
+        let response: JSONValue = .object([
+            "v": .integer(1),
+            "type": .string(isPairing ? "pair.message3" : "resume.message3"),
+            "sessionId": .string(sessionId),
+            "message3": .string(message3.base64URLEncodedString()),
+        ])
+        try transport.send(CanonicalJSON.data(from: response))
+    }
+
+    private func receiveConfirmation(_ object: [String: JSONValue], type: String) throws {
+        guard let channel,
+              let result = handshakeResult,
+              let confirmation = object["confirmationFrame"],
+              (type == "pair.confirmation") == isPairing else {
+            throw CompanionWireError.invalidFrame
+        }
+        let frame = try decodeSecureFrame(confirmation)
+        try CompanionKeyConfirmation.verify(
+            channel: channel,
+            frame: frame,
+            expectedRole: .desktop,
+            handshakeHash: result.handshakeHash
+        )
+        try sendSecureFrame(CompanionKeyConfirmation.make(
+            channel: channel,
+            role: .device,
+            handshakeHash: result.handshakeHash
+        ))
+        if isPairing {
+            let localSAS = CompanionSAS.derive(handshakeHash: result.handshakeHash)
+            if let serverSAS = object["sas"],
+               let advertised = try? JSONDecoder().decode(
+                   CompanionSAS.self,
+                   from: CanonicalJSON.data(from: serverSAS)
+               ), advertised != localSAS {
+                throw CompanionCryptoError.authenticationFailed
+            }
+            sas = localSAS
+        } else {
+            try activateLive()
+        }
+    }
+
+    private func receiveSecureHandshakeFrame(_ value: JSONValue) throws {
+        guard let channel, let result = handshakeResult else { throw CompanionCryptoError.handshakeOrder }
+        let frame = try decodeSecureFrame(value)
+        let payload = try channel.decryptJSON(frame)
+        guard let object = payload.objectValue, let type = object["type"]?.stringValue else {
+            throw CompanionCryptoError.invalidSecurePayload
+        }
+        if type == "sas-confirm" {
+            guard object["role"]?.stringValue == CompanionPeerRole.desktop.rawValue,
+                  object["transcriptHash"]?.stringValue == result.handshakeHash.base64URLEncodedString() else {
+                throw CompanionCryptoError.authenticationFailed
+            }
+            remoteSASConfirmed = true
+            return
+        }
+        if type == "paired" {
+            guard case let .pairing(payload) = mode,
+                  localSASConfirmed, remoteSASConfirmed,
+                  object["deviceId"]?.stringValue == identity?.id,
+                  object["transcriptHash"]?.stringValue == result.handshakeHash.base64URLEncodedString() else {
+                throw CompanionCryptoError.authenticationFailed
+            }
+            let granted: [CompanionCapability]
+            if let value = object["capabilities"],
+               let decoded = try? JSONDecoder().decode(
+                   [CompanionCapability].self,
+                   from: CanonicalJSON.data(from: value)
+               ) {
+                granted = decoded
+            } else {
+                granted = payload.requestedCapabilities
+            }
+            guard !granted.isEmpty,
+                  granted.contains(.observe),
+                  Set(granted).count == granted.count else {
+                throw CompanionCryptoError.authenticationFailed
+            }
+            let desktop = CompanionPairedDesktop(
+                desktopId: payload.desktopId,
+                identityPublic: payload.identityPublic,
+                x25519StaticPublic: payload.keyRecord.x25519StaticPublic,
+                capabilities: CompanionCapability.allCases.filter(granted.contains)
+            )
+            pairedDesktop = desktop
+            mode = .resume(desktop)
+            onPairedDesktop?(desktop)
+            try activateLive()
+            return
+        }
+        throw CompanionCryptoError.invalidSecurePayload
+    }
+
+    private func activateLive() throws {
+        guard let channel, let context = connectionContext else { throw CompanionCryptoError.handshakeOrder }
+        let capabilities: [CompanionCapability]
+        switch mode {
+        case let .pairing(payload): capabilities = payload.requestedCapabilities
+        case let .resume(desktop): capabilities = desktop.capabilities
+        case nil: throw CompanionCryptoError.handshakeOrder
+        }
+        let hello = CompanionHelloBody(
+            role: .device,
+            capabilities: capabilities,
+            lastAck: ackCursor?.seq
+        )
+        let envelope = try CompanionEnvelope(
+            kind: .hello,
+            desktopId: context.desktopId,
+            deviceId: context.deviceId,
+            connectionId: context.connectionId,
+            epoch: ackCursor?.epoch ?? "initial",
+            seq: 0,
+            id: "hello-\(UUID().uuidString.lowercased())",
+            sentAt: Self.nowMilliseconds,
+            body: CompanionBody(hello)
+        )
+        try sendSecureFrame(channel.encrypt(CompanionProtocolCodec.encode(envelope)))
+        transport.markLive()
+    }
+
+    private func receiveApplicationFrame(_ data: Data) throws {
+        guard let channel else { throw CompanionWireError.connectionUnavailable }
+        let secure = try JSONDecoder().decode(CompanionSecureFrame.self, from: data)
+        let envelope = try CompanionProtocolCodec.decode(channel.decrypt(secure))
+        onEnvelope?(envelope)
+    }
+
+    private func sendSecureFrame(_ frame: CompanionSecureFrame) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        try transport.send(encoder.encode(frame))
+    }
+
+    private func decodeSecureFrame(_ value: JSONValue) throws -> CompanionSecureFrame {
+        try JSONDecoder().decode(CompanionSecureFrame.self, from: CanonicalJSON.data(from: value))
+    }
+
+    private var isPairing: Bool {
+        if case .pairing = mode { return true }
+        return false
+    }
+
+    private func fail(_ error: Error) {
+        lastError = String(describing: error)
+    }
+
+    private static var nowMilliseconds: Int64 {
+        Int64(Date.now.timeIntervalSince1970 * 1_000)
+    }
+}
