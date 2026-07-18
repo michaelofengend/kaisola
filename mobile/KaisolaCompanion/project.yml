@@ -18,6 +18,16 @@ targets:
   KaisolaCompanion:
     type: application
     platform: iOS
+    info:
+      path: KaisolaCompanion/Account/Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: com.kaisola.companion.auth
+            CFBundleURLSchemes:
+              - kaisola
     sources:
       - path: KaisolaCompanion
       - path: ../../electron/companion/fixtures
