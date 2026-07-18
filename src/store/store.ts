@@ -1037,6 +1037,10 @@ export interface KaisolaState {
   sessionRailWidth: number | null
   /** Left workspace rail visibility — the strip button / ⌘B (persisted). */
   railOpen: boolean
+  /** The Board surface (all-project running/needs-you/done cockpit). Shell
+   * state, not a ProjectTab: opening it never disturbs project layouts, and
+   * any project switch closes it. */
+  boardOpen: boolean
   /** Last Claude Code session id per workspace (from the hooks tap) — the
    * auto-launch resumes it (`claude --resume`) so a restart lands you back
    * in the same conversation. Persisted; capped. */
@@ -1272,6 +1276,7 @@ export interface KaisolaState {
   clearGroupWorktreeSessions: (id: string, cwd: string, projectId?: string) => void
   setAssistantThreadCwd: (id: string, cwd: string | undefined, projectId?: string) => void
   setActiveThread: (id: string) => void
+  setBoardOpen: (open: boolean) => void
   closeAssistantThread: (id: string, projectId?: string) => void
   renameAssistantThread: (id: string, name?: string) => void
   /** Auto-title a thread from its first message's topic (manual name wins). */
@@ -2593,6 +2598,7 @@ export const useKaisola = create<KaisolaState>()(
   // The default sidebar composition is intentionally visible: sessions left,
   // files right. ⌘B can still put the file tree away independently.
   railOpen: true,
+  boardOpen: false,
   claudeSessions: {},
   claudeAccounts: [],
   claudeAccountId: '',
@@ -4431,6 +4437,7 @@ export const useKaisola = create<KaisolaState>()(
   },
   setTermLineHeight: (height) => set({ termLineHeight: clampTermLineHeight(height) }),
   toggleRail: () => set((s) => ({ railOpen: !s.railOpen })),
+  setBoardOpen: (open) => set({ boardOpen: open }),
 
   // ── working-tree checkpoints (Zed-style restore points, via hidden git refs) ──
   snapshotWorkspace: async (label, projectId) => {
@@ -5844,6 +5851,7 @@ export const useKaisola = create<KaisolaState>()(
         activeProjectId: targetId,
         projectSlices: { ...restBg, [s.activeProjectId]: outgoing },
         projectTabs: s.projectTabs.map((t) => (t.id === targetId ? { ...t, activity: undefined, transientBlank: undefined } : t)),
+        boardOpen: false, // picking a project always surfaces that project
         ...target, // hoist the target's memory slice → live flat fields
         ...resetEphemeralCursors(), // bucket F defaults; bucket E left alone
       }
