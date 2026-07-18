@@ -73,3 +73,68 @@ test('terminal observer channels normalize into replay events without exposing a
   assert.equal(replay.events[1].payload.snapshotRequired, true)
 })
 
+test('authoritative terminal snapshots, ACP events, and ledger updates share one ordered replay', () => {
+  const { state } = setup()
+  state.terminalObserverSnapshot('project-kaisola', 'terminal-1', {
+    ok: true,
+    mode: 'snapshot',
+    snapshot: {
+      streamEpoch: 'stream-1',
+      output: 'ready\n',
+      startOffset: 0,
+      endOffset: 6,
+      truncated: false,
+      exited: false,
+    },
+  })
+  state.acpSessionEvent({
+    type: 'agent.turn.delta',
+    projectId: 'project-kaisola',
+    targetId: 'codex-session',
+    turnId: 'turn-1',
+    delta: { text: 'working' },
+  })
+  state.ledgerEvent({
+    type: 'updated',
+    task: {
+      id: 'task-1',
+      projectId: 'project-kaisola',
+      status: 'review',
+      title: 'Review result',
+      updatedAt: 1_000,
+    },
+  })
+
+  const replay = state.replay({ epoch: 'desktop-epoch-current', afterSeq: 0 })
+  assert.deepEqual(replay.events.map(({ type }) => type), [
+    'terminal.snapshot',
+    'agent.turn.delta',
+    'ledger.task.updated',
+  ])
+  assert.equal(replay.events[0].payload.output, 'ready\n')
+  assert.equal(replay.events[1].payload.delta.text, 'working')
+  assert.equal(replay.events[2].payload.task.status, 'review')
+})
+
+test('gateway terminal snapshots are byte-bounded before entering replay', () => {
+  const { state } = setup()
+  const output = `head-${'x'.repeat(300 * 1024)}-tail`
+  const bytes = Buffer.byteLength(output)
+  state.terminalObserverSnapshot('project-kaisola', 'terminal-large', {
+    ok: true,
+    mode: 'snapshot',
+    snapshot: {
+      streamEpoch: 'stream-large',
+      output,
+      startOffset: 0,
+      endOffset: bytes,
+      truncated: false,
+      exited: false,
+    },
+  })
+  const snapshot = state.replay({ epoch: 'desktop-epoch-current', afterSeq: 0 }).events[0].payload
+  assert.ok(Buffer.byteLength(snapshot.output, 'utf8') <= 256 * 1024)
+  assert.equal(snapshot.output.endsWith('-tail'), true)
+  assert.equal(snapshot.startOffset, bytes - Buffer.byteLength(snapshot.output, 'utf8'))
+  assert.equal(snapshot.truncated, true)
+})

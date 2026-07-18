@@ -42,6 +42,7 @@ const SESSION_STATUSES = new Set(['idle', 'running', 'waiting', 'done', 'failed'
 const TURN_KINDS = new Set(['user', 'assistant', 'thought', 'tool'])
 const ATTENTION_KINDS = new Set(['permission', 'question', 'review', 'blocked', 'failed', 'completed'])
 const SEVERITIES = new Set(['info', 'warning', 'critical'])
+const PERMISSION_COMPLETENESS = new Set(['complete', 'truncated', 'redacted', 'unavailable'])
 
 class CompanionProjectionError extends Error {
   constructor(code, message) {
@@ -199,6 +200,11 @@ function sanitizePermission(raw, index, projects, sessions) {
     title: safeString(item.title, `permissions.${index}.title`),
     requestedAt: safeTime(item.requestedAt, `permissions.${index}.requestedAt`),
   }
+  if (item.targetId != null) clean.targetId = safeId(item.targetId, `permissions.${index}.targetId`, 240)
+  if (item.revision != null) clean.revision = safeTime(item.revision, `permissions.${index}.revision`)
+  if (item.completeness != null) {
+    clean.completeness = PERMISSION_COMPLETENESS.has(item.completeness) ? item.completeness : 'unavailable'
+  }
   if (item.sessionId != null) {
     const sessionId = safeId(item.sessionId, `permissions.${index}.sessionId`)
     const session = sessions.get(sessionId)
@@ -349,4 +355,3 @@ module.exports = {
   safeRelativePath,
   sanitizeProjection,
 }
-

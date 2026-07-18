@@ -26,6 +26,8 @@ const EVENT_TYPES = new Set([
 const SNAPSHOT_TYPES = new Set(['snapshot.projects', 'terminal.snapshot'])
 const COMMAND_CAPABILITIES = Object.freeze({
   'attention.ack': 'observe',
+  'stream.subscribe': 'observe',
+  'stream.unsubscribe': 'observe',
   'agent.prompt': 'agent-control',
   'agent.steer': 'agent-control',
   'agent.cancel': 'agent-control',

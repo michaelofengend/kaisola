@@ -11,8 +11,8 @@ const fs = require('node:fs')
 const { registerModelHandlers } = require('./ipc/modelHandler.cjs')
 const { registerToolHandlers } = require('./ipc/toolHandler.cjs')
 const { registerSettingsHandlers } = require('./ipc/settingsHandler.cjs')
-const { registerTerminalHandlers, detachSessionBroker, setAppFocused, forgetRendererOwner, setTerminalAttentionSink } = require('./ipc/terminalHandler.cjs')
-const { registerAcpHandlers, disposeAcp, acpRendererSwapState, acpRestartSafetyState, waitForAcpRestartSafe, acpProjectTransferState, transferAcpProject, releaseAcpRenderer, setAcpSessionEventSink } = require('./ipc/acpHandler.cjs')
+const { registerTerminalHandlers, detachSessionBroker, setAppFocused, forgetRendererOwner, subscribeTerminalObserver, setTerminalAttentionSink } = require('./ipc/terminalHandler.cjs')
+const { registerAcpHandlers, acpSessionService, disposeAcp, acpRendererSwapState, acpRestartSafetyState, waitForAcpRestartSafe, acpProjectTransferState, transferAcpProject, releaseAcpRenderer, setAcpSessionEventSink } = require('./ipc/acpHandler.cjs')
 const { createPopMirrorCache, sanitizeTerminalMirror, tabListOwnsProject } = require('./ipc/terminalMirrorPolicy.cjs')
 const { registerAuthHandlers, disposeAuth } = require('./ipc/authHandler.cjs')
 const { registerFsHandlers, disposeFs } = require('./ipc/fsHandler.cjs')
@@ -25,7 +25,7 @@ const { registerGitHandlers } = require('./ipc/gitHandler.cjs')
 const { registerLatexHandlers } = require('./ipc/latexHandler.cjs')
 const { registerClaudeHooksHandlers, disposeClaudeHooks } = require('./ipc/claudeHooksHandler.cjs')
 const { registerUsageHandlers } = require('./ipc/usageHandler.cjs')
-const { registerLedgerHandlers, setLedgerEventSink } = require('./ipc/ledgerHandler.cjs')
+const { registerLedgerHandlers, listTasks, setLedgerEventSink } = require('./ipc/ledgerHandler.cjs')
 const { registerMcpHandlers, disposeMcp } = require('./ipc/mcpServer.cjs')
 const { registerExtensionHandlers } = require('./ipc/extensionHandler.cjs')
 const { registerUpdateHandlers } = require('./ipc/updateHandler.cjs')
@@ -36,6 +36,8 @@ const { AttentionService } = require('./ipc/attentionService.cjs')
 const { registerCompanionProjectionHandlers } = require('./companion/projectionHandler.cjs')
 const { CompanionProjectionStore, projectionStoreKey } = require('./companion/projectionStore.cjs')
 const { CompanionDesktopState } = require('./companion/desktopState.cjs')
+const { CompanionGateway } = require('./companion/gateway.cjs')
+const { CompanionStateHub } = require('./companion/stateHub.cjs')
 const { hardenWebviewAttachment, installPermissionPolicy, isSafeWebUrl, isTrustedRendererUrl } = require('./ipc/securityPolicy.cjs')
 const { BrowserGuestRegistry } = require('./ipc/browserGuestRegistry.cjs')
 const {
@@ -69,9 +71,11 @@ let appCleanupStarted = false
 let appCleanupFinished = false
 let deferredQuitTask = null
 const companionDesktopEpoch = crypto.randomUUID()
+const companionDesktopId = `desktop-${crypto.randomUUID()}`
 let companionWindowGeneration = 0
 let companionProjectionStore = null
 let companionDesktopState = null
+let companionGateway = null
 let attentionService = null
 
 // ── Liquid Glass (macOS 26 "Tahoe"+) ─────────────────────────────────────────
@@ -1151,7 +1155,7 @@ async function deleteSavedWindow(event, id) {
         // notifications and orphan pop cleanup are best-effort follow-ups and
         // must never turn a successful durable deletion into a false rollback.
         windowManifest = nextManifest
-        try { companionDesktopState?.projectionRemoved(id) } catch { /* replay can recover from the next full snapshot */ }
+        try { companionGateway?.projectionRemoved(id) } catch { /* replay can recover from the next full snapshot */ }
         for (const projectId of prepared.projectIds ?? []) {
           try { closeUnownedProjectPops(projectId) } catch { /* next launch also excludes the deleted owner */ }
         }
@@ -1710,13 +1714,25 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
     projectionStore: companionProjectionStore,
     attentionService,
   })
-  setAcpSessionEventSink((event) => companionDesktopState.attentionEvent(event))
-  setTerminalAttentionSink((event) => attentionService.handleTerminalEvent(event))
-  setLedgerEventSink((event) => attentionService.handleLedgerEvent({ task: event.task }))
+  companionGateway = new CompanionGateway({
+    desktopId: companionDesktopId,
+    epoch: companionDesktopEpoch,
+    stateHub: new CompanionStateHub({ desktopState: companionDesktopState }),
+    terminalObserver: subscribeTerminalObserver,
+    acpSessionService,
+    attentionService,
+    ledgerAdapter: { listTasks },
+    // Task 7 is deliberately observe-only. Later phases may enable control
+    // only after paired device records and terminal leases exist.
+    enabledCapabilities: ['observe'],
+  })
+  setAcpSessionEventSink((event) => companionGateway.acpSessionEvent(event))
+  setTerminalAttentionSink((event) => companionGateway.terminalAttention(event))
+  setLedgerEventSink((event) => companionGateway.ledgerEvent(event))
   registerCompanionProjectionHandlers(ipcMain, {
     BrowserWindow,
     store: companionProjectionStore,
-    onPublished: (windowId, result) => companionDesktopState.projectionPublished(windowId, result),
+    onPublished: (windowId, result) => companionGateway.projectionPublished(windowId, result),
   })
   loadWindowManifest()
   registerCodexHandlers(ipcMain)
@@ -1825,6 +1841,7 @@ app.on('before-quit', (event) => {
     // ACP command PTYs are connection-private and cannot be rediscovered after
     // their adapter exits. Release those exact records while the authenticated
     // broker socket is still live; user/CLI PTYs remain detached and continue.
+    await companionGateway?.dispose()
     await disposeAcp()
     await detachSessionBroker()
     disposeAuth()

@@ -14,7 +14,7 @@ class CompanionCommandRouter {
     this.handlers = { ...handlers }
   }
 
-  async route({ frame, device }) {
+  async route({ frame, device, session }) {
     const clean = validateEnvelope(frame)
     if (clean.kind !== 'command') throw new Error('companion command frame is required')
     validateIdentifier(device?.deviceId, 'device.deviceId')
@@ -35,7 +35,7 @@ class CompanionCommandRouter {
       if (typeof handler !== 'function') {
         return receipt(clean.body.commandId, 'unavailable', `${clean.body.type} is not available.`)
       }
-      const result = await handler({ device, command: clean.body })
+      const result = await handler({ device, command: clean.body, session })
       if (!result || typeof result !== 'object') return receipt(clean.body.commandId, 'applied', 'Command applied.')
       return receipt(
         clean.body.commandId,

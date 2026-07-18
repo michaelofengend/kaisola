@@ -44,6 +44,34 @@ class CompanionStateHub {
     return this.desktopState.acknowledgeAttention(actor, target)
   }
 
+  projectionPublished(windowId, result) {
+    return this.desktopState.projectionPublished?.(windowId, result) ?? null
+  }
+
+  projectionRemoved(windowId) {
+    return this.desktopState.projectionRemoved?.(windowId) ?? null
+  }
+
+  terminalObserverEvent(projectId, event) {
+    return this.desktopState.terminalObserverEvent?.(projectId, event) ?? null
+  }
+
+  terminalObserverSnapshot(projectId, terminalId, result) {
+    return this.desktopState.terminalObserverSnapshot?.(projectId, terminalId, result) ?? null
+  }
+
+  acpSessionEvent(event) {
+    return this.desktopState.acpSessionEvent?.(event) ?? null
+  }
+
+  terminalAttention(event) {
+    return this.desktopState.terminalAttention?.(event) ?? null
+  }
+
+  ledgerEvent(event) {
+    return this.desktopState.ledgerEvent?.(event) ?? null
+  }
+
   subscribe(listener) {
     if (!this.desktopState.subscribe) return () => false
     return this.desktopState.subscribe(listener)

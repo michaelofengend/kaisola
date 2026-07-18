@@ -65,7 +65,10 @@ test('permissions keep bounded relative diffs and reject path escape', () => {
   const permission = {
     permId: 'permission-1',
     projectId: 'project-kaisola',
+    targetId: 'agent-target-1',
     sessionId: 'session-waiting',
+    revision: 3,
+    completeness: 'complete',
     agent: 'Claude',
     title: 'Edit terminal policy',
     requestedAt: 50,
@@ -74,6 +77,9 @@ test('permissions keep bounded relative diffs and reject path escape', () => {
   }
   const clean = sanitizeProjection(projection({ permissions: [permission] }))
   assert.equal(clean.permissions[0].diffs[0].relativePath, 'electron/ipc/terminalManager.cjs')
+  assert.equal(clean.permissions[0].targetId, 'agent-target-1')
+  assert.equal(clean.permissions[0].revision, 3)
+  assert.equal(clean.permissions[0].completeness, 'complete')
   assert.throws(
     () => sanitizeProjection(projection({ permissions: [{ ...permission, diffs: [{ ...permission.diffs[0], relativePath: '../.ssh/config' }] }] })),
     /workspace-relative/,

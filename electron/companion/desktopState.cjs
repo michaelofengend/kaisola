@@ -1,7 +1,30 @@
 'use strict'
 
 const { CompanionEventLog } = require('./eventLog.cjs')
+const { validateIdentifier } = require('./protocol.cjs')
 const { PROJECTION_KIND, sanitizeProjection } = require('./redaction.cjs')
+const { DEFAULT_SNAPSHOT_BYTES, makeBoundedSnapshot } = require('./terminalCursor.cjs')
+
+const ACP_EVENT_TYPES = new Set([
+  'agent.turn.delta',
+  'agent.turn.completed',
+  'agent.permission.requested',
+  'agent.permission.resolved',
+])
+const MAX_AUTHORITY_EVENT_BYTES = 512 * 1024
+
+function boundedClone(value, maxBytes = MAX_AUTHORITY_EVENT_BYTES) {
+  let encoded
+  try { encoded = JSON.stringify(value) } catch { return null }
+  if (!encoded || Buffer.byteLength(encoded, 'utf8') > maxBytes) return null
+  try { return JSON.parse(encoded) } catch { return null }
+}
+
+function optionalText(value, max) {
+  if (typeof value !== 'string') return undefined
+  const text = value.replace(/[\0\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').trim()
+  return text ? text.slice(0, max) : undefined
+}
 
 class CompanionDesktopState {
   constructor({ epoch, projectionStore, attentionService = null, now = Date.now, eventLog } = {}) {
@@ -95,6 +118,46 @@ class CompanionDesktopState {
     return this.#append({ type, payload: cleanPayload, at: this.now() })
   }
 
+  terminalObserverSnapshot(projectId, terminalId, result = {}) {
+    if (typeof projectId !== 'string' || !projectId || typeof terminalId !== 'string' || !terminalId) return null
+    let snapshot
+    try {
+      if (result.mode === 'snapshot' && result.snapshot) {
+        snapshot = makeBoundedSnapshot({
+          streamEpoch: result.snapshot.streamEpoch,
+          output: result.snapshot.output ?? '',
+          endOffset: result.snapshot.endOffset,
+          maxBytes: DEFAULT_SNAPSHOT_BYTES,
+          truncated: result.snapshot.truncated,
+          exited: result.snapshot.exited,
+          exitStatus: result.snapshot.exitStatus,
+        })
+      } else if (result.mode === 'current' && result.cursor) {
+        snapshot = makeBoundedSnapshot({
+          streamEpoch: result.cursor.streamEpoch,
+          output: '',
+          endOffset: result.cursor.offset,
+          maxBytes: DEFAULT_SNAPSHOT_BYTES,
+          truncated: result.cursor.offset > 0,
+          exited: false,
+        })
+      } else return null
+    } catch {
+      return null
+    }
+    return this.#append({
+      type: 'terminal.snapshot',
+      payload: {
+        projectId,
+        terminalId,
+        mode: result.mode,
+        ...snapshot,
+        ...(typeof result.resetReason === 'string' ? { resetReason: result.resetReason.slice(0, 80) } : {}),
+      },
+      at: this.now(),
+    })
+  }
+
   snapshot() {
     const records = this.projectionStore.list()
     this.attentionService?.synchronizeProjections?.(records)
@@ -149,12 +212,61 @@ class CompanionDesktopState {
       : projection
   }
 
+  acpSessionEvent(event) {
+    if (!event || !ACP_EVENT_TYPES.has(event.type) || typeof event.projectId !== 'string' || !event.projectId) return null
+    const clean = boundedClone(event)
+    if (!clean) return null
+    const { type, ...payload } = clean
+    const appended = this.#append({ type, payload, at: this.now() })
+    this.attentionService?.handleAcpEvent?.(clean)
+    return appended
+  }
+
   attentionEvent(event) {
-    return this.attentionService?.handleAcpEvent?.(event) ?? null
+    return this.acpSessionEvent(event)
+  }
+
+  terminalAttention(event) {
+    return this.attentionService?.handleTerminalEvent?.(event) ?? null
+  }
+
+  ledgerEvent(event = {}) {
+    const task = event.task
+    if (!task || typeof task !== 'object' || Array.isArray(task)) return null
+    let projectId = typeof task.projectId === 'string' ? task.projectId : null
+    if (!projectId && typeof task.project === 'string') {
+      projectId = this.attentionService?.projectIdForAlias?.(task.project) ?? null
+    }
+    if (!projectId) return this.attentionService?.handleLedgerEvent?.({ task }) ?? null
+    try {
+      validateIdentifier(projectId, 'ledger.projectId', 240)
+      validateIdentifier(task.id, 'ledger.taskId', 240)
+    } catch {
+      return null
+    }
+    const cleanTask = {
+      id: task.id,
+      status: optionalText(task.status, 40) ?? 'open',
+      title: optionalText(task.title, 300) ?? 'Agent task',
+      ...(optionalText(task.project, 240) ? { project: optionalText(task.project, 240) } : {}),
+      ...(optionalText(task.owner, 120) ? { owner: optionalText(task.owner, 120) } : {}),
+      ...(optionalText(task.createdBy, 120) ? { createdBy: optionalText(task.createdBy, 120) } : {}),
+      ...(optionalText(task.detail, 8_000) ? { detail: optionalText(task.detail, 8_000) } : {}),
+      ...(optionalText(task.result, 8_000) ? { result: optionalText(task.result, 8_000) } : {}),
+      ...(Number.isSafeInteger(task.createdAt) && task.createdAt >= 0 ? { createdAt: task.createdAt } : {}),
+      ...(Number.isSafeInteger(task.updatedAt) && task.updatedAt >= 0 ? { updatedAt: task.updatedAt } : {}),
+    }
+    const appended = this.#append({
+      type: 'ledger.task.updated',
+      payload: { projectId, task: cleanTask, change: optionalText(event.type, 40) ?? 'updated' },
+      at: this.now(),
+    })
+    this.attentionService?.handleLedgerEvent?.({ task: { ...task, projectId }, projectId })
+    return appended
   }
 
   ledgerAttention(event) {
-    return this.attentionService?.handleLedgerEvent?.(event) ?? null
+    return this.ledgerEvent(event)
   }
 
   acknowledgeAttention(actor, target) {

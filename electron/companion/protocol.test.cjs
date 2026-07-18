@@ -65,6 +65,7 @@ test('commands require the exact capability, project, target, and envelope ident
   assert.equal(requiredCapability('terminal.write'), 'terminal-control')
   assert.equal(requiredCapability('agent.prompt'), 'agent-control')
   assert.equal(requiredCapability('attention.ack'), 'observe')
+  assert.equal(requiredCapability('stream.subscribe'), 'observe')
   assert.equal(requiredCapability('terminal.kill'), null)
   assert.throws(() => validateEnvelope({ ...base, body: { ...base.body, capability: 'observe' } }), /requires terminal-control/)
   assert.throws(() => validateEnvelope({ ...base, body: { ...base.body, commandId: 'other-command' } }), /does not match/)
@@ -86,6 +87,20 @@ test('commands require the exact capability, project, target, and envelope ident
   assert.deepEqual(validateEnvelope(attentionAck), attentionAck)
   assert.throws(() => validateEnvelope({ ...attentionAck, body: { ...attentionAck.body, targetId: '' } }), /targetId is invalid/)
   assert.throws(() => validateEnvelope({ ...attentionAck, body: { ...attentionAck.body, capability: 'agent-control' } }), /requires observe/)
+
+  const streamSubscribe = {
+    ...base,
+    id: 'stream-command',
+    body: {
+      type: 'stream.subscribe',
+      commandId: 'stream-command',
+      projectId: 'project-kaisola',
+      targetId: 'terminal-codex',
+      capability: 'observe',
+      payload: { streamEpoch: 'terminal-epoch-3', afterOffset: 42 },
+    },
+  }
+  assert.deepEqual(validateEnvelope(streamSubscribe), streamSubscribe)
 })
 
 test('decoder bounds bytes before JSON parsing and rejects malformed bodies', () => {

@@ -366,7 +366,7 @@ function forgetRendererOwner(sender) {
   return broker().forgetOwner(sender)
 }
 
-/** Internal-only observer path used by the future companion gateway. It never
+/** Internal-only observer path used by the companion gateway. It never
  * enters ipcMain/preload, and its broker method cannot adopt terminal owner. */
 async function subscribeTerminalObserver({
   id,
