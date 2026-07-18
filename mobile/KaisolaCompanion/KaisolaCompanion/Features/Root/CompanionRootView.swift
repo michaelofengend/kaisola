@@ -7,7 +7,14 @@ struct CompanionRootView: View {
 
     @EnvironmentObject private var store: CompanionStore
     @EnvironmentObject private var auth: AuthModel
-    @State private var selection: Tab = .home
+    // KAISOLA_UI_TAB lets a screenshot launch open a specific tab.
+    @State private var selection: Tab = {
+        switch ProcessInfo.processInfo.environment["KAISOLA_UI_TAB"] {
+        case "settings": return .settings
+        case "sessions": return .sessions
+        default: return .home
+        }
+    }()
     @State private var homePath = NavigationPath()
     @State private var sessionsPath = NavigationPath()
 
