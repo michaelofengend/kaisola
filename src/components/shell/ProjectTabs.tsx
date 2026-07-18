@@ -130,6 +130,7 @@ export function ProjectTabs() {
         aria-pressed={boardOpen}
       >
         <Icon name="PanelsTopLeft" size={13} />
+        <span className="board-tab-label">Board</span>
         {boardNeeds > 0 && <span className="board-tab-badge">{boardNeeds > 99 ? '99+' : boardNeeds}</span>}
       </button>
       <div className="tabstrip-track" role="tablist" ref={trackRef} onScroll={syncFade}>
