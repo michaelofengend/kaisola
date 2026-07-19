@@ -19,6 +19,7 @@
     "smoke": "vite build && env -u ELECTRON_RUN_AS_NODE electron electron/smoke.cjs",
     "broker:probe": "cross-env ELECTRON_RUN_AS_NODE=1 electron electron/session-broker.probe.cjs",
     "companion:probe": "env -u ELECTRON_RUN_AS_NODE electron electron/companion-probe.cjs",
+    "companion:pair-harness": "env -u ELECTRON_RUN_AS_NODE cross-env KAISOLA_SMOKE=1 electron electron/companion-pair-harness.cjs",
     "memory:compare": "node electron/memorycompare.cjs",
     "shoot": "vite build && electron electron/shoot.cjs",
     "group:probe": "vite build && electron electron/group-ui-probe.cjs",
@@ -55,6 +56,7 @@
     "files": [
       "dist/**",
       "electron/**",
+      "!electron/*harness.*",
       "!electron/*probe.*",
       "!electron/*.test.*",
       "!electron/smoke.cjs",

@@ -5,6 +5,7 @@ import SwiftUI
 struct CompanionSettingsView: View {
     @EnvironmentObject private var store: CompanionStore
     @EnvironmentObject private var auth: AuthModel
+    @EnvironmentObject private var coordinator: CompanionConnectionCoordinator
     @Environment(\.colorScheme) private var colorScheme
     @State private var confirmSignOut = false
     @State private var confirmUnpair = false
@@ -49,7 +50,7 @@ struct CompanionSettingsView: View {
             Text("This clears your account and cached sessions from this phone.")
         }
         .confirmationDialog("Unpair this Mac?", isPresented: $confirmUnpair, titleVisibility: .visible) {
-            Button("Unpair", role: .destructive) {}
+            Button("Unpair", role: .destructive) { coordinator.unpair() }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("You'll need to scan the pairing code again to reconnect.")
@@ -80,23 +81,28 @@ struct CompanionSettingsView: View {
     }
 
     @ViewBuilder private var pairedMacSection: some View {
-        let connected = store.connection == .live
-        section(title: "Paired Mac") {
-            SettingsRow(icon: "laptopcomputer", label: macName) {
-                HStack(spacing: 6) {
-                    Circle().fill(connected ? KaisolaTheme.done : Color.secondary).frame(width: 7, height: 7)
-                    Text(connected ? "Connected" : store.connection.title)
-                        .font(.caption).foregroundStyle(.secondary)
+        if coordinator.isPaired || store.isPreview {
+            let connected = store.connection == .live
+            section(title: "Paired Mac") {
+                SettingsRow(icon: "laptopcomputer", label: macName) {
+                    HStack(spacing: 6) {
+                        Circle().fill(connected ? KaisolaTheme.done : Color.secondary).frame(width: 7, height: 7)
+                        Text(connected ? "Connected" : store.connection.title)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                SettingsRow(icon: "eye", label: "Access") {
+                    Text(accessLabel).font(.caption).foregroundStyle(.secondary)
+                }
+                SettingsRow(icon: "trash", label: "Unpair this Mac", destructive: false) {
+                    confirmUnpair = true
                 }
             }
-            SettingsRow(icon: "eye", label: "Access") {
-                Text(accessLabel).font(.caption).foregroundStyle(.secondary)
-            }
-            SettingsRow(icon: "plus.viewfinder", label: "Pair another Mac", tint: KaisolaTheme.accent) {
-                onPairNewMac()
-            }
-            SettingsRow(icon: "trash", label: "Unpair this Mac", destructive: false) {
-                confirmUnpair = true
+        } else {
+            section(title: "Your Mac") {
+                SettingsRow(icon: "qrcode.viewfinder", label: "Pair your Mac", tint: KaisolaTheme.accent) {
+                    coordinator.presentPairing()
+                }
             }
         }
     }

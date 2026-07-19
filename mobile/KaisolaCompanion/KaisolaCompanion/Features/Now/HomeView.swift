@@ -4,6 +4,7 @@ import SwiftUI
 /// Recent — each card a tap from the real session. Replaces the orb dashboard.
 struct HomeView: View {
     @EnvironmentObject private var store: CompanionStore
+    @EnvironmentObject private var coordinator: CompanionConnectionCoordinator
     @Environment(\.colorScheme) private var colorScheme
 
     var onOpenSession: (CompanionSession) -> Void = { _ in }
@@ -23,9 +24,16 @@ struct HomeView: View {
         return "\(n) need\(n == 1 ? "s" : "") you · \(r) running · \(d) recent"
     }
 
+    private var showConnectPrompt: Bool {
+        !store.isPreview && !coordinator.isPaired
+    }
+
     var body: some View {
         ZStack {
             AmbientBackdrop()
+            if showConnectPrompt {
+                connectPrompt
+            } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     header
@@ -77,10 +85,38 @@ struct HomeView: View {
                 .padding(.bottom, 28)
             }
             .scrollIndicators(.hidden)
+            }
         }
         .navigationTitle("Home")
         .navigationBarTitleDisplayMode(.large)
         .animation(.smooth(duration: 0.32), value: store.needsYouCount)
+    }
+
+    private var connectPrompt: some View {
+        VStack(spacing: 18) {
+            Spacer()
+            Image(systemName: "laptopcomputer.and.iphone")
+                .font(.system(size: 46, weight: .light))
+                .foregroundStyle(KaisolaTheme.accent)
+            Text("Connect your Mac")
+                .font(.title2.weight(.semibold))
+            Text("Pair with the Kaisola app on your Mac to watch every agent and terminal from here.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+            Button { coordinator.presentPairing() } label: {
+                Label("Pair your Mac", systemImage: "qrcode.viewfinder")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(KaisolaTheme.darkFrame)
+                    .padding(.horizontal, 22).frame(height: 50)
+                    .background(KaisolaTheme.accent, in: Capsule())
+            }
+            .buttonStyle(QuietPressStyle())
+            .padding(.top, 4)
+            Spacer(); Spacer()
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private var waitingOrFailedSessions: [CompanionSession] {

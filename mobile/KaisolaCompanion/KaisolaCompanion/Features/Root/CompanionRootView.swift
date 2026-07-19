@@ -7,6 +7,7 @@ struct CompanionRootView: View {
 
     @EnvironmentObject private var store: CompanionStore
     @EnvironmentObject private var auth: AuthModel
+    @EnvironmentObject private var coordinator: CompanionConnectionCoordinator
     // KAISOLA_UI_TAB lets a screenshot launch open a specific tab (debug only).
     @State private var selection: Tab = {
         #if DEBUG
@@ -70,6 +71,12 @@ struct CompanionRootView: View {
         .toolbarBackground(.ultraThinMaterial, for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
         .overlay(alignment: .bottom) { receiptToast }
+        .sheet(isPresented: Binding(
+            get: { coordinator.wantsPairing },
+            set: { coordinator.wantsPairing = $0 }
+        )) {
+            PairingFlowView()
+        }
     }
 
     private func pushSession(_ session: CompanionSession, into tab: Tab) {

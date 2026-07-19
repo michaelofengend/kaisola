@@ -42,6 +42,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Kaisola
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Kaisola discovers and securely connects to your paired Mac on the local network.
+        INFOPLIST_KEY_NSCameraUsageDescription: Kaisola uses the camera to scan the pairing code shown on your Mac.
         INFOPLIST_KEY_NSBonjourServices:
           - _kaisola._tcp
         # Standard-algorithm end-to-end encryption qualifies for the mass-market
