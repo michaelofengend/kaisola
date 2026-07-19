@@ -23,6 +23,7 @@ final class CompanionClient: ObservableObject {
     private var sessionId: String?
     private var localSASConfirmed = false
     private var remoteSASConfirmed = false
+    private var outboundSeq: Int64 = 0
     private(set) var ackCursor: CompanionAckCursor?
 
     init(transport: CompanionTransport = CompanionTransport()) {
@@ -71,6 +72,38 @@ final class CompanionClient: ObservableObject {
         ])
         try sendSecureFrame(channel.encrypt(payload))
         localSASConfirmed = true
+    }
+
+    /// Subscribe to (or unsubscribe from) a terminal's live byte stream. The
+    /// desktop filters terminal.output to subscribed sessions, so the phone must
+    /// ask before deltas flow — the snapshot arrives regardless.
+    func setStreamSubscription(projectId: String, sessionId: String, subscribed: Bool) throws {
+        guard let channel, let context = connectionContext, transport.state == .live else {
+            throw CompanionWireError.connectionUnavailable
+        }
+        let commandId = "cmd-\(UUID().uuidString.lowercased())"
+        outboundSeq += 1
+        let body = CompanionCommandBody(
+            type: subscribed ? "stream.subscribe" : "stream.unsubscribe",
+            commandId: commandId,
+            projectId: projectId,
+            targetId: sessionId,
+            capability: .observe,
+            expectedRevision: nil,
+            payload: nil
+        )
+        let envelope = try CompanionEnvelope(
+            kind: .command,
+            desktopId: context.desktopId,
+            deviceId: context.deviceId,
+            connectionId: context.connectionId,
+            epoch: ackCursor?.epoch ?? "initial",
+            seq: outboundSeq,
+            id: commandId,
+            sentAt: Self.nowMilliseconds,
+            body: CompanionBody(body)
+        )
+        try sendSecureFrame(channel.encrypt(CompanionProtocolCodec.encode(envelope)))
     }
 
     func acknowledge(_ cursor: CompanionAckCursor) throws {

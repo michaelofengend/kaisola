@@ -2,6 +2,7 @@ import SwiftUI
 
 struct TerminalSessionView: View {
     @EnvironmentObject private var store: CompanionStore
+    @EnvironmentObject private var coordinator: CompanionConnectionCoordinator
     let sessionId: String
 
     private var session: CompanionSession? { store.session(for: sessionId) }
@@ -41,6 +42,14 @@ struct TerminalSessionView: View {
                     accessoryRow
                 }
                 .background(KaisolaTheme.terminalBackground)
+                .task(id: session.id) {
+                    // Subscribe while this terminal is on screen so live output
+                    // streams; the desktop stops sending when we leave.
+                    coordinator.setTerminalStream(projectId: session.projectId, sessionId: session.id, subscribed: true)
+                }
+                .onDisappear {
+                    coordinator.setTerminalStream(projectId: session.projectId, sessionId: session.id, subscribed: false)
+                }
                 .navigationTitle(session.title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar(.visible, for: .navigationBar)

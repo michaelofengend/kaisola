@@ -51,7 +51,7 @@ struct CompanionRootView: View {
             }
             .tabItem { Label("Home", systemImage: "square.grid.2x2") }
             .tag(Tab.home)
-            .task { deepLinkForScreenshots() }
+            .task { await deepLinkForScreenshots() }
 
             NavigationStack(path: $sessionsPath) {
                 SessionsView()
@@ -83,15 +83,21 @@ struct CompanionRootView: View {
         if tab == .home { homePath.append(session) } else { sessionsPath.append(session) }
     }
 
-    /// Debug-only: push a session so a screenshot launch can reach the transcript
-    /// or terminal without a tap. Inert in release.
-    private func deepLinkForScreenshots() {
+    /// Debug-only: push a session so a screenshot/E2E launch can reach the
+    /// transcript or terminal without a tap. Polls briefly so it also works
+    /// after a live pairing populates the store. Inert in release.
+    private func deepLinkForScreenshots() async {
         #if DEBUG
-        guard homePath.isEmpty else { return }
         let kind = ProcessInfo.processInfo.environment["KAISOLA_UI_DEEPLINK"]
         let wantKind: CompanionSessionKind? = kind == "agent" ? .agent : kind == "terminal" ? .terminal : nil
-        guard let wantKind, let session = store.sessions.first(where: { $0.kind == wantKind }) else { return }
-        homePath.append(session)
+        guard let wantKind else { return }
+        for _ in 0..<30 {
+            if homePath.isEmpty, let session = store.sessions.first(where: { $0.kind == wantKind }) {
+                homePath.append(session)
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
         #endif
     }
     private func openPermission(_ permission: CompanionPermission) {

@@ -125,6 +125,12 @@ final class CompanionConnectionCoordinator: ObservableObject {
         }
     }
 
+    /// Start/stop the live byte stream for a terminal session being viewed.
+    func setTerminalStream(projectId: String, sessionId: String, subscribed: Bool) {
+        guard !store.isPreview else { return }
+        try? client.setStreamSubscription(projectId: projectId, sessionId: sessionId, subscribed: subscribed)
+    }
+
     /// Forget the paired Mac and drop the connection.
     func unpair() {
         persistence.clear()
