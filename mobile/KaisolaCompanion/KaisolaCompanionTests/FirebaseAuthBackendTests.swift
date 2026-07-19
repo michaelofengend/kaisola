@@ -34,35 +34,37 @@ final class FirebaseAuthBackendTests: XCTestCase {
         XCTAssertThrowsError(try FirebaseAuthConfiguration.parse(data))
     }
 
+    private let callbackURI = URL(string: "kaisola://auth")!
+    private let continueURI = URL(string: "https://kaisola-a9ab7.web.app/companion-auth")!
+
     func testCallbackParsesRawPostBodyForIdentityToolkit() throws {
-        let continueURI = try XCTUnwrap(URL(string: "kaisola://auth"))
         let callback = try FirebaseAuthCallback.parse(
             try XCTUnwrap(URL(string: "kaisola://auth?code=a%2Bb%3D&state=state-123")),
-            expectedContinueURI: continueURI
+            expectedCallback: callbackURI,
+            continueURI: continueURI
         )
 
-        XCTAssertEqual(callback.requestURI, "kaisola://auth")
+        // signInWithIdp keys on the https continue URI Firebase redirected to.
+        XCTAssertEqual(callback.requestURI, "https://kaisola-a9ab7.web.app/companion-auth")
         XCTAssertEqual(callback.postBody, "code=a%2Bb%3D&state=state-123")
     }
 
     func testCallbackRejectsAURLOutsideTheRegisteredScheme() throws {
-        let continueURI = try XCTUnwrap(URL(string: "kaisola://auth"))
-
         XCTAssertThrowsError(
             try FirebaseAuthCallback.parse(
                 try XCTUnwrap(URL(string: "attacker://auth?code=stolen")),
-                expectedContinueURI: continueURI
+                expectedCallback: callbackURI,
+                continueURI: continueURI
             )
         )
     }
 
     func testCallbackMapsGoogleAccessDeniedToCancellation() throws {
-        let continueURI = try XCTUnwrap(URL(string: "kaisola://auth"))
-
         XCTAssertThrowsError(
             try FirebaseAuthCallback.parse(
                 try XCTUnwrap(URL(string: "kaisola://auth?error=access_denied")),
-                expectedContinueURI: continueURI
+                expectedCallback: callbackURI,
+                continueURI: continueURI
             )
         ) { error in
             XCTAssertTrue(error is CancellationError)

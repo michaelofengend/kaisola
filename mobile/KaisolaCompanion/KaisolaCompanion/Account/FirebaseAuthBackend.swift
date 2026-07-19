@@ -63,9 +63,14 @@ struct FirebaseAuthCallback: Equatable, Sendable {
     let requestURI: String
     let postBody: String
 
-    static func parse(_ callbackURL: URL, expectedContinueURI: URL) throws -> FirebaseAuthCallback {
+    /// Validate the intercepted `callbackURL` against the app's custom-scheme
+    /// `expectedCallback` (kaisola://auth), but report `requestURI` as the https
+    /// `continueURI` that Firebase actually redirected to — signInWithIdp keys
+    /// on the continue URI, while the browser session only sees the custom
+    /// scheme the hosted redirector bounced to.
+    static func parse(_ callbackURL: URL, expectedCallback: URL, continueURI: URL) throws -> FirebaseAuthCallback {
         guard let callback = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
-              let expected = URLComponents(url: expectedContinueURI, resolvingAgainstBaseURL: false),
+              let expected = URLComponents(url: expectedCallback, resolvingAgainstBaseURL: false),
               callback.scheme?.lowercased() == expected.scheme?.lowercased(),
               callback.host?.lowercased() == expected.host?.lowercased(),
               callback.port == expected.port,
@@ -88,7 +93,7 @@ struct FirebaseAuthCallback: Equatable, Sendable {
               postBody.utf8.count <= 20_000 else {
             throw FirebaseAuthError.invalidCallback
         }
-        return FirebaseAuthCallback(requestURI: expectedContinueURI.absoluteString, postBody: postBody)
+        return FirebaseAuthCallback(requestURI: continueURI.absoluteString, postBody: postBody)
     }
 }
 
@@ -234,7 +239,12 @@ struct URLSessionAuthHTTPClient: AuthHTTPClient {
 
 @MainActor
 final class FirebaseAuthBackend: AuthBackend {
-    private static let continueURI = URL(string: "kaisola://auth")!
+    // Firebase requires an https continueUri on an authorized domain
+    // (PROJECT.web.app is auto-authorized). Google redirects here after sign-in;
+    // the hosted page at hosting/companion-auth.html bounces the OAuth result to
+    // `callbackURI`, which ASWebAuthenticationSession intercepts.
+    private static let continueURI = URL(string: "https://kaisola-a9ab7.web.app/companion-auth")!
+    private static let callbackURI = URL(string: "kaisola://auth")!
     private static let terminalRefreshErrors: Set<String> = [
         "INVALID_REFRESH_TOKEN",
         "TOKEN_EXPIRED",
@@ -328,7 +338,8 @@ final class FirebaseAuthBackend: AuthBackend {
         let callbackURL = try await openAuthenticationSession(at: authSession.authURL)
         let callback = try FirebaseAuthCallback.parse(
             callbackURL,
-            expectedContinueURI: Self.continueURI
+            expectedCallback: Self.callbackURI,
+            continueURI: Self.continueURI
         )
         let firebaseSession = try await signInWithIdentityProvider(
             callback: callback,
@@ -514,7 +525,7 @@ final class FirebaseAuthBackend: AuthBackend {
 
                 let session = ASWebAuthenticationSession(
                     url: authURL,
-                    callbackURLScheme: Self.continueURI.scheme
+                    callbackURLScheme: Self.callbackURI.scheme
                 ) { [weak self] callbackURL, error in
                     Task { @MainActor in
                         self?.webAuthenticationSession = nil

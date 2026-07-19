@@ -33,3 +33,4 @@ kaisola_icon_concepts/
 # App-created git worktrees (isolated agent task checkouts) — runtime artifacts,
 # each holds its own nested .git; never track them.
 .pasola-worktrees/
+.firebase/
