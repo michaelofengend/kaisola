@@ -1,7 +1,7 @@
 # Kaisola → Swift-native — migration design
 
 **Date:** 2026-07-20
-**Status:** design (strategy), rev 2 (incorporates a repo-grounded plan-review).
+**Status:** design (strategy), rev 3 (two rounds of repo-grounded plan-review).
 Each phase below gets its own spec + implementation plan before it is built.
 
 ## Why
@@ -53,12 +53,15 @@ This changes the plan materially and drives **Decision A** below.
 
 ## Key open decisions (resolve before the dependent phase)
 
-- **Decision A — the control-plane host.** For the hybrid to reuse ACP/MCP/
-  companion, we must pick one: **(A1)** extract a standalone, authenticated Node
-  *control-plane host* (broker + ACP + MCP + companion) that both Electron and
-  native drive over sockets; **(A2)** pull the full ACP/MCP/companion Swift ports
-  forward into the hybrid; or **(A3)** run Electron-main headless as the host —
-  which largely defeats the hybrid memory target and is therefore only a
+- **Decision A — the control-plane host.** The durable **session-broker stays
+  its own independently-versioned process** that does *not* restart on app update
+  (invariant #1) — it is **not** folded into any host. For the hybrid to reuse
+  the *non-durable* services, pick one: **(A1)** extract a standalone
+  authenticated Node *control-plane host* for **ACP + MCP + companion only**
+  (broker stays separate — matches the architecture diagram, and keeps the PTY
+  owner off the restart-on-update path); **(A2)** pull the full ACP/MCP/companion
+  Swift ports forward into the hybrid; or **(A3)** run Electron-main headless as
+  the host — which largely defeats the hybrid memory target and is only a
   throwaway bootstrap. Leaning A1. **Blocks Phase 2 and Phase 4.**
 - **Decision B — distribution & sandbox.** Developer ID / non-sandboxed vs App
   Sandbox. Kaisola needs arbitrary user-selected repo access and launches shells,
@@ -66,7 +69,9 @@ This changes the plan materially and drives **Decision A** below.
   bookmarks + helper-inheritance design; non-sandbox ⇒ the durable PTY daemon is
   a broad same-user execution capability to be secured deliberately. A per-user
   **LaunchAgent** (not a system LaunchDaemon) fits; `SMAppService` has its own
-  registration/authorization + bundle-replacement caveats. **Blocks the daemon.**
+  registration/authorization + bundle-replacement caveats. **Blocks production
+  packaging of Phase 1's signed Node helper and the Phase 2 control-plane/files
+  work** (a dev-only spike may proceed first).
 - **Decision C — data coexistence.** Electron and native must not corrupt shared
   state while both ship (see State workstream). Choose separate stores +
   one-way import, or a single store with a documented write-arbitration owner.
@@ -110,8 +115,16 @@ frame and resume from an acknowledged cursor). "Same broker" preserves the PTY
 **How native preserves it:**
 
 - **Phases 1–4 reuse the *same* Node broker** (the client is reimplemented in
-  Swift; the broker process is unchanged), *plus* the atomic snapshot+subscribe
-  fix above so reattach is byte-safe on desktop too.
+  Swift; the broker process is unchanged). Because `terminal.attach` **transfers
+  the active sender** (a second attacher *steals* output/control from the first),
+  the native app **attaches observe-only** via the existing cursor-based
+  `terminal.subscribe` path during coexistence — it does not seize ownership from
+  the Electron daily driver. Byte-safe *ownership* reattach (atomic
+  snapshot+subscribe on the primary path) is a later **versioned** broker change:
+  client↔broker require exact protocol equality today, so it needs the same
+  **N/N+1 compat matrix** (old/new native-client × old/new broker) as the daemon
+  cutover — a freshly-updated native client must tolerate an older broker kept
+  alive to preserve live PTYs.
 - **Full-native (Phase 5)** introduces a Swift durable PTY daemon. It **cannot
   hot-swap** a live Node broker (FDs are non-transferable), so cutover follows
   **Decision D** — dual-broker drain (old sessions stay on Node until empty; new
@@ -120,9 +133,10 @@ frame and resume from an acknowledged cursor). "Same broker" preserves the PTY
   be migrated — the Swift daemon must instead offer N/N+1 protocol compatibility
   and rollback.
 
-**Explicit test (every phase):** start a real `claude`/`codex` CLI, trigger an
-actual **Sparkle-style app update** (not just a shell relaunch), confirm the run
-continued and the reattached view is byte-continuous up to the retention marker.
+**Explicit test (every packaged milestone):** start a real `claude`/`codex` CLI,
+trigger an actual **Sparkle-style app update** (not just a shell relaunch),
+confirm the run continued and the reattached view is byte-continuous up to the
+retention marker. (Not executable on the unpackaged Phase 1 spike — see Phase 1.)
 
 ### 2. The rest of the parity list
 
@@ -190,7 +204,7 @@ Backends:
 | Code editor (CodeMirror) | **CodeEditSourceEditor** (TextKit 2 + tree-sitter) | ⚠️ upstream says *not production-ready* — needs a parity spike + a WKWebView/CodeMirror-island fallback |
 | ACP agents (stdio) | Swift `Process` + JSON-RPC | Underestimated: framing, backpressure, adapter discovery/versioning, process groups + watchdogs, permission settlement, terminal callbacks, MCP capability injection, adoption/resume, read-only, multi-window ownership |
 | Documents | swift-markdown + PDFKit + native views | swift-markdown = *parsing only*. Parity also needs editable markdown, HTML sanitization, asset import/reorder/resize, file watching, LaTeX+SyncTeX, raster-PDF fallback, split PDF/source, git merge views, media/browser sessions |
-| Math (KaTeX) | **SwiftMath** | Medium |
+| Math (→SwiftMath) | **SwiftMath** | **No KaTeX/mathjax/remark-math dep in `package.json`/`src` today** — like mermaid, treat as net-new/optional pending evidence, not a current-parity item |
 | Mermaid | offscreen WebKit → SVG | **Not a current dependency** — net-new/optional, not a parity item. If added: pinned JS, CSP/no-network, SVG sanitization, CPU/input limits |
 | Storage (better-sqlite3) | **GRDB.swift** | See State workstream — not mechanical; coexistence + migration |
 | MCP server | Swift, or kept as a small subprocess | Via Decision A |
@@ -210,11 +224,15 @@ editor win is memory, not speed).
 Electron stays the daily driver until parity. Each phase gets its own spec.
 
 0. **Extract KaisolaCore**; re-base the iOS companion on it. *(Sound, isolated.)*
-1. **Terminal spike** — native SwiftTerm driven by the existing Node broker.
-   *Explicitly a spike/sidecar* until we solve broker packaging (a standalone
-   signed Node runtime + `node-pty`/native-module closure, since the broker is
-   Electron-in-node-mode today) and reproduce the user-data-path discovery. Land
-   the atomic snapshot+subscribe reattach here and run the update test.
+1. **Terminal spike** — native SwiftTerm attached **observe-only** to the
+   existing Node broker via `terminal.subscribe` (no ownership theft from the
+   Electron daily driver). *Explicitly an internal spike* until broker packaging
+   is solved (a standalone signed Node runtime + `node-pty`/native-module
+   closure, since the broker is Electron-in-node-mode today) and the
+   user-data-path discovery is reproduced. **Exit gate = a *packaged* build that
+   passes the real Sparkle-update durability test** (not executable on an
+   unpackaged sidecar). Ownership reattach + its N/N+1 compat matrix land with
+   packaging, not before.
 2. **Control-plane host (Decision A) + native ACP/Board/windows.** "Native ACP"
    = native session UI over the host; the full Swift ACP port is Phase 5. Needs
    the State workstream (board/windows depend on authoritative state).
@@ -236,8 +254,8 @@ Electron stays the daily driver until parity. Each phase gets its own spec.
 - **Document parity** is much larger than one table row → its own spec.
 - **Broker packaging** (Phase 1) → standalone signed Node runtime + native-module
   closure, or accept a dev sidecar until solved.
-- **Broker→daemon cutover** (Decision D) → drain, not hot-swap; N/N+1 compat +
-  rollback; real update test.
+- **Broker→daemon cutover** (Decision D) → drain *or* zero-session gate (not
+  hot-swap; option still open); N/N+1 compat + rollback; real update test.
 - **Data coexistence** (Decision C) → write-arbitration owner or separate stores.
 - **Security** (Decision B) → sandbox choice, LaunchAgent, client auth, code-sign
   validation, env inheritance, socket/XPC perms, spool cleanup, companion-issued
@@ -251,13 +269,18 @@ Electron stays the daily driver until parity. Each phase gets its own spec.
   daemon, handles model processes consistently, and records **physical
   footprint** (not just summed RSS, which counts shared pages differently across
   Electron/WebKit/native). Report median/p95 across cold/warm caches, fresh vs.
-  already-running broker, and restored-windows workloads.
+  already-running broker, and restored-windows workloads. The ~880 MB Electron
+  baseline is summed RSS and **must be re-measured with the same
+  physical-footprint method + workloads** before it's compared to the ≤450/≤250
+  gates; until then all three are **kill criteria pending Phase 1 measurement**,
+  not planning estimates.
 - **Perf** — cold-launch milestone defined explicitly; plus CPU, frame pacing,
   energy impact, terminal throughput, and a **sustained-stream battery** test
   (the whole motivation).
 - **Parity** — shared protocol fixtures, record/replay traces, golden state
   migrations, and dual-client conformance tests; **every** capability in the
-  invariant list gets an owner / phase / test entry.
+  invariant list gets an owner / phase / test entry, including an explicit
+  **old/new native-client × old/new broker** protocol-compatibility matrix.
 
 ## Out of scope here
 
