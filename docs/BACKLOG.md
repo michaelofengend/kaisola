@@ -6,8 +6,6 @@
 
 \- ~~when switching between windows or resizing terminal/agent tabs, I would like for the terminal not get scrolled up, the cli agent should stay at the recent outputs~~ — **fixed 2026-07-17** (sticky follow-intent: only deliberate scrolls unpin; resizes/tab-switches/remounts keep the terminal pinned to live output — commit `ea35821`)
 
-  
-
 \- the clicking between windows and the board is strange. If I click on the board from the window, I can't press again on that specific window. 
 
-\-
+\- no
