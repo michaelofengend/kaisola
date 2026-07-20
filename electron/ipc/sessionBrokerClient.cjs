@@ -21,6 +21,11 @@ const LEGACY_UNSCOPED_PROTOCOL = 1
 const MAX_FRAME = 20 * 1024 * 1024
 const CONNECT_TIMEOUT_MS = 8_000
 const LEGACY_RETIRE_TIMEOUT_MS = 5_000
+// Darwin's sockaddr_un.sun_path is short (104 bytes including the terminator).
+// Keep the normal socket beside broker.json so OS temp cleanup cannot unlink a
+// live broker's only rendezvous point, but retain a compact home-dir fallback
+// for unusually long Electron userData paths.
+const SAFE_UNIX_SOCKET_PATH_BYTES = 100
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)) }
 
@@ -49,9 +54,24 @@ function logTail(file, bytes = 4096) {
   } catch { return '' }
 }
 
-function pidAlive(pid) {
+function pidAlive(pid, signalProcess = process.kill.bind(process)) {
   if (!Number.isInteger(Number(pid)) || Number(pid) <= 1) return false
-  try { process.kill(Number(pid), 0); return true } catch { return false }
+  try {
+    signalProcess(Number(pid), 0)
+    return true
+  } catch (error) {
+    // EPERM proves the PID exists even when this process is not allowed to
+    // signal it. Treating that as dead would unlink a live broker socket.
+    return error?.code === 'EPERM'
+  }
+}
+
+function unixSocketPath(userData, digest, homeDir = os.homedir()) {
+  const durable = path.join(userData, 'session-broker', 'broker.sock')
+  if (Buffer.byteLength(durable) <= SAFE_UNIX_SOCKET_PATH_BYTES) return durable
+  const compact = path.join(homeDir, '.kaisola-session', `${digest}.sock`)
+  if (Buffer.byteLength(compact) <= SAFE_UNIX_SOCKET_PATH_BYTES) return compact
+  throw new Error('Kaisola user-data and home paths are too long for a secure Unix session-broker socket')
 }
 
 function validToken(token) {
@@ -160,7 +180,7 @@ class SessionBrokerClient {
     this.storageDir = path.join(userData, 'terminal-cache')
     this.socketPath = process.platform === 'win32'
       ? `\\\\.\\pipe\\kaisola-session-${digest}`
-      : path.join(os.tmpdir(), `kaisola-session-${digest}.sock`)
+      : unixSocketPath(userData, digest)
     this.execPath = execPath
     this.brokerScript = brokerScript
     this.appVersion = appVersion
@@ -419,6 +439,10 @@ class SessionBrokerClient {
   async _spawn() {
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 })
     try { fs.chmodSync(this.root, 0o700) } catch {}
+    if (process.platform !== 'win32') {
+      fs.mkdirSync(path.dirname(this.socketPath), { recursive: true, mode: 0o700 })
+      try { fs.chmodSync(path.dirname(this.socketPath), 0o700) } catch {}
+    }
     const token = crypto.randomBytes(32).toString('hex')
     const startedAt = Date.now()
     const launchFile = path.join(this.root, `launch-${process.pid}-${crypto.randomBytes(6).toString('hex')}.json`)
@@ -554,5 +578,5 @@ module.exports = {
   PROTOCOL,
   SECURITY_EPOCH,
   TERMINAL_OBSERVE_FEATURE,
-  __test: { LEGACY_UNSCOPED_PROTOCOL, requestBrokerControl, validateBrokerHello },
+  __test: { LEGACY_UNSCOPED_PROTOCOL, requestBrokerControl, validateBrokerHello, pidAlive, unixSocketPath },
 }

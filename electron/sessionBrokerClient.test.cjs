@@ -10,7 +10,7 @@ const {
   PROTOCOL,
   SECURITY_EPOCH,
   TERMINAL_OBSERVE_FEATURE,
-  __test: { LEGACY_UNSCOPED_PROTOCOL, requestBrokerControl, validateBrokerHello },
+  __test: { LEGACY_UNSCOPED_PROTOCOL, requestBrokerControl, validateBrokerHello, pidAlive, unixSocketPath },
 } = require('./ipc/sessionBrokerClient.cjs')
 
 const TOKEN = 'a'.repeat(64)
@@ -58,6 +58,50 @@ test('current broker handshake requires the project-isolation security epoch', (
     () => validateBrokerHello({ ...valid, pid: 43 }, info),
     /identity changed/,
   )
+})
+
+test('new Unix brokers use a durable private path rather than the OS temp directory', (t) => {
+  const client = clientFixture(t)
+  if (process.platform === 'win32') return
+  assert.equal(client.socketPath.startsWith(os.tmpdir()), false)
+  assert.ok(
+    client.socketPath === path.join(client.root, 'broker.sock')
+      || client.socketPath.startsWith(path.join(os.homedir(), '.kaisola-session', path.sep)),
+  )
+  assert.equal(
+    unixSocketPath('/Users/example/Library/Application Support/pasola', 'c'.repeat(18), '/Users/example'),
+    '/Users/example/Library/Application Support/pasola/session-broker/broker.sock',
+  )
+})
+
+test('long user-data paths use a compact durable home socket instead of OS temp', () => {
+  const digest = 'b'.repeat(18)
+  const userData = path.join('/Users/example', 'x'.repeat(140))
+  const homeDir = '/Users/example'
+  assert.equal(unixSocketPath(userData, digest, homeDir), path.join(homeDir, '.kaisola-session', `${digest}.sock`))
+})
+
+test('EPERM process visibility is treated as alive so live broker state is never unlinked', () => {
+  const denied = Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+  assert.equal(pidAlive(42, () => { throw denied }), true)
+  assert.equal(pidAlive(42, () => { throw Object.assign(new Error('missing'), { code: 'ESRCH' }) }), false)
+})
+
+test('a live protocol-2 broker on the legacy temp socket is adopted in place', async (t) => {
+  const client = clientFixture(t)
+  const legacySocketPath = path.join(os.tmpdir(), `kaisola-legacy-${process.pid}.sock`)
+  const info = writeInfo(client, { socketPath: legacySocketPath, version: '0.1.60' })
+  let spawned = false
+  client._open = async (opened) => {
+    assert.deepEqual(opened, info)
+    client.hello = { ok: true, protocol: PROTOCOL, securityEpoch: SECURITY_EPOCH, pid: info.pid }
+  }
+  client._spawn = async () => { spawned = true }
+
+  const hello = await client.connect()
+  assert.equal(hello.pid, process.pid)
+  assert.equal(spawned, false)
+  assert.equal(client.socketPath.startsWith(os.tmpdir()), false)
 })
 
 test('renderer crash forgets only event routing, not broker terminal ownership', (t) => {

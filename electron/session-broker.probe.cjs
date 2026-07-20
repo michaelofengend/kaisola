@@ -59,10 +59,11 @@ async function main() {
       projectId: PROJECT_ALPHA,
     })
 
-    // macOS can reap an old AF_UNIX pathname from its per-user temp directory
-    // while the broker still owns the listening inode and every PTY. The
-    // broker must republish that path in place so a new app instance can adopt
-    // the exact process instead of forcing a destructive broker restart.
+    // Even a durable AF_UNIX pathname can be removed by external cleanup or
+    // filesystem damage while the broker still owns the listening inode and
+    // every PTY. The broker must republish that path in place so a new app
+    // instance can adopt the exact process instead of forcing a destructive
+    // broker restart.
     const brokerInfoFile = path.join(userData, 'session-broker', 'broker.json')
     const brokerInfo = JSON.parse(fs.readFileSync(brokerInfoFile, 'utf8'))
     let socketPathRestored = process.platform === 'win32'
@@ -181,6 +182,7 @@ async function main() {
       restartMarked: second.continuation?.acrossRestart === true,
       detachedOutputReplayed: String(second.output || '').includes('during'),
       duplicateBootPrevented: !String(second.output || '').includes('respawned'),
+      durableSocketOutsideOsTemp: process.platform === 'win32' || !brokerInfo.socketPath.startsWith(os.tmpdir()),
       missingSocketPathRepublished: socketPathRestored,
       socketRecoveryKeptBroker: recoveredHello.pid === secondHello.pid,
       socketRecoveryKeptTerminal: recoveredTerminalPid === second.pid,
