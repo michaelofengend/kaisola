@@ -8,4 +8,6 @@
 
   
 
-\- the clicking between windows and
+\- the clicking between windows and the board is strange. If I click on the board from the window, I can't press again on that specific window. 
+
+\-
