@@ -1004,6 +1004,9 @@ export interface KaisolaBridge {
     revokeDevice(deviceId: string): Promise<CompanionState>
     /** Rename a paired device row. */
     renameDevice(deviceId: string, name: string): Promise<CompanionState>
+    /** Replace one device's grants. Observe is always retained; changing a
+     * grant closes the live socket so it is renegotiated immediately. */
+    setDeviceCapabilities(deviceId: string, capabilities: CompanionCapability[]): Promise<CompanionState>
     onState(cb: (state: CompanionState) => void): () => void
     onPairingEvent(cb: (event: CompanionPairingEvent) => void): () => void
   }
@@ -1514,6 +1517,7 @@ const webMock: KaisolaBridge = {
     async cancelPairing() { return { ok: false } },
     async revokeDevice() { return { enabled: false, listening: false, status: 'Companion is desktop-only.', devices: [] } },
     async renameDevice() { return { enabled: false, listening: false, status: 'Companion is desktop-only.', devices: [] } },
+    async setDeviceCapabilities() { return { enabled: false, listening: false, status: 'Companion is desktop-only.', devices: [] } },
     onState() { return () => {} },
     onPairingEvent() { return () => {} },
   },

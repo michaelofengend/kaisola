@@ -6,8 +6,10 @@ import SwiftUI
 struct PermissionDetailView: View {
     let permission: CompanionPermission
     @EnvironmentObject private var store: CompanionStore
+    @EnvironmentObject private var coordinator: CompanionConnectionCoordinator
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
+    @State private var resolving = false
 
     private var canDecide: Bool {
         store.canControlAgents && (permission.completeness ?? "complete") == "complete"
@@ -70,35 +72,42 @@ struct PermissionDetailView: View {
         VStack(spacing: 8) {
             if canDecide {
                 HStack(spacing: 10) {
-                    Button { resolve("reject") } label: {
-                        Text("Reject").font(.subheadline.weight(.semibold))
+                    ForEach(permission.options) { option in
+                        let reject = option.id.lowercased().contains("reject") || option.label.lowercased().contains("reject")
+                        Button {
+                            Task { await resolve(option) }
+                        } label: {
+                            Group {
+                                if resolving { ProgressView().controlSize(.small) }
+                                else { Text(option.label) }
+                            }
+                            .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity).frame(height: 48)
-                            .background(KaisolaTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                    }.buttonStyle(QuietPressStyle()).foregroundStyle(.primary)
-                    Button { resolve("allow") } label: {
-                        Text("Allow once").font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity).frame(height: 48).foregroundStyle(KaisolaTheme.darkFrame)
-                            .background(KaisolaTheme.accent, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                    }.buttonStyle(QuietPressStyle())
+                            .foregroundStyle(reject ? Color.primary : KaisolaTheme.darkFrame)
+                            .background(
+                                reject ? KaisolaTheme.raised(for: colorScheme) : KaisolaTheme.accent,
+                                in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            )
+                        }
+                        .buttonStyle(QuietPressStyle())
+                        .disabled(resolving)
+                    }
                 }
             } else {
-                Button { resolve("reject") } label: {
-                    Text("Reject").font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity).frame(height: 48)
-                        .background(KaisolaTheme.raised(for: colorScheme), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                }.buttonStyle(QuietPressStyle()).foregroundStyle(.primary)
                 ControlLockedBanner(text: store.canControlAgents
                     ? "Full context isn't available on the phone — approve this one from your Mac."
-                    : "Approving needs agent control, which ships in a later update. You can reject from here.")
+                    : "Enable agent control for this iPhone on your Mac to respond here.")
             }
         }
         .padding(.horizontal, 18).padding(.top, 10).padding(.bottom, 12)
         .background(.ultraThinMaterial)
     }
 
-    private func resolve(_ decision: String) {
-        store.resolvePermission(permission.permId, decision: decision)
-        dismiss()
+    private func resolve(_ option: CompanionPermissionOption) async {
+        guard !resolving else { return }
+        resolving = true
+        if await coordinator.respond(to: permission, option: option) { dismiss() }
+        resolving = false
     }
 }
 
@@ -146,6 +155,7 @@ struct DiffCard: View {
 
 #Preview {
     let store = CompanionStore.preview()
+    let coordinator = CompanionConnectionCoordinator(store: store)
     return NavigationStack {
         if let permission = store.permissions.first {
             PermissionDetailView(permission: permission)
@@ -154,4 +164,5 @@ struct DiffCard: View {
         }
     }
     .environmentObject(store)
+    .environmentObject(coordinator)
 }

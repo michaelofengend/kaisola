@@ -227,7 +227,10 @@ struct EmptyLane: View {
 }
 
 #Preview {
-    NavigationStack { HomeView() }
-        .environmentObject(CompanionStore.preview())
+    let store = CompanionStore.preview()
+    let coordinator = CompanionConnectionCoordinator(store: store)
+    return NavigationStack { HomeView() }
+        .environmentObject(store)
         .environmentObject(AuthModel.previewSignedIn())
+        .environmentObject(coordinator)
 }

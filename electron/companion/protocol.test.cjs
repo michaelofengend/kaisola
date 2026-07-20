@@ -23,6 +23,8 @@ test('golden companion frames validate and preserve the backlog-inspired board l
     'agent-delta.json',
     'permission-requested.json',
     'command-receipt.json',
+    'terminal-control-command.json',
+    'terminal-control-receipt.json',
     'stale-revision-error.json',
   ]) {
     assert.deepEqual(validateEnvelope(fixture(name)), fixture(name), name)
@@ -63,6 +65,8 @@ test('commands require the exact capability, project, target, and envelope ident
   }
   assert.deepEqual(validateEnvelope(base), base)
   assert.equal(requiredCapability('terminal.write'), 'terminal-control')
+  assert.equal(requiredCapability('terminal.acquire-control'), 'terminal-control')
+  assert.equal(requiredCapability('terminal.renew-control'), 'terminal-control')
   assert.equal(requiredCapability('agent.prompt'), 'agent-control')
   assert.equal(requiredCapability('attention.ack'), 'observe')
   assert.equal(requiredCapability('stream.subscribe'), 'observe')
@@ -101,6 +105,35 @@ test('commands require the exact capability, project, target, and envelope ident
     },
   }
   assert.deepEqual(validateEnvelope(streamSubscribe), streamSubscribe)
+
+  const acquire = {
+    ...base,
+    id: 'terminal-acquire',
+    body: {
+      type: 'terminal.acquire-control',
+      commandId: 'terminal-acquire',
+      projectId: 'project-kaisola',
+      targetId: 'terminal-codex',
+      capability: 'terminal-control',
+      payload: {},
+    },
+  }
+  assert.deepEqual(validateEnvelope(acquire), acquire)
+
+  const receiptWithLease = {
+    ...base,
+    kind: 'receipt',
+    id: 'receipt-terminal-acquire',
+    body: {
+      type: 'command.receipt',
+      commandId: 'terminal-acquire',
+      status: 'applied',
+      message: 'Terminal control enabled.',
+      payload: { leaseId: 'lease-safe', expiresAt: 1_784_250_031_300, renewAfterMs: 10_000 },
+    },
+  }
+  assert.deepEqual(validateEnvelope(receiptWithLease), receiptWithLease)
+  assert.throws(() => validateEnvelope({ ...receiptWithLease, body: { ...receiptWithLease.body, payload: [] } }), /body.payload must be an object/)
 })
 
 test('decoder bounds bytes before JSON parsing and rejects malformed bodies', () => {

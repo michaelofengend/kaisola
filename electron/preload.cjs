@@ -581,6 +581,7 @@ const bridge = {
     cancelPairing: (pairingId) => ipcRenderer.invoke('companion:cancelPairing', { pairingId }),
     revokeDevice: (deviceId) => ipcRenderer.invoke('companion:revokeDevice', { deviceId }),
     renameDevice: (deviceId, name) => ipcRenderer.invoke('companion:renameDevice', { deviceId, name }),
+    setDeviceCapabilities: (deviceId, capabilities) => ipcRenderer.invoke('companion:setDeviceCapabilities', { deviceId, capabilities }),
     onState: (cb) => {
       const listener = (_e, state) => cb(state)
       ipcRenderer.on('companion:state', listener)

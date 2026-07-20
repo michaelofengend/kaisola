@@ -32,6 +32,8 @@ const COMMAND_CAPABILITIES = Object.freeze({
   'agent.steer': 'agent-control',
   'agent.cancel': 'agent-control',
   'permission.respond': 'agent-control',
+  'terminal.acquire-control': 'terminal-control',
+  'terminal.renew-control': 'terminal-control',
   'terminal.write': 'terminal-control',
   'terminal.resize': 'terminal-control',
   'terminal.interrupt': 'terminal-control',
@@ -140,6 +142,7 @@ function validateReceipt(body) {
   if (body.message != null && (typeof body.message !== 'string' || body.message.length > MAX_ERROR_MESSAGE)) {
     fail('invalid_receipt', 'receipt message is invalid')
   }
+  if (body.payload != null) assertPlainObject(body.payload, 'body.payload')
 }
 
 function validateAck(body) {

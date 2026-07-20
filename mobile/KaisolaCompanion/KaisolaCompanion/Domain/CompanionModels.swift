@@ -104,6 +104,9 @@ struct CompanionSession: Identifiable, Codable, Hashable, Sendable {
     var startedAt: Int64?
     var turns: [CompanionTurn]?
     var terminalLines: [String]?
+    /// Raw bounded ANSI stream used by SwiftTerm. `terminalLines` remains for
+    /// lightweight previews and backward-compatible fixtures.
+    var terminalOutput: String? = nil
     var terminalStreamEpoch: String? = nil
     var terminalEndOffset: Int64? = nil
 }

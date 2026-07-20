@@ -2,14 +2,20 @@ import SwiftUI
 
 @main
 struct KaisolaCompanionApp: App {
-    @StateObject private var auth = KaisolaCompanionApp.makeAuth()
-    @StateObject private var coordinator = CompanionConnectionCoordinator()
-    @StateObject private var previewStore = CompanionStore.preview()
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var auth: AuthModel
+    @StateObject private var coordinator: CompanionConnectionCoordinator
+
+    init() {
+        _auth = StateObject(wrappedValue: Self.makeAuth())
+        let store = Self.usePreviewStore ? CompanionStore.preview() : nil
+        _coordinator = StateObject(wrappedValue: CompanionConnectionCoordinator(store: store))
+    }
 
     var body: some Scene {
         WindowGroup {
             CompanionRootView()
-                .environmentObject(Self.usePreviewStore ? previewStore : coordinator.store)
+                .environmentObject(coordinator.store)
                 .environmentObject(auth)
                 .environmentObject(coordinator)
                 .tint(KaisolaTheme.accent)
@@ -18,6 +24,19 @@ struct KaisolaCompanionApp: App {
                     guard !Self.usePreviewStore else { return }
                     await coordinator.connectIfPaired()
                     await Self.autoPairIfRequested(coordinator)
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    guard !Self.usePreviewStore else { return }
+                    switch phase {
+                    case .active:
+                        Task { await coordinator.connectIfPaired() }
+                    case .background:
+                        Task { await coordinator.suspend() }
+                    case .inactive:
+                        break
+                    @unknown default:
+                        Task { await coordinator.suspend() }
+                    }
                 }
         }
     }

@@ -41,7 +41,7 @@ enum CompanionPreviewData {
                 model: "GPT-5",
                 mode: "Agent",
                 branch: "feature/mobile-companion",
-                summary: "Creating the observe-only gateway and native Now screen",
+                summary: "Building secure mobile control and resilient live streams",
                 startedAt: nowMs - 18 * minute,
                 turns: [
                     CompanionTurn(
@@ -220,7 +220,9 @@ enum CompanionPreviewData {
             sessions: sessions,
             attention: attention,
             permissions: permissions,
-            isPreview: true
+            isPreview: true,
+            canControlAgents: true,
+            canControlTerminals: true
         )
     }
 }

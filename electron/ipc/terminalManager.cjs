@@ -207,10 +207,12 @@ function spawn({ id, command, args, cwd, env, outputByteLimit, cols, rows, sende
   const missingCwd = !!cwd && !fs.existsSync(cwd)
   const startCwd = missingCwd ? os.homedir() : (cwd || os.homedir())
   const retainedOutputBytes = Number.isFinite(outputByteLimit) ? Math.max(0, Math.floor(outputByteLimit)) : null
+  const initialCols = cols || 80
+  const initialRows = rows || 24
   const p = pty.spawn(command || shell, command ? args || [] : ['-l'], {
     name: 'xterm-256color',
-    cols: cols || 80,
-    rows: rows || 24,
+    cols: initialCols,
+    rows: initialRows,
     cwd: startCwd,
     env: terminalEnv(env),
   })
@@ -219,6 +221,8 @@ function spawn({ id, command, args, cwd, env, outputByteLimit, cols, rows, sende
   const rec = {
     id,
     pty: p,
+    cols: initialCols,
+    rows: initialRows,
     sender,
     // Hidden renderers leave zero scrollback in RAM. The pty stays alive and
     // writes to this bounded disk spool until an xterm reattaches.
@@ -371,6 +375,8 @@ function resize(id, cols, rows) {
   if (r && cols > 0 && rows > 0) {
     try {
       r.pty.resize(cols, rows)
+      r.cols = cols
+      r.rows = rows
     } catch {
       /* ignore transient races */
     }
@@ -647,7 +653,7 @@ function list() {
     try {
       proc = r.pty.process || ''
     } catch { /* pty backend may refuse mid-teardown */ }
-    out.push({ id: r.id, pid: r.pty.pid, process: proc, owner: senderId(r.sender), lastOwner: senderId(r.lastSender), agentBusy: r.agentBusy, agentCompletedAt: r.agentCompletedAt })
+    out.push({ id: r.id, pid: r.pty.pid, process: proc, cols: r.cols, rows: r.rows, owner: senderId(r.sender), lastOwner: senderId(r.lastSender), agentBusy: r.agentBusy, agentCompletedAt: r.agentCompletedAt })
   }
   return out
 }
@@ -656,6 +662,8 @@ function diagnostics() {
   return [...terms.values()].map((r) => ({
     ...r.spool.stats(),
     pid: r.pty && r.pty.pid,
+    cols: r.cols,
+    rows: r.rows,
     exited: r.exited,
     owner: senderId(r.sender),
     lastOwner: senderId(r.lastSender),

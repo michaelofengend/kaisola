@@ -1,6 +1,18 @@
 import CryptoKit
 import Foundation
 
+enum CompanionCommandError: LocalizedError, Equatable {
+    case unavailable
+    case timedOut
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable: "The Mac disconnected before confirming this action. It was not retried."
+        case .timedOut: "The Mac did not confirm this action in time. It was not retried."
+        }
+    }
+}
+
 @MainActor
 final class CompanionClient: ObservableObject {
     @Published private(set) var sas: CompanionSAS?
@@ -11,6 +23,7 @@ final class CompanionClient: ObservableObject {
     var onTransportState: ((CompanionTransportState) -> Void)?
     var onPairedDesktop: ((CompanionPairedDesktop) -> Void)?
     var onAckCursor: ((CompanionAckCursor) -> Void)?
+    var onCapabilities: ((Set<CompanionCapability>) -> Void)?
 
     let transport: CompanionTransport
 
@@ -31,6 +44,8 @@ final class CompanionClient: ObservableObject {
         let sessionId: String
     }
     private var desiredStreamSubscriptions: Set<StreamSubscription> = []
+    private var pendingCommands: [String: CheckedContinuation<CompanionReceiptBody, Error>] = [:]
+    private var commandTimeouts: [String: Task<Void, Never>] = [:]
 
     init(transport: CompanionTransport = CompanionTransport()) {
         self.transport = transport
@@ -38,6 +53,7 @@ final class CompanionClient: ObservableObject {
         transport.onStateChange = { [weak self] state in
             guard let self else { return }
             self.onTransportState?(state)
+            if state != .live { self.failPendingCommands(with: CompanionCommandError.unavailable) }
             if state == .handshaking, case .resume = self.mode {
                 do { try self.startHandshake() } catch { self.fail(error) }
             }
@@ -99,8 +115,10 @@ final class CompanionClient: ObservableObject {
     /// ask before deltas flow — the snapshot arrives regardless.
     func setStreamSubscription(projectId: String, sessionId: String, subscribed: Bool) throws {
         let subscription = StreamSubscription(projectId: projectId, sessionId: sessionId)
-        if subscribed { desiredStreamSubscriptions.insert(subscription) }
-        else { desiredStreamSubscriptions.remove(subscription) }
+        let changed: Bool
+        if subscribed { changed = desiredStreamSubscriptions.insert(subscription).inserted }
+        else { changed = desiredStreamSubscriptions.remove(subscription) != nil }
+        guard changed else { return }
         guard transport.state == .live else { return }
         try sendStreamSubscription(subscription, subscribed: subscribed)
     }
@@ -128,6 +146,55 @@ final class CompanionClient: ObservableObject {
             epoch: ackCursor?.epoch ?? "initial",
             seq: outboundSeq,
             id: commandId,
+            sentAt: Self.nowMilliseconds,
+            body: CompanionBody(body)
+        )
+        try sendSecureFrame(channel.encrypt(CompanionProtocolCodec.encode(envelope)))
+    }
+
+    func performCommand(
+        type: String,
+        projectId: String,
+        targetId: String,
+        capability: CompanionCapability,
+        expectedRevision: Int64? = nil,
+        payload: [String: JSONValue]? = nil,
+        timeout: Duration = .seconds(15)
+    ) async throws -> CompanionReceiptBody {
+        guard transport.state == .live else { throw CompanionCommandError.unavailable }
+        let commandId = "cmd-\(UUID().uuidString.lowercased())"
+        let body = CompanionCommandBody(
+            type: type,
+            commandId: commandId,
+            projectId: projectId,
+            targetId: targetId,
+            capability: capability,
+            expectedRevision: expectedRevision,
+            payload: payload
+        )
+        return try await withCheckedThrowingContinuation { continuation in
+            pendingCommands[commandId] = continuation
+            commandTimeouts[commandId] = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: timeout)
+                guard !Task.isCancelled else { return }
+                self?.finishCommand(commandId, result: .failure(CompanionCommandError.timedOut))
+            }
+            do { try sendCommand(body) }
+            catch { finishCommand(commandId, result: .failure(error)) }
+        }
+    }
+
+    private func sendCommand(_ body: CompanionCommandBody) throws {
+        guard let channel, let context = connectionContext else { throw CompanionWireError.connectionUnavailable }
+        outboundSeq += 1
+        let envelope = try CompanionEnvelope(
+            kind: .command,
+            desktopId: context.desktopId,
+            deviceId: context.deviceId,
+            connectionId: context.connectionId,
+            epoch: ackCursor?.epoch ?? "initial",
+            seq: outboundSeq,
+            id: body.commandId,
             sentAt: Self.nowMilliseconds,
             body: CompanionBody(body)
         )
@@ -341,15 +408,12 @@ final class CompanionClient: ObservableObject {
 
     private func activateLive() throws {
         guard let channel, let context = connectionContext else { throw CompanionCryptoError.handshakeOrder }
-        let capabilities: [CompanionCapability]
-        switch mode {
-        case let .pairing(payload): capabilities = payload.requestedCapabilities
-        case let .resume(desktop): capabilities = desktop.capabilities
-        case nil: throw CompanionCryptoError.handshakeOrder
-        }
         let hello = CompanionHelloBody(
             role: .device,
-            capabilities: capabilities,
+            // Ask for every capability on each authenticated resume. The Mac
+            // grants only the intersection in its current per-device record,
+            // so desktop-side widening/narrowing takes effect after reconnect.
+            capabilities: CompanionCapability.allCases,
             lastAck: ackCursor?.seq
         )
         let envelope = try CompanionEnvelope(
@@ -374,7 +438,47 @@ final class CompanionClient: ObservableObject {
         guard let channel else { throw CompanionWireError.connectionUnavailable }
         let secure = try JSONDecoder().decode(CompanionSecureFrame.self, from: data)
         let envelope = try CompanionProtocolCodec.decode(channel.decrypt(secure))
+        if envelope.kind == .hello {
+            let hello = try envelope.body.decode(CompanionHelloBody.self)
+            guard hello.role == .desktop,
+                  hello.capabilities.contains(.observe),
+                  Set(hello.capabilities).count == hello.capabilities.count else {
+                throw CompanionCryptoError.authenticationFailed
+            }
+            let granted = Set(hello.capabilities)
+            onCapabilities?(granted)
+            if let current = pairedDesktop {
+                let updated = CompanionPairedDesktop(
+                    desktopId: current.desktopId,
+                    identityPublic: current.identityPublic,
+                    x25519StaticPublic: current.x25519StaticPublic,
+                    capabilities: CompanionCapability.allCases.filter(granted.contains),
+                    transportHint: current.transportHint
+                )
+                pairedDesktop = updated
+                mode = .resume(updated)
+                onPairedDesktop?(updated)
+            }
+        } else if envelope.kind == .receipt {
+            let receipt = try envelope.body.decode(CompanionReceiptBody.self)
+            finishCommand(receipt.commandId, result: .success(receipt))
+        }
         onEnvelope?(envelope)
+    }
+
+    private func finishCommand(_ commandId: String, result: Result<CompanionReceiptBody, Error>) {
+        guard let continuation = pendingCommands.removeValue(forKey: commandId) else { return }
+        commandTimeouts.removeValue(forKey: commandId)?.cancel()
+        switch result {
+        case let .success(receipt): continuation.resume(returning: receipt)
+        case let .failure(error): continuation.resume(throwing: error)
+        }
+    }
+
+    private func failPendingCommands(with error: Error) {
+        for commandId in Array(pendingCommands.keys) {
+            finishCommand(commandId, result: .failure(error))
+        }
     }
 
     private func sendSecureFrame(_ frame: CompanionSecureFrame) throws {

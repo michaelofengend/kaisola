@@ -261,6 +261,30 @@ test('revoke closes every live connection, drops the device row, and rename pers
   assert.equal(handler.deviceStore.getDevice(phone.record.deviceId), null)
 })
 
+test('per-device control grants persist and force an authenticated capability renegotiation', async (t) => {
+  const { handler, handlers } = setup(t)
+  const phone = phoneRecord()
+  handler.deviceStore.pairDevice(phone.record)
+  const closed = []
+  handler.deviceStore.registerConnection(phone.record.deviceId, (reason) => closed.push(reason))
+
+  const state = await handlers.get('companion:setDeviceCapabilities')({}, {
+    deviceId: phone.record.deviceId,
+    capabilities: ['observe', 'agent-control', 'terminal-control'],
+  })
+  assert.deepEqual(state.devices[0].capabilities, ['observe', 'agent-control', 'terminal-control'])
+  assert.deepEqual(closed, ['device_capabilities_changed'])
+  assert.equal(state.devices[0].connected, false)
+
+  await assert.rejects(
+    handlers.get('companion:setDeviceCapabilities')({}, {
+      deviceId: phone.record.deviceId,
+      capabilities: ['terminal-control'],
+    }),
+    /valid Companion access level/,
+  )
+})
+
 test('diagnostic state and device rows omit transport details, paths, and cryptographic records', async (t) => {
   const { directory, handler } = setup(t)
   const phone = phoneRecord(71, 'device-safe-row')

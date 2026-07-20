@@ -3123,6 +3123,11 @@ body[data-shell-drag='1'] object {
 }
 .companion-device-name:hover { text-decoration: underline; }
 .companion-device-meta { font-size: var(--fs-11); color: var(--text-3); }
+.companion-device-grants { display: flex; flex-wrap: wrap; gap: 7px 14px; margin-top: 7px; }
+.companion-device-grant { display: inline-flex; align-items: center; gap: 7px; color: var(--text-2); font-size: var(--fs-11); }
+.companion-device-grant .settings-toggle { width: 31px; height: 18px; padding: 1px; }
+.companion-device-grant .settings-toggle > span { width: 14px; height: 14px; }
+.companion-device-grant .settings-toggle[aria-checked='true'] > span { transform: translateX(13px); }
 
 .companion-pair-sheet {
   position: fixed; inset: 0; z-index: 60;

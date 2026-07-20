@@ -91,7 +91,11 @@ test('device records default to observe and capability widening remains explicit
   assert.equal(paired.pairedAt, 1_784_250_001_000)
   assert.throws(() => store.pairDevice(phone.record), (error) => error.code === 'device_exists')
   assert.throws(() => store.setCapabilities(phone.record.deviceId, ['terminal-control']), (error) => error.code === 'invalid_capabilities')
+  const closed = []
+  store.registerConnection(phone.record.deviceId, (reason) => closed.push(reason))
   assert.deepEqual(store.setCapabilities(phone.record.deviceId, ['observe', 'terminal-control']).capabilities, ['observe', 'terminal-control'])
+  assert.deepEqual(closed, ['device_capabilities_changed'])
+  assert.equal(store.stats().liveConnections, 0)
   setNow(1_784_250_010_000)
   assert.equal(store.markSeen(phone.record.deviceId), true)
   assert.equal(store.getDevice(phone.record.deviceId).lastSeenAt, 1_784_250_010_000)

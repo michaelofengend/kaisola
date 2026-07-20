@@ -16,6 +16,7 @@ const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'sna
 function setup({
   queueBytes,
   terminalObserver,
+  terminalControlAdapter,
   acpSessionService,
   attentionService,
   ledgerAdapter,
@@ -40,6 +41,7 @@ function setup({
     epoch: 'desktop-epoch-7',
     stateHub,
     terminalObserver,
+    terminalControlAdapter,
     acpSessionService,
     attentionService,
     ledgerAdapter,
@@ -439,6 +441,27 @@ test('observe stream commands deliver bounded snapshots and live output, then un
   frames = transport.receiveForDevice()
   assert.equal(frames.find((frame) => frame.body.type === 'terminal.output').body.data, 'live')
 
+  // Durable brokers from an older app build are observed by bounded polling;
+  // each changed snapshot replaces the mobile emulator state without asking
+  // the broker to restart or transfer PTY ownership.
+  observerArgs.onEvent({
+    channel: 'terminal:observer-snapshot',
+    payload: {
+      id: 'terminal-codex',
+      streamEpoch: 'stream-gateway',
+      output: 'replaced\n',
+      startOffset: 0,
+      endOffset: 9,
+      truncated: false,
+      exited: false,
+    },
+  })
+  await Promise.resolve()
+  frames = transport.receiveForDevice()
+  const replacement = frames.find((frame) => frame.body.type === 'terminal.snapshot')
+  assert.equal(replacement.body.output, 'replaced\n')
+  assert.equal(replacement.body.endOffset, 9)
+
   const removed = await transport.sendFromDevice(command({
     type: 'stream.unsubscribe',
     commandId: 'stream-unsubscribe-1',
@@ -638,6 +661,85 @@ test('command routing uses negotiated session capabilities, not wider device gra
   }))
   assert.equal(result.status, 'rejected')
   assert.match(result.message, /not granted/)
+})
+
+test('capability negotiation returns the granted intersection when the phone asks for more', async () => {
+  const { hello, publish, transport } = setup({
+    deviceCapabilities: ['observe', 'agent-control'],
+    enabledCapabilities: ['observe', 'agent-control', 'terminal-control'],
+  })
+  publish()
+  await transport.sendFromDevice(hello({ capabilities: ['observe', 'agent-control', 'terminal-control'] }))
+  const desktopHello = transport.receiveForDevice().find((frame) => frame.kind === 'hello')
+  assert.deepEqual(desktopHello.body.capabilities, ['observe', 'agent-control'])
+})
+
+test('terminal control receipts carry a connection-bound lease and route exact scoped input', async () => {
+  const calls = []
+  const terminalControlAdapter = {
+    async available(target) { calls.push({ operation: 'available', ...target }); return { ok: true } },
+    async write(input) { calls.push({ operation: 'write', ...input }); return { ok: true } },
+    async resize(input) { calls.push({ operation: 'resize', ...input }); return { ok: true } },
+    async interrupt(input) { calls.push({ operation: 'interrupt', ...input }); return { ok: true } },
+  }
+  const capabilities = ['observe', 'terminal-control']
+  const first = setup({ terminalControlAdapter, deviceCapabilities: capabilities, enabledCapabilities: capabilities })
+  first.publish()
+  await first.transport.sendFromDevice(first.hello({ capabilities }))
+  first.transport.receiveForDevice()
+
+  const acquired = await first.transport.sendFromDevice(command({
+    type: 'terminal.acquire-control',
+    commandId: 'terminal-acquire-gateway',
+    capability: 'terminal-control',
+  }))
+  assert.equal(acquired.status, 'applied')
+  assert.match(acquired.payload.leaseId, /^lease-/)
+  const acquireFrame = first.transport.receiveForDevice().find((frame) => frame.kind === 'receipt')
+  assert.equal(acquireFrame.body.payload.leaseId, acquired.payload.leaseId)
+
+  const written = await first.transport.sendFromDevice(command({
+    type: 'terminal.write',
+    commandId: 'terminal-write-gateway',
+    capability: 'terminal-control',
+    payload: { leaseId: acquired.payload.leaseId, data: 'status\r' },
+  }))
+  assert.equal(written.status, 'applied')
+  assert.deepEqual(calls.at(-1), {
+    operation: 'write',
+    id: 'terminal-codex',
+    projectId: 'project-kaisola',
+    data: 'status\r',
+  })
+
+  const secondTransport = new LoopbackCompanionTransport()
+  first.gateway.attach(secondTransport, { deviceId: 'device-second-phone', capabilities })
+  await secondTransport.sendFromDevice(first.hello({
+    capabilities,
+    deviceId: 'device-second-phone',
+    connectionId: 'connection-second-phone',
+  }))
+  secondTransport.receiveForDevice()
+  const denied = await secondTransport.sendFromDevice(command({
+    type: 'terminal.acquire-control',
+    commandId: 'terminal-acquire-second',
+    capability: 'terminal-control',
+    deviceId: 'device-second-phone',
+    connectionId: 'connection-second-phone',
+  }))
+  assert.equal(denied.status, 'rejected')
+  assert.match(denied.message, /another device/)
+
+  first.session.close('lease-holder-disconnected')
+  const reacquired = await secondTransport.sendFromDevice(command({
+    type: 'terminal.acquire-control',
+    commandId: 'terminal-acquire-after-disconnect',
+    capability: 'terminal-control',
+    deviceId: 'device-second-phone',
+    connectionId: 'connection-second-phone',
+  }))
+  assert.equal(reacquired.status, 'applied')
+  assert.notEqual(reacquired.payload.leaseId, acquired.payload.leaseId)
 })
 
 test('agent commands filter terminal-control from ACP actors and return normal receipts', async () => {

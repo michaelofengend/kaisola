@@ -3,8 +3,8 @@
 const { CompanionCommandCache, fingerprintCommand } = require('./commandCache.cjs')
 const { requiredCapability, validateEnvelope, validateIdentifier } = require('./protocol.cjs')
 
-function receipt(commandId, status, message) {
-  return { type: 'command.receipt', commandId, status, message }
+function receipt(commandId, status, message, payload) {
+  return { type: 'command.receipt', commandId, status, message, ...(payload ? { payload } : {}) }
 }
 
 class CompanionCommandRouter {
@@ -41,6 +41,7 @@ class CompanionCommandRouter {
         clean.body.commandId,
         result.status ?? (result.ok === false ? 'rejected' : 'applied'),
         String(result.message ?? (result.ok === false ? 'Command rejected.' : 'Command applied.')).slice(0, 800),
+        result.payload,
       )
     })
   }

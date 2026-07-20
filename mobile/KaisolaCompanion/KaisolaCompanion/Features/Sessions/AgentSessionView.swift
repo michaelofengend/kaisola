@@ -2,7 +2,10 @@ import SwiftUI
 
 struct AgentSessionView: View {
     @EnvironmentObject private var store: CompanionStore
+    @EnvironmentObject private var coordinator: CompanionConnectionCoordinator
     @Environment(\.colorScheme) private var colorScheme
+    @State private var draft = ""
+    @State private var sending = false
     let sessionId: String
 
     private var session: CompanionSession? { store.session(for: sessionId) }
@@ -30,7 +33,7 @@ struct AgentSessionView: View {
                         withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
                     }
                 }
-                .safeAreaInset(edge: .bottom) { lockedComposer }
+                .safeAreaInset(edge: .bottom) { composer(session) }
             } else {
                 ContentUnavailableView("Session ended", systemImage: "sparkle.slash")
             }
@@ -39,7 +42,20 @@ struct AgentSessionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                if let session { StatusBadge(status: session.status) }
+                if let session {
+                    HStack(spacing: 10) {
+                        StatusBadge(status: session.status)
+                        if session.status == .running && (store.canControlAgents || store.isPreview) {
+                            Button {
+                                Task { _ = await coordinator.cancelAgent(session) }
+                            } label: {
+                                Image(systemName: "stop.fill")
+                                    .font(.caption2)
+                            }
+                            .accessibilityLabel("Stop agent")
+                        }
+                    }
+                }
             }
         }
     }
@@ -58,17 +74,30 @@ struct AgentSessionView: View {
         .padding(.bottom, 2)
     }
 
-    // Read-only alpha: a real-looking composer that is clearly not yet typable.
-    private var lockedComposer: some View {
+    private func composer(_ session: CompanionSession) -> some View {
         HStack(spacing: 10) {
-            Text("Message \(session?.provider ?? "the agent")…")
+            TextField("Message \(session.provider ?? "agent")", text: $draft, axis: .vertical)
                 .font(.subheadline)
-                .foregroundStyle(.tertiary)
-            Spacer(minLength: 6)
-            Label("Controlled from your Mac", systemImage: "lock.fill")
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(.secondary)
-                .labelStyle(.titleAndIcon)
+                .lineLimit(1...5)
+                .disabled(!canCompose || sending)
+                .submitLabel(.send)
+                .onSubmit { Task { await send(session) } }
+            Button {
+                Task { await send(session) }
+            } label: {
+                if sending {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(KaisolaTheme.darkFrame)
+                        .frame(width: 30, height: 30)
+                        .background(KaisolaTheme.accent, in: Circle())
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(!canCompose || sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityLabel(session.status == .running ? "Steer agent" : "Send message")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -77,8 +106,26 @@ struct AgentSessionView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Composer locked. Control this session from your Mac.")
+        .overlay(alignment: .topLeading) {
+            if !canCompose {
+                Text("Enable agent control on your Mac")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .offset(y: -16)
+            }
+        }
+    }
+
+    private var canCompose: Bool {
+        (store.canControlAgents || store.isPreview) && store.connection != .offline
+    }
+
+    private func send(_ session: CompanionSession) async {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard canCompose, !text.isEmpty, !sending else { return }
+        sending = true
+        if await coordinator.sendAgentMessage(to: session, text: text) { draft = "" }
+        sending = false
     }
 }
 
@@ -195,10 +242,12 @@ private struct BubbleShape: Shape {
 
 #Preview {
     let store = CompanionStore.preview()
+    let coordinator = CompanionConnectionCoordinator(store: store)
     return NavigationStack {
         if let agent = store.sessions.first(where: { $0.kind == .agent }) {
             AgentSessionView(sessionId: agent.id)
         } else { Text("no agent") }
     }
     .environmentObject(store)
+    .environmentObject(coordinator)
 }

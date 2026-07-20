@@ -165,13 +165,19 @@ struct SplashView: View {
 }
 
 #Preview("Signed in") {
-    CompanionRootView()
-        .environmentObject(CompanionStore.preview())
+    let store = CompanionStore.preview()
+    let coordinator = CompanionConnectionCoordinator(store: store)
+    return CompanionRootView()
+        .environmentObject(store)
         .environmentObject(AuthModel.previewSignedIn())
+        .environmentObject(coordinator)
 }
 
 #Preview("Signed out") {
-    CompanionRootView()
-        .environmentObject(CompanionStore.preview())
+    let store = CompanionStore.preview()
+    let coordinator = CompanionConnectionCoordinator(store: store)
+    return CompanionRootView()
+        .environmentObject(store)
         .environmentObject(AuthModel.previewSignedOut())
+        .environmentObject(coordinator)
 }

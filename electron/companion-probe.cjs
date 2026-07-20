@@ -1,6 +1,6 @@
-// Real Electron + PTY loopback probe for the listener-free Companion Gateway.
-// It intentionally grants the probe device only `observe`; agent and terminal
-// control remain unavailable until their later guarded-control phases.
+// Real Electron + PTY loopback probe for the Companion Gateway. It proves
+// observation continuity and one guarded terminal-control lease against the
+// same durable PTY without changing its desktop owner.
 'use strict'
 
 const assert = require('node:assert/strict')
@@ -16,7 +16,7 @@ app.setPath('userData', userData)
 
 const { acpSessionService } = require('./ipc/acpHandler.cjs')
 const { sessionBroker } = require('./ipc/sessionBrokerClient.cjs')
-const { registerTerminalHandlers, subscribeTerminalObserver } = require('./ipc/terminalHandler.cjs')
+const { registerTerminalHandlers, subscribeTerminalObserver, companionTerminalControl } = require('./ipc/terminalHandler.cjs')
 const { AttentionService } = require('./ipc/attentionService.cjs')
 const { CompanionDesktopState } = require('./companion/desktopState.cjs')
 const { CompanionGateway } = require('./companion/gateway.cjs')
@@ -66,7 +66,7 @@ function terminalCursor(frames) {
   return latest ? { streamEpoch: latest.body.streamEpoch, afterOffset: latest.body.endOffset } : null
 }
 
-function hello(connectionId, lastAck) {
+function hello(connectionId, lastAck, capabilities = ['observe', 'agent-control', 'terminal-control']) {
   return {
     v: 1,
     kind: 'hello',
@@ -81,7 +81,7 @@ function hello(connectionId, lastAck) {
       type: 'hello',
       role: 'device',
       protocolMinor: 0,
-      capabilities: ['observe'],
+      capabilities,
       ...(lastAck == null ? {} : { lastAck }),
     },
   }
@@ -194,10 +194,11 @@ async function main() {
       epoch: EPOCH,
       stateHub: new CompanionStateHub({ desktopState }),
       terminalObserver: subscribeTerminalObserver,
+      terminalControlAdapter: companionTerminalControl,
       acpSessionService,
       attentionService,
       ledgerAdapter: { listTasks: () => [] },
-      enabledCapabilities: ['observe'],
+      enabledCapabilities: ['observe', 'agent-control', 'terminal-control'],
     })
     gateway.projectionPublished('probe-window', projectionStore.publish({
       windowId: 'probe-window',
@@ -231,7 +232,8 @@ async function main() {
     }))
 
     const firstTransport = new LoopbackCompanionTransport()
-    const firstSession = gateway.attach(firstTransport, { deviceId: DEVICE_ID, capabilities: ['observe'] })
+    const grantedCapabilities = ['observe', 'agent-control', 'terminal-control']
+    const firstSession = gateway.attach(firstTransport, { deviceId: DEVICE_ID, capabilities: grantedCapabilities })
     const firstConnection = 'connection-probe-first'
     await firstTransport.sendFromDevice(hello(firstConnection))
     const initialFrames = firstTransport.receiveForDevice()
@@ -240,7 +242,7 @@ async function main() {
     assert.equal(initialSnapshot.body.projection.freshness, 'live')
     assert.equal(initialSnapshot.body.projection.projects.some(({ id }) => id === PROJECT_ID), true)
     assert.equal(initialSnapshot.body.projection.sessions.some(({ id }) => id === TERMINAL_ID), true)
-    assert.deepEqual(initialFrames.find((frame) => frame.kind === 'hello').body.capabilities, ['observe'])
+    assert.deepEqual(initialFrames.find((frame) => frame.kind === 'hello').body.capabilities, grantedCapabilities)
 
     const subscribed = await firstTransport.sendFromDevice(command(
       firstConnection,
@@ -280,7 +282,7 @@ async function main() {
     const whileDisconnected = ownership(await diagnostics())
 
     const reconnectTransport = new LoopbackCompanionTransport()
-    gateway.attach(reconnectTransport, { deviceId: DEVICE_ID, capabilities: ['observe'] })
+    gateway.attach(reconnectTransport, { deviceId: DEVICE_ID, capabilities: grantedCapabilities })
     const reconnectId = 'connection-probe-reconnect'
     await reconnectTransport.sendFromDevice(hello(reconnectId, lastEventSeq))
     const reconnectHelloFrames = reconnectTransport.receiveForDevice()
@@ -311,27 +313,55 @@ async function main() {
     assert.equal(resumedSnapshot.body.startOffset, firstCursor.afterOffset)
     const duringReconnect = ownership(await diagnostics())
 
-    const agentControl = await reconnectTransport.sendFromDevice(command(
+    const acquired = await reconnectTransport.sendFromDevice(command(
       reconnectId,
-      'agent-cancel-disabled',
-      'agent.cancel',
-      'agent-control',
-      {},
-      'agent-companion-probe',
+      'terminal-acquire-control',
+      'terminal.acquire-control',
+      'terminal-control',
     ))
-    const terminalControl = await reconnectTransport.sendFromDevice(command(
+    assert.equal(acquired.status, 'applied')
+    assert.match(acquired.payload?.leaseId, /^lease-/)
+    const leaseId = acquired.payload.leaseId
+    const resized = await reconnectTransport.sendFromDevice(command(
       reconnectId,
-      'terminal-write-disabled',
+      'terminal-resize-controlled',
+      'terminal.resize',
+      'terminal-control',
+      { leaseId, cols: 92, rows: 31 },
+    ))
+    assert.equal(resized.status, 'applied')
+    const controlledWrite = await reconnectTransport.sendFromDevice(command(
+      reconnectId,
+      'terminal-write-controlled',
       'terminal.write',
       'terminal-control',
-      { data: 'must-not-run\r' },
+      { leaseId, data: 'phone-control\r' },
     ))
-    assert.equal(agentControl.status, 'rejected')
-    assert.equal(terminalControl.status, 'rejected')
-    assert.match(agentControl.message, /not granted/)
-    assert.match(terminalControl.message, /not granted/)
+    assert.equal(controlledWrite.status, 'applied')
+    const controlledFrames = await collectFrames(
+      reconnectTransport,
+      (frames) => terminalText(frames).includes('probe:phone-control'),
+      'phone-controlled PTY output',
+    )
+    const released = await reconnectTransport.sendFromDevice(command(
+      reconnectId,
+      'terminal-release-control',
+      'terminal.release-control',
+      'terminal-control',
+      { leaseId },
+    ))
+    assert.equal(released.status, 'applied')
+    const staleWrite = await reconnectTransport.sendFromDevice(command(
+      reconnectId,
+      'terminal-write-stale',
+      'terminal.write',
+      'terminal-control',
+      { leaseId, data: 'must-not-run\r' },
+    ))
+    assert.equal(staleWrite.status, 'stale')
 
     const after = ownership(await diagnostics())
+    const restoredGeometry = await diagnostics()
     const finalOwnerSnapshot = await ownerSnapshot()
     const ownershipSamples = [before, duringFirstConnection, whileDisconnected, duringReconnect, after]
     const assertions = {
@@ -348,9 +378,11 @@ async function main() {
       desktopOwnerStable: ownershipSamples.every((sample) => sample.owner === before.owner),
       desktopLastOwnerStable: ownershipSamples.every((sample) => sample.lastOwner === before.lastOwner),
       desktopVisibilityStable: ownershipSamples.every((sample) => sample.visible === true),
-      observeOnlyDevice: gateway.stats().commandRouter.enabledCapabilities.join(',') === 'observe',
-      agentControlDisabled: agentControl.status === 'rejected',
-      terminalControlDisabled: terminalControl.status === 'rejected',
+      controlCapabilitiesNegotiated: gateway.stats().commandRouter.enabledCapabilities.length === grantedCapabilities.length
+        && grantedCapabilities.every((capability) => gateway.stats().commandRouter.enabledCapabilities.includes(capability)),
+      terminalControlLease: acquired.status === 'applied' && released.status === 'applied' && staleWrite.status === 'stale',
+      phoneTerminalInput: terminalText(controlledFrames).includes('probe:phone-control'),
+      desktopGeometryRestored: restoredGeometry.cols === 80 && restoredGeometry.rows === 24,
     }
     const failed = Object.entries(assertions).filter(([, ok]) => !ok).map(([name]) => name)
     console.log(JSON.stringify({

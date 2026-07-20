@@ -248,6 +248,8 @@ struct CompanionEnvelope: Codable, Hashable, Sendable {
         "agent.steer": .agentControl,
         "agent.cancel": .agentControl,
         "permission.respond": .agentControl,
+        "terminal.acquire-control": .terminalControl,
+        "terminal.renew-control": .terminalControl,
         "terminal.write": .terminalControl,
         "terminal.resize": .terminalControl,
         "terminal.interrupt": .terminalControl,
@@ -313,6 +315,7 @@ struct CompanionReceiptBody: Codable, Hashable, Sendable {
     let commandId: String
     let status: CompanionReceiptStatus
     let message: String?
+    let payload: [String: JSONValue]?
 }
 
 struct CompanionErrorBody: Codable, Hashable, Sendable {

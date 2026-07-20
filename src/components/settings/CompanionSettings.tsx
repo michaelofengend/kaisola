@@ -36,6 +36,7 @@ export function CompanionSettings() {
   const [pairing, setPairing] = useState<(CompanionPairingStart & { event?: CompanionPairingEvent }) | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null)
+  const [updatingDevice, setUpdatingDevice] = useState<string | null>(null)
   const [pairingCodeCopied, setPairingCodeCopied] = useState(false)
   const pairingRef = useRef<string | null>(null)
 
@@ -99,6 +100,23 @@ export function CompanionSettings() {
     const { id, value } = renaming
     setRenaming(null)
     try { setState(await bridge.companion.renameDevice(id, value.trim())) } catch { /* keep prior name */ }
+  }
+
+  const toggleCapability = async (deviceId: string, capability: 'agent-control' | 'terminal-control', enabled: boolean) => {
+    const device = state?.devices.find((candidate) => candidate.deviceId === deviceId)
+    if (!device || updatingDevice) return
+    if (enabled && capability === 'terminal-control' && !window.confirm(
+      'Allow this iPhone to type into existing terminals on this Mac? Every control session still requires device authentication and an expiring lease.',
+    )) return
+    const capabilities: CompanionState['devices'][number]['capabilities'] = ['observe']
+    for (const candidate of ['agent-control', 'terminal-control'] as const) {
+      if (candidate === capability ? enabled : device.capabilities.includes(candidate)) capabilities.push(candidate)
+    }
+    setUpdatingDevice(deviceId)
+    setError(null)
+    try { setState(await bridge.companion.setDeviceCapabilities(deviceId, capabilities)) }
+    catch (e) { setError(e instanceof Error ? e.message : 'Could not update device access.') }
+    finally { setUpdatingDevice(null) }
   }
 
   if (!state) return <p className="settings-note">Loading…</p>
@@ -169,8 +187,29 @@ export function CompanionSettings() {
                   )}
                   <span className="companion-device-meta">
                     {d.connected ? 'Connected' : `Last seen ${relSeen(d.lastSeenAt)}`}
-                    {' · '}{d.capabilities.join(', ')}
+                    {' · '}Encrypted
                   </span>
+                  <div className="companion-device-grants" aria-label={`Access for ${d.name}`}>
+                    {(['agent-control', 'terminal-control'] as const).map((capability) => {
+                      const enabled = d.capabilities.includes(capability)
+                      return (
+                        <label className="companion-device-grant" key={capability}>
+                          <span>{capability === 'agent-control' ? 'Agent control' : 'Terminal control'}</span>
+                          <button
+                            type="button"
+                            className="settings-toggle"
+                            role="switch"
+                            aria-checked={enabled}
+                            aria-label={`${capability === 'agent-control' ? 'Agent control' : 'Terminal control'} for ${d.name}`}
+                            disabled={updatingDevice === d.deviceId}
+                            onClick={() => void toggleCapability(d.deviceId, capability, !enabled)}
+                          >
+                            <span aria-hidden="true" />
+                          </button>
+                        </label>
+                      )
+                    })}
+                  </div>
                 </div>
                 <button type="button" className="btn btn-sm btn-danger" onClick={() => bridge.companion.revokeDevice(d.deviceId).then(setState).catch(() => {})}>
                   Revoke

@@ -240,6 +240,10 @@ class CompanionDeviceStore extends EventEmitter {
     const next = { ...existing, capabilities: validateCapabilities(capabilities) }
     this.devices.set(next.deviceId, next)
     try { this.#persist() } catch (error) { this.devices.set(existing.deviceId, existing); throw error }
+    // A live gateway session holds the capabilities negotiated in its hello.
+    // Reconnect immediately so narrowing is instant and widening cannot take
+    // effect without a fresh authenticated negotiation.
+    this.#closeConnections(next.deviceId, 'device_capabilities_changed')
     this.emit('capabilities', clone(next))
     return clone(next)
   }

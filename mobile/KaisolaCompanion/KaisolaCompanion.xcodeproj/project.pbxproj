@@ -14,6 +14,7 @@
 		275432D529916BD0A755B063 /* stale-revision-error.json in Resources */ = {isa = PBXBuildFile; fileRef = 6EED132F2C6069F2431D6C28 /* stale-revision-error.json */; };
 		284F19847EB5DA253C09A74B /* KaisolaCompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE45291BDB007777F7C5D9D /* KaisolaCompanionApp.swift */; };
 		28C4DD4AEC0268A7222FFEF4 /* SecureFrameChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF99755F918FE5467BF72EC9 /* SecureFrameChannel.swift */; };
+		2B64DC76322F6ACED1741A20 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 573431BDA5E7F6D58DC70BBB /* SwiftTerm */; };
 		2CF946846F770D846CF496A8 /* CompanionModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25FF5E9EE50F0B47F4A36A04 /* CompanionModels.swift */; };
 		2F6E004D5F5513F3D3FA4E85 /* crypto-noise-xx-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 7D7C0E68F5BA06C2B3197DEC /* crypto-noise-xx-v1.json */; };
 		35EEDBED8D619F530E40EAAA /* CompanionTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 223F0B22AE769EFE9BFF760D /* CompanionTransport.swift */; };
@@ -21,6 +22,7 @@
 		3BB2686931DA8EC347B240D2 /* command-receipt.json in Resources */ = {isa = PBXBuildFile; fileRef = E1AEC14B1A2D0CEB6CDF0D07 /* command-receipt.json */; };
 		4232AA0DDBC1B9F8561B27AB /* protocol-mismatch.json in Resources */ = {isa = PBXBuildFile; fileRef = 5FA9249683775B12F12B0ABB /* protocol-mismatch.json */; };
 		4841BA1218D3E4663C6C83DB /* permission-requested.json in Resources */ = {isa = PBXBuildFile; fileRef = B033B705F8829D1F00E5611E /* permission-requested.json */; };
+		4AB4D87E4A53BB4B85AA8815 /* terminal-control-command.json in Resources */ = {isa = PBXBuildFile; fileRef = 69685CD5FB38B8FE593B9819 /* terminal-control-command.json */; };
 		53BB5C637C246E3D2EC6EF8B /* terminal-cursor.json in Resources */ = {isa = PBXBuildFile; fileRef = 4CA283D22F067CAA4858F577 /* terminal-cursor.json */; };
 		57358CCC88313352F26D6EDA /* FirebaseAuthBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B5BD3EA8BD42770A248DD57 /* FirebaseAuthBackendTests.swift */; };
 		58DD12995120700BCB4D3A13 /* terminal-cursor.json in Resources */ = {isa = PBXBuildFile; fileRef = 4CA283D22F067CAA4858F577 /* terminal-cursor.json */; };
@@ -33,12 +35,14 @@
 		6612C75946F4425079C2F403 /* hello.json in Resources */ = {isa = PBXBuildFile; fileRef = 39E6EFBC687AFC544D2A0758 /* hello.json */; };
 		6B34D071320508AF0A05C519 /* TerminalSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9918CA0A5650E1A28829E741 /* TerminalSessionView.swift */; };
 		70C41EF5C10BA01EF07F632F /* permission-requested.json in Resources */ = {isa = PBXBuildFile; fileRef = B033B705F8829D1F00E5611E /* permission-requested.json */; };
+		75E418466C75BA6E4F61DC8C /* terminal-control-command.json in Resources */ = {isa = PBXBuildFile; fileRef = 69685CD5FB38B8FE593B9819 /* terminal-control-command.json */; };
 		78FB0FA0BB3ECE8BBE2A1CAD /* agent-delta.json in Resources */ = {isa = PBXBuildFile; fileRef = BAD6C8487CA84F964A165DF8 /* agent-delta.json */; };
 		7A3FDA09990C6C1F5419AE28 /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05F98D19328AD31BCA489AAA /* SignInView.swift */; };
 		85D524D0AD7BCB46556D1DD5 /* snapshot-board.json in Resources */ = {isa = PBXBuildFile; fileRef = C12FD715842B93B073324EF0 /* snapshot-board.json */; };
 		85EF6FD4832E9C492AEC9EC0 /* AgentSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CC89D2B67726BE7E2C087DB /* AgentSessionView.swift */; };
 		870DD0EE6C573BED9219E2A8 /* CompanionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC5BE46EF4A28B3506C0AF88 /* CompanionClient.swift */; };
 		879DCD9F59306F1F97D0F05B /* CompanionSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E9C4407353CD2D5DBA36AD4 /* CompanionSettingsView.swift */; };
+		8972B8F657F45468A574F3E0 /* terminal-control-receipt.json in Resources */ = {isa = PBXBuildFile; fileRef = 10DF4CC91CD7C26CF8B4C73B /* terminal-control-receipt.json */; };
 		8CEF7D6FCA7B1BAF7B93641E /* CryptoNoiseVectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485B243F17DF73AB60584C92 /* CryptoNoiseVectorTests.swift */; };
 		8E4E827A0D7E5AC11499222C /* CompanionCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0033BD0FD59F9BFEF7360A9F /* CompanionCrypto.swift */; };
 		93F5BD069A0700CEFFAF314D /* terminal-output.json in Resources */ = {isa = PBXBuildFile; fileRef = D99A39F1417D084BCB902598 /* terminal-output.json */; };
@@ -51,11 +55,14 @@
 		AC871C80111F68A72A00571B /* SessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01FF0D8B88D7B3360A938A15 /* SessionsView.swift */; };
 		B219E2A44715999A43C5DB73 /* KaisolaTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC552FAB4C3E746B92613FAD /* KaisolaTheme.swift */; };
 		B62C43E8C819D04C80937850 /* PermissionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28B48A98A402AFCF0AC70DFF /* PermissionDetailView.swift */; };
+		B79F1C0759B990C99E3AC10A /* CompanionTerminalSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0557383CBDC384292EEEC85A /* CompanionTerminalSurface.swift */; };
+		B9088611B522B95205402BF5 /* ControlAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0AE7045A735E3CA553A49D7 /* ControlAuthorization.swift */; };
 		BD90ABBC1EEA7D2BAD8C38CB /* NowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 674185F4949ADFE5AFBDCA4D /* NowView.swift */; };
 		C245C5F9F6C3777FACD34AF2 /* stale-revision-error.json in Resources */ = {isa = PBXBuildFile; fileRef = 6EED132F2C6069F2431D6C28 /* stale-revision-error.json */; };
 		C40EB939F9E54A14DB6492EF /* LengthFraming.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6F6D271749DB37E8FAF6B46 /* LengthFraming.swift */; };
 		D68BA3929DF6A6284DA6A0AF /* CompanionRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1D7F31C8FD1F4DF0D73499 /* CompanionRootView.swift */; };
 		D9252D0124204EB9A28E8649 /* CompanionAccountRendezvous.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25A40360803BDE01C2FBC548 /* CompanionAccountRendezvous.swift */; };
+		E0E93F6146F7DF017BF18775 /* terminal-control-receipt.json in Resources */ = {isa = PBXBuildFile; fileRef = 10DF4CC91CD7C26CF8B4C73B /* terminal-control-receipt.json */; };
 		E12FBB66CA5492D9CAC7478C /* snapshot-board.json in Resources */ = {isa = PBXBuildFile; fileRef = C12FD715842B93B073324EF0 /* snapshot-board.json */; };
 		E9A01163961AFC5BED82CFDA /* CompanionConnectionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60926D0AB90F0026708BE1AA /* CompanionConnectionCoordinator.swift */; };
 		EE58DABA9D558610499B0EB4 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AFFAB4BF741FC53C399ABCA /* HomeView.swift */; };
@@ -81,11 +88,13 @@
 /* Begin PBXFileReference section */
 		0033BD0FD59F9BFEF7360A9F /* CompanionCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCrypto.swift; sourceTree = "<group>"; };
 		01FF0D8B88D7B3360A938A15 /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
+		0557383CBDC384292EEEC85A /* CompanionTerminalSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionTerminalSurface.swift; sourceTree = "<group>"; };
 		05F98D19328AD31BCA489AAA /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
 		080DF1108C5BA892C7F13309 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
 		0965CFBA47AE943E0569F687 /* CompanionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionStore.swift; sourceTree = "<group>"; };
 		0F1D7F31C8FD1F4DF0D73499 /* CompanionRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionRootView.swift; sourceTree = "<group>"; };
 		0FF79DE9CC775AE35916D16B /* CompanionAccountRendezvousTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionAccountRendezvousTests.swift; sourceTree = "<group>"; };
+		10DF4CC91CD7C26CF8B4C73B /* terminal-control-receipt.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "terminal-control-receipt.json"; sourceTree = "<group>"; };
 		154C7BA59E2B46D5CA6441B7 /* ProjectionFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectionFixtureTests.swift; sourceTree = "<group>"; };
 		1AAC3C9EB656689D67259D3E /* PairingFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingFlowView.swift; sourceTree = "<group>"; };
 		1CC89D2B67726BE7E2C087DB /* AgentSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionView.swift; sourceTree = "<group>"; };
@@ -105,6 +114,7 @@
 		5FA9249683775B12F12B0ABB /* protocol-mismatch.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "protocol-mismatch.json"; sourceTree = "<group>"; };
 		60926D0AB90F0026708BE1AA /* CompanionConnectionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionConnectionCoordinator.swift; sourceTree = "<group>"; };
 		674185F4949ADFE5AFBDCA4D /* NowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowView.swift; sourceTree = "<group>"; };
+		69685CD5FB38B8FE593B9819 /* terminal-control-command.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "terminal-control-command.json"; sourceTree = "<group>"; };
 		6EED132F2C6069F2431D6C28 /* stale-revision-error.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "stale-revision-error.json"; sourceTree = "<group>"; };
 		74907E2AA6DEFB4DE3F3A1F5 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
 		7D7C0E68F5BA06C2B3197DEC /* crypto-noise-xx-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "crypto-noise-xx-v1.json"; sourceTree = "<group>"; };
@@ -124,6 +134,7 @@
 		C6F6D271749DB37E8FAF6B46 /* LengthFraming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LengthFraming.swift; sourceTree = "<group>"; };
 		C868CB2C1FA7AA6618CD8291 /* NoiseXX.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoiseXX.swift; sourceTree = "<group>"; };
 		CAE45291BDB007777F7C5D9D /* KaisolaCompanionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaisolaCompanionApp.swift; sourceTree = "<group>"; };
+		D0AE7045A735E3CA553A49D7 /* ControlAuthorization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlAuthorization.swift; sourceTree = "<group>"; };
 		D99A39F1417D084BCB902598 /* terminal-output.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "terminal-output.json"; sourceTree = "<group>"; };
 		E1AEC14B1A2D0CEB6CDF0D07 /* command-receipt.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "command-receipt.json"; sourceTree = "<group>"; };
 		E33914F4AB84F3C6BE5C09DA /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
@@ -132,6 +143,17 @@
 		F83B3AF02114525F74EA3606 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		FC5BE46EF4A28B3506C0AF88 /* CompanionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionClient.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7C532EB23520866E78902F13 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2B64DC76322F6ACED1741A20 /* SwiftTerm in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		017316829FF0E0BAA50C94B4 /* Now */ = {
@@ -184,6 +206,8 @@
 				5FA9249683775B12F12B0ABB /* protocol-mismatch.json */,
 				C12FD715842B93B073324EF0 /* snapshot-board.json */,
 				6EED132F2C6069F2431D6C28 /* stale-revision-error.json */,
+				69685CD5FB38B8FE593B9819 /* terminal-control-command.json */,
+				10DF4CC91CD7C26CF8B4C73B /* terminal-control-receipt.json */,
 				4CA283D22F067CAA4858F577 /* terminal-cursor.json */,
 				D99A39F1417D084BCB902598 /* terminal-output.json */,
 			);
@@ -212,6 +236,7 @@
 			children = (
 				0033BD0FD59F9BFEF7360A9F /* CompanionCrypto.swift */,
 				98DE11C5FAB40CD2B4715652 /* CompanionIdentity.swift */,
+				D0AE7045A735E3CA553A49D7 /* ControlAuthorization.swift */,
 				C868CB2C1FA7AA6618CD8291 /* NoiseXX.swift */,
 				3737EDD8846E73635FA40603 /* PairingModels.swift */,
 				AF99755F918FE5467BF72EC9 /* SecureFrameChannel.swift */,
@@ -262,6 +287,7 @@
 			isa = PBXGroup;
 			children = (
 				1CC89D2B67726BE7E2C087DB /* AgentSessionView.swift */,
+				0557383CBDC384292EEEC85A /* CompanionTerminalSurface.swift */,
 				01FF0D8B88D7B3360A938A15 /* SessionsView.swift */,
 				9918CA0A5650E1A28829E741 /* TerminalSessionView.swift */,
 			);
@@ -381,6 +407,7 @@
 			buildPhases = (
 				8865D5299E78E1B4F2EA5BC1 /* Sources */,
 				8CA53A6D251C5FF13AA65F31 /* Resources */,
+				7C532EB23520866E78902F13 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -388,6 +415,7 @@
 			);
 			name = KaisolaCompanion;
 			packageProductDependencies = (
+				573431BDA5E7F6D58DC70BBB /* SwiftTerm */,
 			);
 			productName = KaisolaCompanion;
 			productReference = B48B16F368714573C910DEA0 /* KaisolaCompanion.app */;
@@ -421,6 +449,9 @@
 			);
 			mainGroup = FBCB00414E2F74BD47D883AD;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				2CB49F5B919F3C9D03CB97A5 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 113B8D8AF788A9E99AC1B980 /* Products */;
 			projectDirPath = "";
@@ -445,6 +476,8 @@
 				3607DA57F576C5CC858FB1F5 /* protocol-mismatch.json in Resources */,
 				E12FBB66CA5492D9CAC7478C /* snapshot-board.json in Resources */,
 				275432D529916BD0A755B063 /* stale-revision-error.json in Resources */,
+				4AB4D87E4A53BB4B85AA8815 /* terminal-control-command.json in Resources */,
+				E0E93F6146F7DF017BF18775 /* terminal-control-receipt.json in Resources */,
 				53BB5C637C246E3D2EC6EF8B /* terminal-cursor.json in Resources */,
 				93F5BD069A0700CEFFAF314D /* terminal-output.json in Resources */,
 			);
@@ -464,6 +497,8 @@
 				4232AA0DDBC1B9F8561B27AB /* protocol-mismatch.json in Resources */,
 				85D524D0AD7BCB46556D1DD5 /* snapshot-board.json in Resources */,
 				C245C5F9F6C3777FACD34AF2 /* stale-revision-error.json in Resources */,
+				75E418466C75BA6E4F61DC8C /* terminal-control-command.json in Resources */,
+				8972B8F657F45468A574F3E0 /* terminal-control-receipt.json in Resources */,
 				58DD12995120700BCB4D3A13 /* terminal-cursor.json in Resources */,
 				A93E88B2C3CB81E6786489F0 /* terminal-output.json in Resources */,
 			);
@@ -502,8 +537,10 @@
 				D68BA3929DF6A6284DA6A0AF /* CompanionRootView.swift in Sources */,
 				879DCD9F59306F1F97D0F05B /* CompanionSettingsView.swift in Sources */,
 				F3E1657D9D5368619E6F2C22 /* CompanionStore.swift in Sources */,
+				B79F1C0759B990C99E3AC10A /* CompanionTerminalSurface.swift in Sources */,
 				35EEDBED8D619F530E40EAAA /* CompanionTransport.swift in Sources */,
 				640ADF1A2342CAB85C83DA76 /* Components.swift in Sources */,
+				B9088611B522B95205402BF5 /* ControlAuthorization.swift in Sources */,
 				615A85A5926180F6D6645E69 /* FirebaseAuthBackend.swift in Sources */,
 				EE58DABA9D558610499B0EB4 /* HomeView.swift in Sources */,
 				06B7334BB43F48C26F51E158 /* JSONValue.swift in Sources */,
@@ -582,7 +619,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 0.3.2;
+				MARKETING_VERSION = 0.3.3;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -626,6 +663,7 @@
 					_kaisola._tcp,
 				);
 				INFOPLIST_KEY_NSCameraUsageDescription = "Kaisola uses the camera to scan the pairing code shown on your Mac.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Kaisola uses Face ID to unlock agent and terminal control on your paired Mac.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Kaisola discovers and securely connects to your paired Mac on the local network.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -633,7 +671,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.3.2;
+				MARKETING_VERSION = 0.3.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kaisola.companion;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -695,7 +733,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 0.3.2;
+				MARKETING_VERSION = 0.3.3;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -722,6 +760,7 @@
 					_kaisola._tcp,
 				);
 				INFOPLIST_KEY_NSCameraUsageDescription = "Kaisola uses the camera to scan the pairing code shown on your Mac.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Kaisola uses Face ID to unlock agent and terminal control on your paired Mac.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Kaisola discovers and securely connects to your paired Mac on the local network.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -729,7 +768,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.3.2;
+				MARKETING_VERSION = 0.3.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kaisola.companion;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -786,6 +825,25 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		2CB49F5B919F3C9D03CB97A5 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.15.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		573431BDA5E7F6D58DC70BBB /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2CB49F5B919F3C9D03CB97A5 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = CF8308334867CC1407E76849 /* Project object */;
 }

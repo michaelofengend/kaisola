@@ -23,13 +23,13 @@ final class ProjectionFixtureTests: XCTestCase {
     }
 
     @MainActor
-    func testPreviewStartsObserveOnlyAndMatchesSessionCounts() {
+    func testInteractivePreviewMatchesSessionCounts() {
         let store = CompanionStore.preview(now: Date(timeIntervalSince1970: 1_784_250_001))
         let counts = store.counts(for: "project-kaisola")
 
         XCTAssertTrue(store.isPreview)
-        XCTAssertFalse(store.canControlAgents)
-        XCTAssertFalse(store.canControlTerminals)
+        XCTAssertTrue(store.canControlAgents)
+        XCTAssertTrue(store.canControlTerminals)
         XCTAssertEqual(counts.running, 2)
         XCTAssertEqual(counts.waiting, 1)
         XCTAssertEqual(counts.done, 1)

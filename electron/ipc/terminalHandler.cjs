@@ -14,6 +14,7 @@ const { terminalOwnerParts } = require('./securityPolicy.cjs')
 // stdin) never fires 'close', so without this the invoke Promise hangs forever.
 // On timeout the child is killed and the promise resolves with partial output.
 const RUN_TIMEOUT_MS = 120_000
+const COMPANION_SNAPSHOT_POLL_MS = 350
 const runChildren = new Set()
 let brokerClient = null
 let terminalAttentionSink = null
@@ -389,6 +390,64 @@ function forgetRendererOwner(sender) {
   return broker().forgetOwner(sender)
 }
 
+/** Resolve a companion request against the broker's authoritative inventory.
+ * The caller supplies both the opaque terminal id and immutable project id;
+ * neither is sufficient on its own. Administrative broker calls below never
+ * adopt or replace the renderer owner. */
+async function companionTerminalRecord({ id, projectId }) {
+  if (typeof id !== 'string' || !id || typeof projectId !== 'string' || !projectId) {
+    return { ok: false, status: 'rejected', message: 'Terminal target is invalid.' }
+  }
+  await broker().connect()
+  const rows = await broker().terminal('list', null, {}, { timeoutMs: 5_000 })
+  const row = Array.isArray(rows) ? rows.find((candidate) => candidate?.id === id) : null
+  if (!row) return { ok: false, status: 'unavailable', message: 'Terminal is no longer available.' }
+  const owner = terminalOwnerParts(row.owner) || terminalOwnerParts(row.lastOwner)
+  if (!owner || owner.projectId !== projectId) {
+    return { ok: false, status: 'rejected', message: 'Terminal does not belong to this project.' }
+  }
+  return { ok: true, row, owner }
+}
+
+async function companionTerminalSnapshot({ id, projectId }) {
+  const target = await companionTerminalRecord({ id, projectId })
+  if (!target.ok) return target
+  const snapshot = await broker().terminal('snapshot', null, { id, projectId }, { timeoutMs: 5_000 })
+  if (!snapshot?.streamEpoch) {
+    return { ok: false, status: 'unavailable', message: 'Terminal output is no longer available.' }
+  }
+  return { ok: true, snapshot }
+}
+
+/** Main-owned terminal control adapter. Every operation revalidates the
+ * terminal/project tuple and uses the broker's administrative path only after
+ * that exact match. It never calls attach/create/setSender. */
+const companionTerminalControl = Object.freeze({
+  async available({ id, projectId }) {
+    const target = await companionTerminalRecord({ id, projectId })
+    if (!target.ok) return target
+    const { cols, rows } = target.row
+    return Number.isSafeInteger(cols) && cols > 0 && Number.isSafeInteger(rows) && rows > 0
+      ? { ok: true, geometry: { cols, rows } }
+      : { ok: true }
+  },
+  async write({ id, projectId, data }) {
+    const target = await companionTerminalRecord({ id, projectId })
+    if (!target.ok) return target
+    return broker().terminal('write', null, { id, projectId, data }, { timeoutMs: 5_000 })
+  },
+  async resize({ id, projectId, cols, rows }) {
+    const target = await companionTerminalRecord({ id, projectId })
+    if (!target.ok) return target
+    return broker().terminal('resize', null, { id, projectId, cols, rows }, { timeoutMs: 5_000 })
+  },
+  async interrupt({ id, projectId }) {
+    const target = await companionTerminalRecord({ id, projectId })
+    if (!target.ok) return target
+    return broker().terminal('signal', null, { id, projectId }, { timeoutMs: 5_000 })
+  },
+})
+
 /** Internal-only observer path used by the companion gateway. It never
  * enters ipcMain/preload, and its broker method cannot adopt terminal owner. */
 async function subscribeTerminalObserver({
@@ -410,7 +469,49 @@ async function subscribeTerminalObserver({
   }
   await broker().connect()
   if (!broker().supports(TERMINAL_OBSERVE_FEATURE)) {
-    return { ok: false, unavailable: true, message: 'The running session broker will support phone observation after its current terminals finish.' }
+    // A broker may outlive the Electron build that launched it so its PTYs
+    // survive app updates. Older protocol-2 brokers do not have observer fanout,
+    // but they do expose bounded snapshots. Poll those snapshots without
+    // replacing the broker or adopting its terminals, then automatically use
+    // native observer deltas once the durable broker eventually retires.
+    const initial = await companionTerminalSnapshot({ id, projectId })
+    if (!initial.ok) return { ...initial, unavailable: initial.status === 'unavailable' }
+    let closed = false
+    let polling = false
+    let lastEpoch = initial.snapshot.streamEpoch
+    let lastOffset = initial.snapshot.endOffset
+    let lastExited = initial.snapshot.exited === true
+    const timer = setInterval(async () => {
+      if (closed || polling) return
+      polling = true
+      try {
+        const next = await companionTerminalSnapshot({ id, projectId })
+        if (!next.ok || closed) return
+        const snapshot = next.snapshot
+        const changed = snapshot.streamEpoch !== lastEpoch
+          || snapshot.endOffset !== lastOffset
+          || (snapshot.exited === true) !== lastExited
+        if (!changed) return
+        lastEpoch = snapshot.streamEpoch
+        lastOffset = snapshot.endOffset
+        lastExited = snapshot.exited === true
+        onEvent({ channel: 'terminal:observer-snapshot', payload: { id, ...snapshot } })
+      } catch { /* reconnect/poll retries remain bounded and silent */ }
+      finally { polling = false }
+    }, COMPANION_SNAPSHOT_POLL_MS)
+    timer.unref?.()
+    return {
+      ok: true,
+      mode: 'snapshot',
+      snapshot: initial.snapshot,
+      compatibilityMode: true,
+      unsubscribe: async () => {
+        if (closed) return { ok: true, removed: false }
+        closed = true
+        clearInterval(timer)
+        return { ok: true, removed: true }
+      },
+    }
   }
   const result = await broker().terminal('subscribe', sender, {
     id,
@@ -455,6 +556,7 @@ module.exports = {
   setAppFocused,
   forgetRendererOwner,
   subscribeTerminalObserver,
+  companionTerminalControl,
   setTerminalAttentionSink,
-  __test: { codexIdFromPath, jsonStringField, codexSession, wrappedCliProcess },
+  __test: { codexIdFromPath, jsonStringField, codexSession, wrappedCliProcess, companionTerminalRecord, companionTerminalSnapshot },
 }

@@ -12,6 +12,7 @@ const { sanitizeAcpPermissionEvent, sanitizeProjection } = require('./redaction.
 const { DEFAULT_SNAPSHOT_BYTES, classifyResume, makeBoundedSnapshot } = require('./terminalCursor.cjs')
 const { createAcpActorCapability } = require('../ipc/acpSessionService.cjs')
 const { createAttentionActorCapability } = require('../ipc/attentionService.cjs')
+const { CompanionTerminalControl } = require('./terminalControl.cjs')
 
 const ACP_ACTOR_CAPABILITIES = new Set(['observe', 'agent-control'])
 const MAX_TERMINAL_OBSERVERS = 8
@@ -20,11 +21,9 @@ const TERMINAL_EVENT_TYPES = new Set(['terminal.snapshot', 'terminal.output', 't
 function grantedCapabilities(device, requested) {
   const granted = new Set(validateCapabilities(device.capabilities ?? []))
   const cleanRequested = validateCapabilities(requested ?? [])
-  for (const capability of cleanRequested) {
-    if (!granted.has(capability)) throw new Error(`device is not granted ${capability}`)
-  }
-  if (!granted.has('observe')) throw new Error('device is not granted observe')
-  return cleanRequested.filter((capability) => granted.has(capability))
+  const negotiated = cleanRequested.filter((capability) => granted.has(capability))
+  if (!negotiated.includes('observe')) throw new Error('device is not granted observe')
+  return negotiated
 }
 
 function validId(value, label, max = 240) {
@@ -347,6 +346,7 @@ class CompanionGateway {
     stateHub,
     commandRouter,
     terminalObserver = null,
+    terminalControlAdapter = null,
     acpSessionService = null,
     attentionService = null,
     ledgerAdapter = null,
@@ -361,6 +361,9 @@ class CompanionGateway {
     if (typeof now !== 'function') throw new Error('companion gateway clock is invalid')
     this.stateHub = stateHub
     this.terminalObserver = terminalObserver
+    this.terminalControl = terminalControlAdapter
+      ? new CompanionTerminalControl({ terminalAdapter: terminalControlAdapter, now })
+      : null
     this.acpSessionService = acpSessionService
     this.attentionService = attentionService
     this.ledgerAdapter = ledgerAdapter
@@ -491,6 +494,7 @@ class CompanionGateway {
       try { unsubscribe() } catch { /* one subscription cannot block disconnect */ }
     }
     session.acpSubscriptions.clear()
+    if (this.terminalControl) this.#trackCleanup(this.terminalControl.releaseSession(session))
     return terminalKeys.length
   }
 
@@ -504,6 +508,7 @@ class CompanionGateway {
     this.unsubscribeState?.()
     this.unsubscribeState = null
     for (const session of [...this.sessions]) session.close('gateway_disposed')
+    await this.terminalControl?.dispose()
     await this.settle()
     return true
   }
@@ -525,6 +530,7 @@ class CompanionGateway {
       },
       adapterErrors: this.adapterErrors,
       commandRouter: this.commandRouter.stats(),
+      terminalControl: this.terminalControl?.stats() ?? null,
       stateHub: this.stateHub.stats(),
     }
   }
@@ -546,18 +552,7 @@ class CompanionGateway {
       handlers['stream.unsubscribe'] = ({ command, session }) => this.#unsubscribeTerminal(session, command)
     }
     if (this.acpSessionService) {
-      handlers['agent.prompt'] = ({ device, command }) => this.acpSessionService.prompt(
-        acpActor(device.deviceId, command.projectId, device.capabilities),
-        {
-          projectId: command.projectId,
-          targetId: command.targetId,
-          turnId: command.payload?.turnId ?? command.commandId,
-          text: command.payload?.text,
-          images: command.payload?.images,
-          readOnly: command.payload?.readOnly,
-          attentionSessionId: command.payload?.attentionSessionId,
-        },
-      )
+      handlers['agent.prompt'] = ({ device, command }) => this.#promptAgent(device, command)
       handlers['agent.steer'] = ({ device, command }) => this.acpSessionService.steer(
         acpActor(device.deviceId, command.projectId, device.capabilities),
         { projectId: command.projectId, targetId: command.targetId, text: command.payload?.text, images: command.payload?.images },
@@ -578,7 +573,32 @@ class CompanionGateway {
         },
       )
     }
+    if (this.terminalControl) Object.assign(handlers, this.terminalControl.handlers())
     return handlers
+  }
+
+  async #promptAgent(device, command) {
+    const pending = this.acpSessionService.prompt(
+      acpActor(device.deviceId, command.projectId, device.capabilities),
+      {
+        projectId: command.projectId,
+        targetId: command.targetId,
+        turnId: command.payload?.turnId ?? command.commandId,
+        text: command.payload?.text,
+        images: command.payload?.images,
+        readOnly: command.payload?.readOnly,
+        attentionSessionId: command.payload?.attentionSessionId,
+      },
+    )
+    const immediate = await Promise.race([
+      Promise.resolve(pending).then((value) => ({ settled: true, value })),
+      new Promise((resolve) => setImmediate(() => resolve({ settled: false }))),
+    ])
+    if (immediate.settled) return immediate.value
+    Promise.resolve(pending).catch((error) => {
+      this.#recordAdapterDiagnostic({ source: 'acp.prompt', entryId: command.targetId, error })
+    })
+    return { ok: true, status: 'accepted', message: 'Message accepted by the Mac.' }
   }
 
   async #subscribeTerminal(session, device, command) {
@@ -769,7 +789,9 @@ class CompanionGateway {
   #applyTerminalStreamEvent(stream, event) {
     if (!event || event?.payload?.id !== stream.terminalId) return
     try {
-      if (event.channel === 'terminal:observer-output') {
+      if (event.channel === 'terminal:observer-snapshot') {
+        stream.snapshot = this.#terminalSnapshot({ mode: 'snapshot', snapshot: event.payload })
+      } else if (event.channel === 'terminal:observer-output') {
         const payload = event.payload
         const dataBytes = Buffer.byteLength(typeof payload.data === 'string' ? payload.data : '', 'utf8')
         if (!dataBytes || payload.endOffset - payload.startOffset !== dataBytes) throw new Error('Terminal output offsets are invalid.')
@@ -802,7 +824,15 @@ class CompanionGateway {
       this.#recordAdapterDiagnostic({ source: 'terminal.stream', entryId: stream.terminalId, error })
       return
     }
-    if (stream.members.size > 0) this.stateHub.terminalObserverEvent?.(stream.projectId, event)
+    if (stream.members.size > 0) {
+      if (event.channel === 'terminal:observer-snapshot') {
+        this.stateHub.terminalObserverSnapshot?.(
+          stream.projectId,
+          stream.terminalId,
+          { mode: 'snapshot', snapshot: stream.snapshot },
+        )
+      } else this.stateHub.terminalObserverEvent?.(stream.projectId, event)
+    }
   }
 
   async #detachTerminalMember(session, key) {

@@ -5,6 +5,7 @@ final class ProtocolFixtureTests: XCTestCase {
     private let validEnvelopeFixtures = [
         "hello", "agent-delta", "command-receipt", "permission-requested",
         "snapshot-board", "stale-revision-error", "terminal-output",
+        "terminal-control-command", "terminal-control-receipt",
     ]
 
     func testEveryValidProtocolEnvelopeRoundTripsSemantically() throws {
@@ -47,6 +48,69 @@ final class ProtocolFixtureTests: XCTestCase {
         XCTAssertEqual(terminal.data, "🙂")
     }
 
+    func testTerminalControlCommandAndLeaseReceiptRoundTrip() throws {
+        let fixtureCommand = try CompanionProtocolCodec.decode(fixtureData("terminal-control-command"))
+            .body.decode(CompanionCommandBody.self)
+        XCTAssertEqual(fixtureCommand.type, "terminal.acquire-control")
+        XCTAssertEqual(fixtureCommand.capability, .terminalControl)
+
+        let fixtureReceipt = try CompanionProtocolCodec.decode(fixtureData("terminal-control-receipt"))
+            .body.decode(CompanionReceiptBody.self)
+        XCTAssertEqual(fixtureReceipt.payload?["leaseId"]?.stringValue, "lease-terminal-alpha")
+        XCTAssertEqual(fixtureReceipt.payload?["resizeEnabled"]?.boolValue, true)
+
+        let commandId = "cmd-terminal-control"
+        let command = try CompanionEnvelope(
+            kind: .command,
+            desktopId: "desktop-fixture",
+            deviceId: "device-fixture",
+            connectionId: "connection-fixture",
+            epoch: "desktop-epoch-7",
+            seq: 1,
+            id: commandId,
+            sentAt: 1_784_250_001_300,
+            body: CompanionBody(CompanionCommandBody(
+                type: "terminal.acquire-control",
+                commandId: commandId,
+                projectId: "project-kaisola",
+                targetId: "terminal-codex",
+                capability: .terminalControl,
+                expectedRevision: nil,
+                payload: [:]
+            ))
+        )
+        XCTAssertEqual(try CompanionProtocolCodec.decode(CompanionProtocolCodec.encode(command)), command)
+
+        let receipt = CompanionReceiptBody(
+            type: "command.receipt",
+            commandId: commandId,
+            status: .applied,
+            message: "Terminal control enabled.",
+            payload: [
+                "leaseId": .string("lease-fixture"),
+                "expiresAt": .integer(1_784_250_031_300),
+                "renewAfterMs": .integer(10_000),
+                "resizeEnabled": .bool(true),
+            ]
+        )
+        let envelope = try CompanionEnvelope(
+            kind: .receipt,
+            desktopId: "desktop-fixture",
+            deviceId: "device-fixture",
+            connectionId: "connection-fixture",
+            epoch: "desktop-epoch-7",
+            seq: 2,
+            id: "receipt-terminal-control",
+            sentAt: 1_784_250_001_400,
+            body: CompanionBody(receipt)
+        )
+        let decoded = try CompanionProtocolCodec.decode(CompanionProtocolCodec.encode(envelope))
+            .body.decode(CompanionReceiptBody.self)
+        XCTAssertEqual(decoded.payload?["leaseId"]?.stringValue, "lease-fixture")
+        XCTAssertEqual(decoded.payload?["renewAfterMs"]?.intValue, 10_000)
+        XCTAssertEqual(decoded.payload?["resizeEnabled"]?.boolValue, true)
+    }
+
     func testTerminalCursorFixtureRoundTripsAndUsesUTF8ByteOffsets() throws {
         let original = try fixtureData("terminal-cursor")
         let cursor = try JSONDecoder().decode(CompanionTerminalCursorFixture.self, from: original)
@@ -80,6 +144,38 @@ final class ProtocolFixtureTests: XCTestCase {
         XCTAssertEqual(store.session(for: "session-codex")?.turns?.last?.text, "Adding replay protection.")
         XCTAssertEqual(store.permissions.map(\.id), ["permission-1"])
         XCTAssertEqual(store.connection, .live)
+    }
+
+    @MainActor
+    func testDesktopHelloRefreshesControlGrantsAndRoutineReceiptsStayQuiet() throws {
+        let store = CompanionStore(
+            connection: .offline,
+            projects: [],
+            sessions: [],
+            attention: [],
+            permissions: [],
+            isPreview: false
+        )
+        let hello = try CompanionEnvelope(
+            kind: .hello,
+            desktopId: "desktop-fixture",
+            deviceId: "device-fixture",
+            connectionId: "connection-fixture",
+            epoch: "desktop-epoch-7",
+            seq: 0,
+            id: "hello-desktop",
+            sentAt: 1_784_250_001_000,
+            body: CompanionBody(CompanionHelloBody(
+                role: .desktop,
+                capabilities: [.observe, .agentControl, .terminalControl]
+            ))
+        )
+        XCTAssertFalse(try store.apply(hello))
+        XCTAssertTrue(store.canControlAgents)
+        XCTAssertTrue(store.canControlTerminals)
+
+        XCTAssertFalse(try store.apply(CompanionProtocolCodec.decode(fixtureData("command-receipt"))))
+        XCTAssertNil(store.previewReceipt, "subscribe/control receipts must not become global banners")
     }
 
     @MainActor
@@ -134,6 +230,7 @@ final class ProtocolFixtureTests: XCTestCase {
 
         let terminal = try XCTUnwrap(store.session(for: "session-done"))
         XCTAssertEqual(terminal.terminalLines, ["before"])
+        XCTAssertEqual(terminal.terminalOutput, "before")
         XCTAssertEqual(terminal.terminalStreamEpoch, "terminal-epoch-live")
         XCTAssertEqual(terminal.terminalEndOffset, 6)
         let turns = try XCTUnwrap(store.session(for: "session-codex")?.turns)

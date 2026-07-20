@@ -11,7 +11,7 @@ const fs = require('node:fs')
 const { registerModelHandlers } = require('./ipc/modelHandler.cjs')
 const { registerToolHandlers } = require('./ipc/toolHandler.cjs')
 const { registerSettingsHandlers } = require('./ipc/settingsHandler.cjs')
-const { registerTerminalHandlers, detachSessionBroker, setAppFocused, forgetRendererOwner, subscribeTerminalObserver, setTerminalAttentionSink } = require('./ipc/terminalHandler.cjs')
+const { registerTerminalHandlers, detachSessionBroker, setAppFocused, forgetRendererOwner, subscribeTerminalObserver, companionTerminalControl, setTerminalAttentionSink } = require('./ipc/terminalHandler.cjs')
 const { registerAcpHandlers, acpSessionService, disposeAcp, acpRendererSwapState, acpRestartSafetyState, waitForAcpRestartSafe, acpProjectTransferState, transferAcpProject, releaseAcpRenderer, setAcpSessionEventSink } = require('./ipc/acpHandler.cjs')
 const { createPopMirrorCache, sanitizeTerminalMirror, tabListOwnsProject } = require('./ipc/terminalMirrorPolicy.cjs')
 const { registerAuthHandlers, disposeAuth, currentFirebaseIdToken, readPublicConfig } = require('./ipc/authHandler.cjs')
@@ -1726,12 +1726,13 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
     gatewayOptions: {
       epoch: companionDesktopEpoch,
       terminalObserver: subscribeTerminalObserver,
+      terminalControlAdapter: companionTerminalControl,
       acpSessionService,
       attentionService,
       ledgerAdapter: { listTasks },
-      // Task 7 is deliberately observe-only. Later phases may enable control
-      // only after paired device records and terminal leases exist.
-      enabledCapabilities: ['observe'],
+      // Control remains fail-closed until the user grants it per paired device;
+      // terminal commands additionally require a short main-owned lease.
+      enabledCapabilities: ['observe', 'agent-control', 'terminal-control'],
     },
   })
   companionGateway = companionHandler.gateway

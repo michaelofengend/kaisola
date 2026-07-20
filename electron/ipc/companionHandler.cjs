@@ -34,6 +34,7 @@ const HANDLER_CHANNELS = Object.freeze([
   'companion:cancelPairing',
   'companion:revokeDevice',
   'companion:renameDevice',
+  'companion:setDeviceCapabilities',
 ])
 
 function pairingFailureMessage(reason) {
@@ -150,6 +151,7 @@ class CompanionHandler {
     ipcMain.handle('companion:cancelPairing', (_event, input) => this.cancelPairing(input?.pairingId ?? input))
     ipcMain.handle('companion:revokeDevice', (_event, input) => this.revokeDevice(input?.deviceId ?? input))
     ipcMain.handle('companion:renameDevice', (_event, input) => this.renameDevice(input?.deviceId, input?.name))
+    ipcMain.handle('companion:setDeviceCapabilities', (_event, input) => this.setDeviceCapabilities(input?.deviceId, input?.capabilities))
     return this
   }
 
@@ -294,6 +296,18 @@ class CompanionHandler {
     } catch (error) {
       if (error?.code === 'unknown_device') throw new Error('Device is no longer paired.')
       throw new Error('Enter a device name between 1 and 80 characters.')
+    }
+    const state = this.getState()
+    this.#broadcast(STATE_CHANNEL, state)
+    return state
+  }
+
+  async setDeviceCapabilities(deviceId, capabilities) {
+    try {
+      this.deviceStore.setCapabilities(String(deviceId ?? ''), capabilities)
+    } catch (error) {
+      if (error?.code === 'unknown_device') throw new Error('Device is no longer paired.')
+      throw new Error('Choose a valid Companion access level.')
     }
     const state = this.getState()
     this.#broadcast(STATE_CHANNEL, state)

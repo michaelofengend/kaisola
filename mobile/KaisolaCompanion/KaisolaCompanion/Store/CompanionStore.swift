@@ -11,12 +11,13 @@ final class CompanionStore: ObservableObject {
     @Published var previewReceipt: String?
     @Published private(set) var transportState: CompanionTransportState
     @Published private(set) var lastAckCursor: CompanionAckCursor?
+    @Published private(set) var capabilities: Set<CompanionCapability>
 
     private var projectIdsByWindowId: [String: Set<String>]
 
     let isPreview: Bool
-    let canControlAgents: Bool
-    let canControlTerminals: Bool
+    var canControlAgents: Bool { capabilities.contains(.agentControl) }
+    var canControlTerminals: Bool { capabilities.contains(.terminalControl) }
 
     init(
         connection: CompanionConnectionState,
@@ -37,8 +38,9 @@ final class CompanionStore: ObservableObject {
         self.permissions = permissions
         self.selectedProjectId = selectedProjectId ?? projects.first?.id
         self.isPreview = isPreview
-        self.canControlAgents = canControlAgents
-        self.canControlTerminals = canControlTerminals
+        capabilities = Set<CompanionCapability>([.observe]
+            + (canControlAgents ? [.agentControl] : [])
+            + (canControlTerminals ? [.terminalControl] : []))
         self.transportState = transportState
         lastAckCursor = nil
         projectIdsByWindowId = [:]
@@ -79,6 +81,9 @@ final class CompanionStore: ObservableObject {
                 connection = .stale
             }
         }
+        client.onCapabilities = { [weak self] capabilities in
+            self?.capabilities = capabilities
+        }
     }
 
     @discardableResult
@@ -104,9 +109,15 @@ final class CompanionStore: ObservableObject {
             if let cursor = lastAckCursor, envelope.seq <= cursor.seq { return false }
             try applyEvent(envelope)
         case .hello:
+            let hello = try envelope.body.decode(CompanionHelloBody.self)
+            capabilities = Set(hello.capabilities)
             connection = .live
             return false
-        case .receipt, .error:
+        case .receipt:
+            // Maintenance and control receipts are correlated in the client.
+            // They must not become global toasts (especially subscribe cleanup).
+            return false
+        case .error:
             previewReceipt = envelope.body.fields["message"]?.stringValue
             return false
         case .command, .ack:
@@ -214,6 +225,7 @@ final class CompanionStore: ObservableObject {
                       let terminalId = fields["terminalId"]?.stringValue,
                       let index = sessions.firstIndex(where: { $0.id == terminalId }) {
                 sessions[index].terminalLines = []
+                sessions[index].terminalOutput = ""
                 sessions[index].terminalStreamEpoch = fields["streamEpoch"]?.stringValue
                 sessions[index].terminalEndOffset = fields["endOffset"]?.intValue
                 sessions[index].updatedAt = envelope.sentAt
@@ -259,6 +271,7 @@ final class CompanionStore: ObservableObject {
         guard let existing else { return incoming }
         var reconciled = incoming
         if reconciled.terminalLines == nil { reconciled.terminalLines = existing.terminalLines }
+        if reconciled.terminalOutput == nil { reconciled.terminalOutput = existing.terminalOutput }
         if reconciled.terminalStreamEpoch == nil { reconciled.terminalStreamEpoch = existing.terminalStreamEpoch }
         if reconciled.terminalEndOffset == nil { reconciled.terminalEndOffset = existing.terminalEndOffset }
         reconciled.turns = reconcile(projectedTurns: reconciled.turns, existingTurns: existing.turns)
@@ -371,8 +384,10 @@ final class CompanionStore: ObservableObject {
         sentAt: Int64
     ) {
         guard let index = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
-        let existing = replace ? "" : (sessions[index].terminalLines ?? []).joined(separator: "\n")
+        let existing = replace ? "" : (sessions[index].terminalOutput
+            ?? (sessions[index].terminalLines ?? []).joined(separator: "\n"))
         let bounded = String((existing + text).suffix(128_000))
+        sessions[index].terminalOutput = bounded
         sessions[index].terminalLines = bounded.components(separatedBy: "\n")
         sessions[index].terminalStreamEpoch = streamEpoch
         sessions[index].terminalEndOffset = endOffset
@@ -449,5 +464,24 @@ final class CompanionStore: ObservableObject {
         sessions[index].turns = turns
         sessions[index].summary = clean
         previewReceipt = "Preview only: prompt added locally"
+    }
+
+    func appendUserTurn(to sessionId: String, text: String, commandId: String? = nil) {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, let index = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        var turns = sessions[index].turns ?? []
+        turns.append(CompanionTurn(
+            role: .user,
+            text: clean,
+            status: "sent",
+            at: Int64(Date.now.timeIntervalSince1970 * 1_000),
+            wireId: commandId
+        ))
+        sessions[index].turns = turns
+        sessions[index].summary = clean
+    }
+
+    func showActionMessage(_ message: String) {
+        previewReceipt = message
     }
 }

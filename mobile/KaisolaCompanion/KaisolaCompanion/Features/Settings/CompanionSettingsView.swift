@@ -9,6 +9,8 @@ struct CompanionSettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var confirmSignOut = false
     @State private var confirmUnpair = false
+    @State private var showMacDetails = false
+    @State private var showAccessDetails = false
 
     var onPairNewMac: () -> Void = {}
 
@@ -29,7 +31,7 @@ struct CompanionSettingsView: View {
                         }
                     }
 
-                    Text("Kaisola Companion · read-only alpha\nControl ships in a later update.")
+                    Text("Kaisola Companion · encrypted local connection")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity)
@@ -54,6 +56,20 @@ struct CompanionSettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("You'll need to scan the pairing code again to reconnect.")
+        }
+        .navigationDestination(isPresented: $showMacDetails) {
+            CompanionMacDetailView(
+                name: macName,
+                connected: store.connection == .live,
+                connectionTitle: store.connection.title,
+                onUnpair: { confirmUnpair = true }
+            )
+        }
+        .navigationDestination(isPresented: $showAccessDetails) {
+            CompanionAccessDetailView(
+                agentControl: store.canControlAgents,
+                terminalControl: store.canControlTerminals
+            )
         }
     }
 
@@ -84,14 +100,14 @@ struct CompanionSettingsView: View {
         if coordinator.isPaired || store.isPreview {
             let connected = store.connection == .live
             section(title: "Paired Mac") {
-                SettingsRow(icon: "laptopcomputer", label: macName) {
+                SettingsRow(icon: "laptopcomputer", label: macName, action: { showMacDetails = true }) {
                     HStack(spacing: 6) {
                         Circle().fill(connected ? KaisolaTheme.done : Color.secondary).frame(width: 7, height: 7)
                         Text(connected ? "Connected" : store.connection.title)
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                SettingsRow(icon: "eye", label: "Access") {
+                SettingsRow(icon: "eye", label: "Access", action: { showAccessDetails = true }) {
                     Text(accessLabel).font(.caption).foregroundStyle(.secondary)
                 }
                 SettingsRow(icon: "trash", label: "Unpair this Mac", destructive: false) {
@@ -158,7 +174,7 @@ struct SettingsRow<Trailing: View>: View {
                     .foregroundStyle(destructive ? KaisolaTheme.failed : .primary)
                 Spacer(minLength: 6)
                 trailing()
-                if action != nil && Trailing.self == EmptyView.self {
+                if action != nil {
                     Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.quaternary)
                 }
             }
@@ -173,8 +189,90 @@ struct SettingsRow<Trailing: View>: View {
     }
 }
 
+private struct CompanionMacDetailView: View {
+    let name: String
+    let connected: Bool
+    let connectionTitle: String
+    let onUnpair: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ZStack {
+            AmbientBackdrop()
+            VStack(spacing: 18) {
+                Image(systemName: "laptopcomputer")
+                    .font(.system(size: 32, weight: .light))
+                    .foregroundStyle(KaisolaTheme.accent)
+                    .frame(width: 70, height: 70)
+                    .background(KaisolaTheme.panel(for: colorScheme), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                Text(name).font(.title3.weight(.semibold))
+                Label(connected ? "Connected" : connectionTitle, systemImage: connected ? "checkmark.circle.fill" : "wifi.slash")
+                    .font(.subheadline)
+                    .foregroundStyle(connected ? KaisolaTheme.done : .secondary)
+                Text("Your Mac remains authoritative for every session. The phone reconnects through its paired cryptographic identity; no terminal is moved or duplicated.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 22)
+                Spacer()
+                Button("Unpair this Mac", role: .destructive, action: onUnpair)
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.bottom, 18)
+            }
+            .padding(.top, 28)
+        }
+        .navigationTitle("Paired Mac")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct CompanionAccessDetailView: View {
+    let agentControl: Bool
+    let terminalControl: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ZStack {
+            AmbientBackdrop()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    accessRow("Live viewing", detail: "Projects, agent turns, permissions, and terminal output", enabled: true)
+                    accessRow("Agent control", detail: "Send, steer, stop, and answer complete permission requests", enabled: agentControl)
+                    accessRow("Terminal control", detail: "Type through an expiring per-terminal lease; no terminal ownership transfer", enabled: terminalControl)
+                    Label("Control unlocks with Face ID or your device passcode after inactivity. Change grants in Kaisola → Settings → Companion on your Mac.", systemImage: "faceid")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(14)
+                        .background(KaisolaTheme.panel(for: colorScheme), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .padding(18)
+            }
+        }
+        .navigationTitle("Access")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func accessRow(_ title: String, detail: String, enabled: Bool) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: enabled ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(enabled ? KaisolaTheme.done : Color.secondary.opacity(0.55))
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .background(KaisolaTheme.panel(for: colorScheme), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
 #Preview {
-    NavigationStack { CompanionSettingsView() }
-        .environmentObject(CompanionStore.preview())
+    let store = CompanionStore.preview()
+    let coordinator = CompanionConnectionCoordinator(store: store)
+    return NavigationStack { CompanionSettingsView() }
+        .environmentObject(store)
         .environmentObject(AuthModel.previewSignedIn())
+        .environmentObject(coordinator)
 }

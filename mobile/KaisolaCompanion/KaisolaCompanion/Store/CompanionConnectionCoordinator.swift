@@ -50,6 +50,7 @@ final class CompanionConnectionCoordinator: ObservableObject {
     @Published private(set) var pairedDesktop: CompanionPairedDesktop?
     @Published private(set) var accountOffers: [CompanionAccountOffer] = []
     @Published private(set) var accountLookupInProgress = false
+    @Published private(set) var controlledTerminalIds: Set<String> = []
     /// Drives presentation of the pairing sheet from anywhere in the app.
     @Published var wantsPairing = false
 
@@ -59,12 +60,23 @@ final class CompanionConnectionCoordinator: ObservableObject {
     private let keychain: CompanionIdentityKeychain
     private let persistence: PairedDesktopPersisting
     private let accountRendezvous: any CompanionAccountRendezvousServing
+    private let controlAuthorization: CompanionControlAuthorization
     private var identity: CompanionIdentity?
     private var pendingPayload: CompanionPairingPayload?
     private var activePairingNonce: String?
     private var pairingTimeoutTask: Task<Void, Never>?
     private var accountLookupID: UUID?
     private var cancellables: Set<AnyCancellable> = []
+    private struct TerminalLease {
+        let projectId: String
+        let terminalId: String
+        let leaseId: String
+        var expiresAt: Int64
+        var renewAfterMs: Int64
+        let resizeEnabled: Bool
+    }
+    private var terminalLeases: [String: TerminalLease] = [:]
+    private var terminalRenewals: [String: Task<Void, Never>] = [:]
 
     var isPaired: Bool { pairedDesktop != nil }
 
@@ -72,13 +84,16 @@ final class CompanionConnectionCoordinator: ObservableObject {
         client: CompanionClient = CompanionClient(transport: CompanionTransport(autoConnect: true)),
         keychain: CompanionIdentityKeychain = CompanionIdentityKeychain(),
         persistence: PairedDesktopPersisting = UserDefaultsPairedDesktopStore(),
-        accountRendezvous: any CompanionAccountRendezvousServing = CompanionAccountRendezvousService()
+        accountRendezvous: any CompanionAccountRendezvousServing = CompanionAccountRendezvousService(),
+        controlAuthorization: CompanionControlAuthorization = CompanionControlAuthorization(),
+        store: CompanionStore? = nil
     ) {
         self.client = client
         self.keychain = keychain
         self.persistence = persistence
         self.accountRendezvous = accountRendezvous
-        self.store = CompanionStore.live(client: client)
+        self.controlAuthorization = controlAuthorization
+        self.store = store ?? CompanionStore.live(client: client)
         self.pairedDesktop = persistence.load()
         observe()
     }
@@ -210,8 +225,236 @@ final class CompanionConnectionCoordinator: ObservableObject {
         try? client.setStreamSubscription(projectId: projectId, sessionId: sessionId, subscribed: subscribed)
     }
 
+    func sendAgentMessage(to session: CompanionSession, text: String) async -> Bool {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return false }
+        if store.isPreview {
+            store.sendPreviewPrompt(to: session.id, text: clean)
+            return true
+        }
+        guard store.canControlAgents else {
+            store.showActionMessage("Agent control is not enabled for this iPhone. Grant it from the Mac.")
+            return false
+        }
+        do {
+            try await authorizeControl(reason: "Send a message to \(session.title) on your Mac")
+            let type = session.status == .running ? "agent.steer" : "agent.prompt"
+            let receipt = try await client.performCommand(
+                type: type,
+                projectId: session.projectId,
+                targetId: session.id,
+                capability: .agentControl,
+                payload: ["text": .string(clean)]
+            )
+            guard receiptAccepted(receipt) else {
+                store.showActionMessage(receipt.message ?? "The Mac rejected this message.")
+                return false
+            }
+            store.appendUserTurn(to: session.id, text: clean)
+            return true
+        } catch {
+            store.showActionMessage(actionMessage(error))
+            return false
+        }
+    }
+
+    func cancelAgent(_ session: CompanionSession) async -> Bool {
+        guard !store.isPreview else {
+            store.showActionMessage("Preview only: stop requested")
+            return true
+        }
+        guard store.canControlAgents else { return false }
+        do {
+            try await authorizeControl(reason: "Stop \(session.title) on your Mac")
+            let receipt = try await client.performCommand(
+                type: "agent.cancel",
+                projectId: session.projectId,
+                targetId: session.id,
+                capability: .agentControl
+            )
+            if !receiptAccepted(receipt) { store.showActionMessage(receipt.message ?? "The agent was not stopped.") }
+            return receiptAccepted(receipt)
+        } catch {
+            store.showActionMessage(actionMessage(error))
+            return false
+        }
+    }
+
+    func respond(to permission: CompanionPermission, option: CompanionPermissionOption) async -> Bool {
+        if store.isPreview {
+            store.resolvePermission(permission.id, decision: option.id.lowercased().contains("reject") ? "reject" : "allow")
+            return true
+        }
+        guard store.canControlAgents,
+              let targetId = permission.sessionId,
+              let revision = permission.revision,
+              (permission.completeness ?? "complete") == "complete" else {
+            store.showActionMessage("Review this permission on the Mac for complete context.")
+            return false
+        }
+        do {
+            try await authorizeControl(reason: "Respond to \(permission.agent) on your Mac")
+            let decision = option.id.lowercased().contains("reject") || option.label.lowercased().contains("reject")
+                ? "reject" : "allow_once"
+            let receipt = try await client.performCommand(
+                type: "permission.respond",
+                projectId: permission.projectId,
+                targetId: targetId,
+                capability: .agentControl,
+                expectedRevision: revision,
+                payload: [
+                    "permId": .string(permission.permId),
+                    "optionId": .string(option.id),
+                    "decision": .string(decision),
+                ]
+            )
+            if !receiptAccepted(receipt) { store.showActionMessage(receipt.message ?? "The permission decision was not applied.") }
+            return receiptAccepted(receipt)
+        } catch {
+            store.showActionMessage(actionMessage(error))
+            return false
+        }
+    }
+
+    func hasTerminalControl(_ session: CompanionSession) -> Bool {
+        if store.isPreview { return controlledTerminalIds.contains(session.id) }
+        return controlledTerminalIds.contains(session.id) && terminalLeases[terminalKey(session)] != nil
+    }
+
+    func acquireTerminalControl(_ session: CompanionSession) async -> Bool {
+        if store.isPreview {
+            controlledTerminalIds.insert(session.id)
+            return true
+        }
+        guard store.canControlTerminals else {
+            store.showActionMessage("Terminal control is not enabled for this iPhone. Grant it from the Mac.")
+            return false
+        }
+        do {
+            try await authorizeControl(reason: "Control \(session.title) on your Mac")
+            let receipt = try await client.performCommand(
+                type: "terminal.acquire-control",
+                projectId: session.projectId,
+                targetId: session.id,
+                capability: .terminalControl
+            )
+            guard receiptAccepted(receipt), let lease = lease(from: receipt, session: session) else {
+                store.showActionMessage(receipt.message ?? "Terminal control was not granted.")
+                return false
+            }
+            remember(lease)
+            return true
+        } catch {
+            store.showActionMessage(actionMessage(error))
+            return false
+        }
+    }
+
+    func releaseTerminalControl(_ session: CompanionSession) async {
+        let key = terminalKey(session)
+        guard let lease = terminalLeases[key] else {
+            controlledTerminalIds.remove(session.id)
+            return
+        }
+        terminalRenewals.removeValue(forKey: key)?.cancel()
+        terminalLeases.removeValue(forKey: key)
+        controlledTerminalIds.remove(session.id)
+        guard !store.isPreview, client.transport.state == .live else { return }
+        _ = try? await client.performCommand(
+            type: "terminal.release-control",
+            projectId: lease.projectId,
+            targetId: lease.terminalId,
+            capability: .terminalControl,
+            payload: ["leaseId": .string(lease.leaseId)],
+            timeout: .seconds(5)
+        )
+    }
+
+    func sendTerminalInput(_ data: Data, to session: CompanionSession) async -> Bool {
+        guard !data.isEmpty, data.count <= 16 * 1024 else {
+            store.showActionMessage("Terminal input is too large. Paste 16 KB or less.")
+            return false
+        }
+        if store.isPreview {
+            store.showActionMessage("Preview only: terminal input captured")
+            return true
+        }
+        guard let lease = terminalLeases[terminalKey(session)] else { return false }
+        do {
+            let receipt = try await client.performCommand(
+                type: "terminal.write",
+                projectId: session.projectId,
+                targetId: session.id,
+                capability: .terminalControl,
+                payload: [
+                    "leaseId": .string(lease.leaseId),
+                    "data": .string(String(decoding: data, as: UTF8.self)),
+                ]
+            )
+            if !receiptAccepted(receipt) {
+                dropTerminalLease(for: session)
+                store.showActionMessage(receipt.message ?? "Terminal input was not applied.")
+            }
+            return receiptAccepted(receipt)
+        } catch {
+            dropTerminalLease(for: session)
+            store.showActionMessage(actionMessage(error))
+            return false
+        }
+    }
+
+    func resizeTerminal(_ session: CompanionSession, cols: Int, rows: Int) async {
+        guard !store.isPreview,
+              let lease = terminalLeases[terminalKey(session)],
+              lease.resizeEnabled else { return }
+        _ = try? await client.performCommand(
+            type: "terminal.resize",
+            projectId: session.projectId,
+            targetId: session.id,
+            capability: .terminalControl,
+            payload: [
+                "leaseId": .string(lease.leaseId),
+                "cols": .integer(Int64(cols)),
+                "rows": .integer(Int64(rows)),
+            ],
+            timeout: .seconds(5)
+        )
+    }
+
+    func interruptTerminal(_ session: CompanionSession) async -> Bool {
+        if store.isPreview { return true }
+        guard let lease = terminalLeases[terminalKey(session)] else { return false }
+        do {
+            let receipt = try await client.performCommand(
+                type: "terminal.interrupt",
+                projectId: session.projectId,
+                targetId: session.id,
+                capability: .terminalControl,
+                payload: ["leaseId": .string(lease.leaseId)]
+            )
+            return receiptAccepted(receipt)
+        } catch {
+            store.showActionMessage(actionMessage(error))
+            return false
+        }
+    }
+
+    /// Called before iOS snapshots/backgrounds the UI. Leases are best-effort
+    /// released, then local authorization and the socket are dropped.
+    func suspend() async {
+        let sessions = terminalLeases.values.compactMap { lease in store.session(for: lease.terminalId) }
+        for session in sessions { await releaseTerminalControl(session) }
+        clearLocalTerminalControls()
+        controlAuthorization.lock()
+        guard !store.isPreview else { return }
+        client.transport.stop()
+        store.connection = .offline
+    }
+
     /// Forget the paired Mac and drop the connection.
     func unpair() {
+        clearLocalTerminalControls()
+        controlAuthorization.lock()
         persistence.clear()
         pairedDesktop = nil
         pendingPayload = nil
@@ -264,6 +507,7 @@ final class CompanionConnectionCoordinator: ObservableObject {
     }
 
     private func handleTransportState(_ state: CompanionTransportState) {
+        if state != .live { clearLocalTerminalControls() }
         // Pairing: the phone must start the handshake once the socket is up.
         if state == .handshaking, let payload = pendingPayload, let identity {
             pendingPayload = nil
@@ -279,6 +523,87 @@ final class CompanionConnectionCoordinator: ObservableObject {
         persistence.save(desktop)
         pairedDesktop = desktop
         pairingPhase = .paired
+    }
+
+    private func authorizeControl(reason: String) async throws {
+        if store.isPreview { return }
+        try await controlAuthorization.authorize(reason: reason)
+    }
+
+    private func receiptAccepted(_ receipt: CompanionReceiptBody) -> Bool {
+        receipt.status == .accepted || receipt.status == .applied
+    }
+
+    private func actionMessage(_ error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? "The action could not be confirmed. It was not retried."
+    }
+
+    private func terminalKey(_ session: CompanionSession) -> String {
+        "\(session.projectId)\u{0}\(session.id)"
+    }
+
+    private func lease(from receipt: CompanionReceiptBody, session: CompanionSession) -> TerminalLease? {
+        guard let leaseId = receipt.payload?["leaseId"]?.stringValue,
+              let expiresAt = receipt.payload?["expiresAt"]?.intValue else { return nil }
+        return TerminalLease(
+            projectId: session.projectId,
+            terminalId: session.id,
+            leaseId: leaseId,
+            expiresAt: expiresAt,
+            renewAfterMs: receipt.payload?["renewAfterMs"]?.intValue ?? 10_000,
+            resizeEnabled: receipt.payload?["resizeEnabled"]?.boolValue == true
+        )
+    }
+
+    private func remember(_ lease: TerminalLease) {
+        let key = "\(lease.projectId)\u{0}\(lease.terminalId)"
+        terminalLeases[key] = lease
+        controlledTerminalIds.insert(lease.terminalId)
+        terminalRenewals.removeValue(forKey: key)?.cancel()
+        terminalRenewals[key] = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                let delay = max(3_000, min(lease.renewAfterMs, 12_000))
+                try? await Task.sleep(for: .milliseconds(delay))
+                guard !Task.isCancelled, let self, let current = self.terminalLeases[key] else { return }
+                do {
+                    let receipt = try await self.client.performCommand(
+                        type: "terminal.renew-control",
+                        projectId: current.projectId,
+                        targetId: current.terminalId,
+                        capability: .terminalControl,
+                        payload: ["leaseId": .string(current.leaseId)],
+                        timeout: .seconds(5)
+                    )
+                    guard self.receiptAccepted(receipt),
+                          let session = self.store.session(for: current.terminalId),
+                          let renewed = self.lease(from: receipt, session: session) else {
+                        self.dropTerminalLease(key: key, terminalId: current.terminalId)
+                        return
+                    }
+                    self.terminalLeases[key] = renewed
+                } catch {
+                    self.dropTerminalLease(key: key, terminalId: current.terminalId)
+                    return
+                }
+            }
+        }
+    }
+
+    private func dropTerminalLease(for session: CompanionSession) {
+        dropTerminalLease(key: terminalKey(session), terminalId: session.id)
+    }
+
+    private func dropTerminalLease(key: String, terminalId: String) {
+        terminalRenewals.removeValue(forKey: key)?.cancel()
+        terminalLeases.removeValue(forKey: key)
+        controlledTerminalIds.remove(terminalId)
+    }
+
+    private func clearLocalTerminalControls() {
+        for task in terminalRenewals.values { task.cancel() }
+        terminalRenewals.removeAll()
+        terminalLeases.removeAll()
+        controlledTerminalIds.removeAll()
     }
 
     private func resolveIdentity() async throws -> CompanionIdentity {
