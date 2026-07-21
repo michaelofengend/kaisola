@@ -98,6 +98,9 @@ struct CompanionSession: Identifiable, Codable, Hashable, Sendable {
     var needsYou: Bool
     var unread: Bool
     var updatedAt: Int64
+    /// The most recent completed CLI turn. `updatedAt` may advance sooner as
+    /// live terminal bytes arrive, so the two clocks must remain distinct.
+    var completedAt: Int64? = nil
     var provider: String?
     var model: String?
     var mode: String?

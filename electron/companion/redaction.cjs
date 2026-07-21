@@ -611,6 +611,7 @@ function sanitizeSession(raw, index, projects) {
   if (session.branch != null) clean.branch = safeString(session.branch, 'session.branch', 240, { optional: true })
   if (session.summary != null) clean.summary = safeString(session.summary, 'session.summary', MAX_DISPLAY, { optional: true })
   if (session.startedAt != null) clean.startedAt = safeTime(session.startedAt, 'session.startedAt', { optional: true })
+  if (session.completedAt != null) clean.completedAt = safeTime(session.completedAt, 'session.completedAt', { optional: true })
   if (Array.isArray(session.turns)) {
     clean.turns = session.turns.slice(-MAX_TURNS_PER_SESSION).map((turn, turnIndex) => sanitizeTurn(turn, id, turnIndex))
   }

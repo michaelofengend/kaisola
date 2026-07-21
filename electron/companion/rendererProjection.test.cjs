@@ -58,6 +58,7 @@ test('renderer projection includes the board facts but never absolute paths or r
   assert.equal(clean.sessions.find((session) => session.id === 'thread-1').status, 'running')
   assert.equal(clean.sessions.find((session) => session.id === 'thread-1').updatedAt, 29)
   assert.equal(clean.sessions.find((session) => session.id === 'terminal-codex').status, 'waiting')
+  assert.equal(clean.sessions.find((session) => session.id === 'terminal-codex').completedAt, 25)
   assert.deepEqual(clean.permissions[0].diffs.map((diff) => diff.relativePath), ['src/App.tsx'])
   assert.equal(JSON.stringify(raw).includes('/Users/test'), false)
   assert.equal(Object.prototype.hasOwnProperty.call(raw, 'workspacePath'), false)

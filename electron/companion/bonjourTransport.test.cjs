@@ -17,6 +17,7 @@ const {
   localIpv4Addresses,
   preferredLocalIpv4Address,
   parseDnsQuestions,
+  writeWireFrame,
 } = require('./bonjourTransport.cjs')
 const { CompanionDeviceStore } = require('./deviceStore.cjs')
 const {
@@ -285,4 +286,17 @@ test('wire decoder bounds malformed unauthenticated work before JSON or cryptogr
   assert.throws(() => decoder.push(oversized, MAX_HANDSHAKE_WIRE_BYTES), /exceeds limit/)
   assert.throws(() => new LengthFrameDecoder().push(Buffer.concat([Buffer.from([0, 0, 0, 1]), Buffer.from('{')]), MAX_HANDSHAKE_WIRE_BYTES), /invalid/)
   assert.equal(SERVICE_TYPE, '_kaisola._tcp.local')
+})
+
+test('TCP backpressure accepts a bounded queued frame without closing the companion', () => {
+  let written = null
+  const socket = {
+    destroyed: false,
+    writableLength: 32 * 1024,
+    // Node returns false after accepting a write when its high-water mark is
+    // crossed. The caller must not mistake this for a dropped frame.
+    write(value) { written = Buffer.from(value); return false },
+  }
+  assert.equal(writeWireFrame(socket, { type: 'terminal.snapshot', output: 'x'.repeat(96 * 1024) }), true)
+  assert.ok(written.length > 96 * 1024)
 })

@@ -23,6 +23,22 @@ interface STab {
   closable: boolean
   continued?: boolean
   title?: string
+  /** Last completed agent response. Session creation time is never used. */
+  activityAt?: number
+  activityKind?: 'finished' | 'replied'
+}
+
+const responseTimestamp = (values: Array<number | null | undefined>) =>
+  Math.max(0, ...values.filter((value): value is number => Number.isSafeInteger(value) && Number(value) > 0))
+
+const shortElapsed = (at?: number) => {
+  if (!at) return ''
+  const elapsed = Math.max(0, Date.now() - at)
+  if (elapsed < 60_000) return 'now'
+  if (elapsed < 60 * 60_000) return `${Math.floor(elapsed / 60_000)}m`
+  if (elapsed < 24 * 60 * 60_000) return `${Math.floor(elapsed / (60 * 60_000))}h`
+  if (elapsed < 7 * 24 * 60 * 60_000) return `${Math.floor(elapsed / (24 * 60 * 60_000))}d`
+  return new Date(at).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
 }
 
 /**
@@ -34,6 +50,7 @@ interface STab {
  */
 export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orientation?: 'horizontal' | 'vertical'; filter?: string }) {
   const threads = useKaisola((s) => s.assistantThreads)
+  const assistantRuntimes = useKaisola((s) => s.assistantRuntimes)
   const terminals = useKaisola((s) => s.terminals)
   const agentTerminals = useKaisola((s) => s.agentTerminals)
   const panels = useKaisola((s) => s.panels)
@@ -123,6 +140,13 @@ export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orien
   for (let i = 0; i < threads.length; i += 1) {
     const t = threads[i]
     if (t.groupParentId) continue
+    const runtime = assistantRuntimes[t.id]
+    const repliedAt = responseTimestamp([
+      runtime?.lastRun?.finishedAt,
+      ...(runtime?.turns ?? [])
+        .filter((turn) => turn.kind === 'assistant' || turn.kind === 'tool')
+        .map((turn) => turn.at),
+    ])
     const label = threadLabel(t, agents, threads, i)
     const permissionKeys = t.group
       ? new Set(t.group.members.map((member) => `${member.agentKey}::${member.threadId}`))
@@ -139,6 +163,8 @@ export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orien
       kind: 'thread',
       closable: !pinnedSessionIds.has(t.id),
       title: 'Double-click to rename',
+      activityAt: !t.busy ? repliedAt : undefined,
+      activityKind: 'replied',
     })
   }
   terminals.forEach((t, i) => {
@@ -158,6 +184,8 @@ export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orien
       kind: 'term',
       closable: !pinnedSessionIds.has(t.id),
       continued: !!t.continued?.sameProcess,
+      activityAt: meta?.agentCompletedAt ?? undefined,
+      activityKind: 'finished',
       title: [
         t.continued?.sameProcess ? 'Continued — same process across the update' : null,
         working && meta?.fgProcess ? `running ${meta.fgProcess}` : null,
@@ -179,6 +207,8 @@ export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orien
       state: meta?.running ? 'running' : needsYou[t.terminalId] ? 'completed' : undefined,
       kind: 'agentTerm',
       closable: true,
+      activityAt: meta?.agentCompletedAt ?? undefined,
+      activityKind: 'finished',
       title: `${t.agentName ?? 'agent'}: ${t.command ?? ''}`,
     })
   })
@@ -418,6 +448,18 @@ export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orien
                         ? <ProviderIcon provider={t.agentKey} name={t.label} size={12} className="stab-icon" />
                         : <Icon name={t.icon} size={12} className="stab-icon" />}
                       <span className="stab-label truncate">{t.label}</span>
+                      {t.activityAt && (
+                        <time
+                          className="stab-last-activity"
+                          dateTime={new Date(t.activityAt).toISOString()}
+                          title={`Last ${t.activityKind ?? 'response'} ${new Date(t.activityAt).toLocaleString()}`}
+                          aria-label={`Last ${t.activityKind ?? 'response'} ${shortElapsed(t.activityAt)} ago`}
+                        >
+                          {orientation === 'vertical'
+                            ? `${t.activityKind === 'finished' ? 'done' : 'reply'} ${shortElapsed(t.activityAt)}`
+                            : shortElapsed(t.activityAt)}
+                        </time>
+                      )}
                       {t.continued && <span className="stab-continuity">Continued</span>}
                       {t.kind === 'term' && <CostChip termId={t.id} />}
                     </span>

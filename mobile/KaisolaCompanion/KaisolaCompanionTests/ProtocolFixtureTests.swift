@@ -142,6 +142,7 @@ final class ProtocolFixtureTests: XCTestCase {
 
         XCTAssertEqual(store.lastAckCursor, CompanionAckCursor(epoch: "desktop-epoch-7", seq: 15))
         XCTAssertEqual(store.session(for: "session-codex")?.turns?.last?.text, "Adding replay protection.")
+        XCTAssertEqual(store.session(for: "session-done")?.completedAt, 1_784_250_000_900)
         XCTAssertEqual(store.permissions.map(\.id), ["permission-1"])
         XCTAssertEqual(store.connection, .live)
     }
@@ -344,6 +345,31 @@ final class ProtocolFixtureTests: XCTestCase {
     }
 
     @MainActor
+    func testTerminalReplayKeepsACompleteLargeDesktopSnapshot() throws {
+        let store = try liveStoreFromSnapshot()
+        let prefix = "begin-replay\n"
+        let suffix = "\nend-replay"
+        let output = prefix + String(repeating: "x", count: 300_000) + suffix
+
+        try store.apply(event(
+            type: "terminal.snapshot",
+            seq: 13,
+            fields: [
+                "projectId": .string("project-kaisola"),
+                "terminalId": .string("session-done"),
+                "streamEpoch": .string("terminal-epoch-large"),
+                "endOffset": .integer(Int64(output.lengthOfBytes(using: .utf8))),
+                "output": .string(output),
+            ]
+        ))
+
+        let terminal = try XCTUnwrap(store.session(for: "session-done"))
+        XCTAssertTrue(terminal.terminalOutput?.hasPrefix(prefix) == true, "the front of the desktop replay must not be discarded")
+        XCTAssertTrue(terminal.terminalOutput?.hasSuffix(suffix) == true)
+        XCTAssertEqual(terminal.terminalOutput?.count, output.count)
+    }
+
+    @MainActor
     func testCLIBusyStateDoesNotPretendToBeAReplyTimestamp() throws {
         let store = try liveStoreFromSnapshot()
         let originalReplyAt = try XCTUnwrap(store.session(for: "session-done")?.updatedAt)
@@ -371,6 +397,7 @@ final class ProtocolFixtureTests: XCTestCase {
         ))
         XCTAssertEqual(store.session(for: "session-done")?.status, .idle)
         XCTAssertEqual(store.session(for: "session-done")?.updatedAt, 1_784_250_009_999)
+        XCTAssertEqual(store.session(for: "session-done")?.completedAt, 1_784_250_009_999)
     }
 
     @MainActor

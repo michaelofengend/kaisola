@@ -274,7 +274,14 @@ function writeWireFrame(socket, value, maxQueueBytes = MAX_SOCKET_QUEUE_BYTES) {
   if (!socket || socket.destroyed) return false
   const encoded = encodeWireFrame(value)
   if (encoded.length > MAX_SECURE_WIRE_BYTES + 4 || socket.writableLength + encoded.length > maxQueueBytes) return false
-  try { return socket.write(encoded) } catch { return false }
+  try {
+    // net.Socket.write(false) means the bytes WERE accepted into Node's
+    // bounded queue and the producer should wait for `drain`; it is not a
+    // failed write. Treating that signal as failure made the gateway close a
+    // healthy iPhone connection as soon as it sent a terminal snapshot.
+    socket.write(encoded)
+    return true
+  } catch { return false }
 }
 
 class SecureSocketTransport {

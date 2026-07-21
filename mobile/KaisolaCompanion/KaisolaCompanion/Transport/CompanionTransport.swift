@@ -161,19 +161,14 @@ final class CompanionTransport: ObservableObject {
         }
         discoveredDesktops = desktops
         guard autoConnect, let candidate = preferredDiscoveredDesktop() else { return }
-        if connection == nil {
-            selectedEndpoint = candidate.endpoint
-            connect(to: candidate.endpoint, reconnecting: state == .reconnecting)
-            return
-        }
-        // A QR's direct address is only a launch accelerator. Bonjour carries
-        // the stable paired-Mac identity and wins before authentication if the
-        // listener port or network changed.
-        if state != .live,
-           Self.endpointKey(connectionEndpoint) != Self.endpointKey(candidate.endpoint) {
-            selectedEndpoint = candidate.endpoint
-            connect(to: candidate.endpoint, reconnecting: true)
-        }
+        // Never replace a socket while TCP or Noise is still negotiating.
+        // Bonjour result identities can churn as interfaces wake, and each
+        // update used to cancel the in-flight secure resume before it could
+        // become live. The existing deadline/failure path chooses this Bonjour
+        // candidate immediately if the current direct endpoint is actually stale.
+        guard Self.mayAdoptDiscoveredEndpoint(hasConnection: connection != nil) else { return }
+        selectedEndpoint = candidate.endpoint
+        connect(to: candidate.endpoint, reconnecting: state == .reconnecting)
     }
 
     private func connect(to endpoint: NWEndpoint, reconnecting: Bool) {
@@ -356,6 +351,12 @@ final class CompanionTransport: ObservableObject {
             guard case let .service(name, _, _, _) = desktop.endpoint else { return false }
             return name.caseInsensitiveCompare(wanted) == .orderedSame
         }
+    }
+
+    /// Endpoint election is deliberately sticky for the lifetime of an
+    /// in-flight TCP/Noise attempt. Exposed for the reconnect regression test.
+    static func mayAdoptDiscoveredEndpoint(hasConnection: Bool) -> Bool {
+        !hasConnection
     }
 
     static func serviceInstanceName(for desktopId: String) -> String {

@@ -10,12 +10,10 @@ import { CompanionProjectionRevisions } from './lib/companionProjection'
 import { ShellTools } from './components/shell/AgentSidebar'
 import { WorkspaceRail } from './components/shell/WorkspaceRail'
 import { ProjectSessionSidebar, ProjectTabs } from './components/shell/ProjectTabs'
-import { SavedWindows } from './components/shell/SavedWindows'
 import { ProjectLauncher } from './components/shell/ProjectLauncher'
 import { CommandPalette } from './components/shell/CommandPalette'
 import { SessionCards } from './components/shell/SessionCards'
 import { shellDrag } from './components/shell/shellDrag'
-import { SessionTabs } from './components/shell/SessionTabs'
 import { ProvenancePopover } from './components/Provenance'
 import { ReviewFocus } from './components/ReviewFocus'
 import { McpInstallModal } from './components/shell/McpInstallModal'
@@ -625,7 +623,9 @@ function KaisolaApp() {
             ? 'Codex'
             : terminal?.name ?? 'Agent'
         const tab = st.projectTabs.find((project) => project.id === pid)
-        notifyAgent(`${provider} finished`, tab ? projectLabel(tab) : 'Kaisola', pid, activity.id, {
+        const sessionName = terminal?.name ?? terminal?.promptTitle ?? terminal?.autoName ?? `${provider} terminal`
+        const projectName = tab ? projectLabel(tab) : 'Kaisola'
+        notifyAgent(`${sessionName} finished`, `${provider} terminal · ${projectName}`, pid, activity.id, {
           sourceId: `terminal:${activity.id}:${activity.completedAt}`,
           kind: 'completed',
           createdAt: activity.completedAt ?? undefined,
@@ -814,9 +814,13 @@ function KaisolaApp() {
         // or the owning tab is in the background) — click brings the tab up
         if (!isActive || document.hidden || !document.hasFocus()) {
           const tab = st.projectTabs.find((t) => t.id === pid)
+          const sessionName = claudeTerminal?.name
+            ?? claudeTerminal?.promptTitle
+            ?? claudeTerminal?.autoName
+            ?? 'Claude terminal'
           notifyAgent(
-            ev.event === 'Stop' ? 'Claude finished' : 'Claude needs you',
-            tab ? projectLabel(tab) : 'Kaisola',
+            ev.event === 'Stop' ? `${sessionName} finished` : `${sessionName} needs you`,
+            `Claude terminal · ${tab ? projectLabel(tab) : 'Kaisola'}`,
             pid,
             claudeTerminal?.id,
             {
@@ -911,11 +915,9 @@ function KaisolaApp() {
 
   return (
     <div className="app" data-sidebar={false} data-layout={layoutMode}>
-      {/* Top mode owns two explicit rows: projects first, sessions second. Left
-          mode collapses both rows and puts the same navigation in one tree. */}
+      {/* Top mode expands sessions inline from their project like a browser tab
+          group. Left mode presents the same hierarchy as a two-level tree. */}
       {isDesktop && !POP_TERMINAL_ID && topNavigation && <ProjectTabs />}
-      {isDesktop && !POP_TERMINAL_ID && topNavigation && <SavedWindows />}
-      {topNavigation && <div className="top-session-row"><SessionTabs /></div>}
       {isDesktop && <TabMenuSync />}
       {isDesktop && !POP_TERMINAL_ID && <AttentionSync />}
       {isDesktop && !POP_TERMINAL_ID && <CompanionProjectionSync />}

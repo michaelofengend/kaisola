@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { Fragment, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { useKaisola, GROUP_COLORS } from '../../store/store'
@@ -78,9 +78,11 @@ export function ProjectTabs() {
   const [editing, setEditing] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null)
+  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null)
   const dragRef = useRef<string | null>(null)
   const activeRef = useRef<HTMLDivElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
+  const previousActiveId = useRef(activeId)
 
   // the edge fades are SCROLL CUES: only fade a side that actually hides tabs —
   // an always-on mask dissolves the outermost tab's border (it sits in the fade)
@@ -96,6 +98,14 @@ export function ProjectTabs() {
     activeRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     syncFade()
   }, [activeId, tabs])
+  // Top navigation behaves like a Chrome tab group: selecting a different
+  // project reveals its member sessions inline, while clicking the active
+  // project collapses or reopens that group without changing the workspace.
+  useEffect(() => {
+    if (previousActiveId.current === activeId) return
+    previousActiveId.current = activeId
+    setExpandedProjectId(activeId)
+  }, [activeId])
   useEffect(() => {
     window.addEventListener('resize', syncFade)
     return () => window.removeEventListener('resize', syncFade)
@@ -120,9 +130,10 @@ export function ProjectTabs() {
           const label = tabLabel(tab)
           const loneEmpty = tabs.length === 1 && !tab.workspacePath
           const state = tabStates[i] || undefined
+          const expanded = active && expandedProjectId === tab.id
           return (
+            <Fragment key={tab.id}>
             <div
-              key={tab.id}
               ref={active ? activeRef : undefined}
               className="ptab"
               data-project-id={tab.id}
@@ -173,7 +184,15 @@ export function ProjectTabs() {
                     aria-label={`Project ${label}`}
                     aria-selected={active}
                     tabIndex={active ? 0 : -1}
-                    onClick={() => switchProject(tab.id)}
+                    aria-expanded={active ? expanded : undefined}
+                    aria-controls={active ? `project-session-group-${tab.id}` : undefined}
+                    onClick={() => {
+                      if (active) setExpandedProjectId((current) => current === tab.id ? null : tab.id)
+                      else {
+                        setExpandedProjectId(tab.id)
+                        switchProject(tab.id)
+                      }
+                    }}
                     onMouseDown={(e) => { if (e.button === 1) e.preventDefault() }}
                     onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeProject(tab.id) } }}
                     onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY, id: tab.id }) }}
@@ -195,6 +214,7 @@ export function ProjectTabs() {
                     <span className="ptab-badge" />
                     <Icon name="Folder" size={13} className="ptab-icon" />
                     <span className="ptab-label truncate">{label}</span>
+                    {active && <Icon name="ChevronDown" size={10} className="ptab-group-chevron" data-open={expanded || undefined} />}
                   </span>
                 </>
               )}
@@ -204,6 +224,18 @@ export function ProjectTabs() {
                 </button>
               )}
             </div>
+            {expanded && (
+              <div
+                id={`project-session-group-${tab.id}`}
+                className="top-project-session-group"
+                role="group"
+                aria-label={`${label} sessions`}
+                style={{ '--ptab-hue': tab.color ?? tab.hue } as CSSProperties}
+              >
+                <SessionTabs />
+              </div>
+            )}
+            </Fragment>
           )
         })}
       </div>
@@ -346,12 +378,10 @@ export function ProjectSessionSidebar() {
       <div className="project-sidebar-titlebar">
         <WindowLights />
         <div className="project-sidebar-drag" onDoubleClick={() => bridge.winCtl('zoom')} />
-        <div className="project-sidebar-window-slot" />
         <button type="button" className="project-sidebar-layout" onClick={() => setTabLayout('bare')} title="Use Top layout" aria-label="Use Top navigation layout">
           <Icon name="PanelTop" size={13} />
         </button>
       </div>
-      <SavedWindows hostSelector=".project-sidebar-window-slot" />
       <div className="project-tree-head">
         <span>Projects</span>
         <NewProjectButton />
@@ -622,6 +652,8 @@ export function NewProjectButton() {
         <Icon name="Plus" size={14} />
       </button>
       <Dropdown value="" placeholder="" options={options} onSelect={onSelect} title="Open a project…" align="left" />
+      <span className="new-project-saved-slot" data-saved-windows-host="active" />
+      <SavedWindows hostSelector="[data-saved-windows-host='active']" />
     </div>
   )
 }

@@ -2330,7 +2330,7 @@ a^2 + b^2 = c^2
   console.log('MINIMAL_UI=' + JSON.stringify(minimalUi))
 
   // 14b) Left and Top are the only two navigation treatments. Left is a real
-  //      two-level project/session tree; Top is two distinct horizontal rows.
+  //      two-level project/session tree; Top is one expandable grouped row.
   //      Switching never clones or replaces live session identity.
   const tabLayouts = await win.webContents.executeJavaScript(`(async () => {
     const get = () => window.__kaisola.getState()
@@ -2382,14 +2382,19 @@ a^2 + b^2 = c^2
     const leftToTop = document.querySelector('.project-sidebar-layout')
     const topActionClear = /top navigation layout/i.test(leftToTop?.getAttribute('aria-label') || '')
     leftToTop?.click(); await wait()
+    if (!document.querySelector('.top-project-session-group')) {
+      document.querySelector('.ptab[data-active="true"] > .ptab-select')?.click(); await wait()
+    }
     const projectRow = document.querySelector('.tabstrip')
-    const sessionRow = document.querySelector('.top-session-row > .stabs[aria-orientation="horizontal"]')
+    const sessionRow = document.querySelector('.top-project-session-group > .stabs[aria-orientation="horizontal"]')
     const projectRect = projectRow?.getBoundingClientRect()
     const sessionRect = sessionRow?.getBoundingClientRect()
     const topOk = get().tabLayout === 'bare' && document.documentElement.dataset.tabLayout === 'bare' &&
-      !!projectRow && !!sessionRow && !document.querySelector('.project-session-sidebar') &&
-      !!projectRect && !!sessionRect && sessionRect.top >= projectRect.bottom - 1
-    const topUtilities = !!document.querySelector('.tabstrip > .shell-sidebar-footer[data-topbar] .shell-settings-trigger')
+      !!projectRow && !!sessionRow && !document.querySelector('.project-session-sidebar, .top-session-row') &&
+      !!projectRect && !!sessionRect && sessionRect.top >= projectRect.top - 1 && sessionRect.bottom <= projectRect.bottom + 1
+    const topUtilities = !!document.querySelector('.tabstrip > .shell-sidebar-footer[data-topbar]') &&
+      !document.querySelector('.tabstrip > .shell-sidebar-footer[data-topbar] .shell-settings-trigger, .tabstrip > .shell-sidebar-footer[data-topbar] [aria-label="Open usage"]') &&
+      !!document.querySelector('.tabstrip-new .new-project-saved-slot')
     const topToLeft = document.querySelector('.stabs-sidebar-toggle')
     const leftActionClear = /left navigation layout/i.test(topToLeft?.getAttribute('aria-label') || '')
     topToLeft?.click(); await wait()
@@ -2402,11 +2407,14 @@ a^2 + b^2 = c^2
       (!active || get().assistantDrafts[active]?.text === 'layout-switch-draft')
     const leftStyle = leftSurface ? getComputedStyle(leftSurface) : null
     get().setTabLayout('bare'); await wait()
-    const topShelf = document.querySelector('.top-session-row > .stabs')
+    if (!document.querySelector('.top-project-session-group')) {
+      document.querySelector('.ptab[data-active="true"] > .ptab-select')?.click(); await wait()
+    }
+    const topShelf = document.querySelector('.top-project-session-group > .stabs')
     const staticPaint = (!leftStyle?.backdropFilter || leftStyle.backdropFilter === 'none') &&
       (!topShelf || !getComputedStyle(topShelf).backdropFilter || getComputedStyle(topShelf).backdropFilter === 'none')
-    const accessible = document.querySelector('.top-session-row > .stabs')?.getAttribute('aria-orientation') === 'horizontal'
-    const topSession = document.querySelector('.top-session-row .stab[data-active="true"], .top-session-row .stab')
+    const accessible = document.querySelector('.top-project-session-group > .stabs')?.getAttribute('aria-orientation') === 'horizontal'
+    const topSession = document.querySelector('.top-project-session-group .stab[data-active="true"], .top-project-session-group .stab')
     const sessionIdentity = !!topSession?.style.getPropertyValue('--sid').trim()
     get().setTabLayout(original); await wait()
     return { rendered: true, leftOk, topOk, hierarchy, leftUtilities, topUtilities, projectRoundTrip, reciprocalToggle, verticalAddFlow, stateKept, staticPaint, accessible, sessionIdentity }
@@ -2481,8 +2489,11 @@ a^2 + b^2 = c^2
       return !!option
     }
     const movedToTop = await chooseNavigation('Top') && get().tabLayout === 'bare'
+    if (!document.querySelector('.top-project-session-group')) {
+      document.querySelector('.ptab[data-active="true"] > .ptab-select')?.click(); await wait()
+    }
     const controlsAfterTop = !!document.querySelector('.tabstrip > .shell-sidebar-footer[data-topbar]') &&
-      !!document.querySelector('.top-session-row > .stabs') &&
+      !!document.querySelector('.top-project-session-group > .stabs') &&
       !document.querySelector('.project-session-sidebar')
     const movedToLeft = await chooseNavigation('Left') && get().tabLayout === 'sidebar'
     const controlsAfterLeft = !!document.querySelector('.project-sidebar-bottom > .shell-sidebar-footer') &&
@@ -2583,7 +2594,7 @@ a^2 + b^2 = c^2
   // the inline toggles. Verify both directions plus Software Updates' pane.
   win.webContents.send('navigation:layout', 'bare')
   await new Promise((r) => setTimeout(r, 100))
-  const nativeTopLayout = await win.webContents.executeJavaScript(`window.__kaisola.getState().tabLayout === 'bare' && !!document.querySelector('.top-session-row')`)
+  const nativeTopLayout = await win.webContents.executeJavaScript(`window.__kaisola.getState().tabLayout === 'bare' && !!document.querySelector('.tabstrip') && !document.querySelector('.project-session-sidebar, .top-session-row')`)
   win.webContents.send('navigation:layout', 'sidebar')
   await new Promise((r) => setTimeout(r, 100))
   const nativeLeftLayout = await win.webContents.executeJavaScript(`window.__kaisola.getState().tabLayout === 'sidebar' && !!document.querySelector('.project-session-sidebar')`)
@@ -3867,8 +3878,12 @@ a^2 + b^2 = c^2
     // close any stale menu first (outside-close fires on mousedown)
     document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
     await new Promise((r) => setTimeout(r, 80))
+    if (!document.querySelector('.stabs')) {
+      document.querySelector('.ptab[data-active="true"] > .ptab-select')?.click()
+      await new Promise((r) => setTimeout(r, 90))
+    }
     const btn = document.querySelector('.stabs .drop-btn')
-    btn.click()
+    btn?.click()
     await new Promise((r) => setTimeout(r, 150))
     const labels = [...document.querySelectorAll('.drop-menu .drop-item')].map((i) => i.textContent || '')
     document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))

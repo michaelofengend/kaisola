@@ -58,4 +58,10 @@ final class TransportFramingTests: XCTestCase {
         )
         XCTAssertNil(CompanionTransport.preferredDesktop(in: [other], desktopId: desktopId))
     }
+
+    @MainActor
+    func testBonjourDiscoveryCannotPreemptAnInflightSecureResume() {
+        XCTAssertTrue(CompanionTransport.mayAdoptDiscoveredEndpoint(hasConnection: false))
+        XCTAssertFalse(CompanionTransport.mayAdoptDiscoveredEndpoint(hasConnection: true))
+    }
 }

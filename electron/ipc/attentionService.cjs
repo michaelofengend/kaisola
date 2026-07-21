@@ -446,14 +446,18 @@ class AttentionService {
     if (event.type === 'agent.turn.completed' && event.turnId) {
       const failed = event.ok !== true || (event.stopReason && event.stopReason !== 'end_turn')
       const sessionId = attentionSessionId
+      const existing = sessionId ? this.sessions.get(sessionKey(projectId, sessionId)) : null
+      const sessionTitle = event.title || existing?.title || event.agent || event.targetId || 'Agent'
+      const provider = event.agent || existing?.provider
       if (sessionId) this.#upsertSession({
+        ...existing,
         id: sessionId,
         projectId,
         kind: 'agent',
-        title: event.agent || event.targetId || 'Agent',
+        title: sessionTitle,
         status: failed ? 'failed' : 'done',
         updatedAt: this.now(),
-        provider: event.agent,
+        provider,
         windowId: this.windowIdForProject(projectId) || undefined,
       })
       return this.raise({
@@ -462,8 +466,8 @@ class AttentionService {
         source: 'agent-turn',
         sourceId: `${event.targetId || 'agent'}:${event.turnId}`,
         kind: failed ? 'failed' : 'completed',
-        title: failed ? `${event.agent || 'Agent'} failed` : `${event.agent || 'Agent'} finished`,
-        detail: event.stopReason,
+        title: failed ? `${sessionTitle} failed` : `${sessionTitle} finished`,
+        detail: [provider && provider !== sessionTitle ? provider : null, event.stopReason].filter(Boolean).join(' · ') || undefined,
         severity: failed ? 'critical' : 'info',
         windowId: this.windowIdForProject(projectId) || undefined,
         coalesceTarget: true,
@@ -477,23 +481,29 @@ class AttentionService {
     const projectId = event.projectId
     const sessionId = event.sessionId || event.id
     if (typeof projectId !== 'string' || !projectId || typeof sessionId !== 'string' || !sessionId) return null
+    const existing = this.sessions.get(sessionKey(projectId, sessionId))
+    const sessionTitle = event.title || existing?.title || existing?.provider || 'Terminal'
+    const provider = event.provider || existing?.provider
     if (event.busy === true) {
-      this.#upsertSession({ ...event, id: sessionId, projectId, kind: 'terminal', status: 'running', updatedAt: this.now() })
+      this.#upsertSession({ ...existing, ...event, id: sessionId, projectId, kind: 'terminal', title: sessionTitle, provider, status: 'running', updatedAt: this.now() })
       return { ok: true, running: true }
     }
     const hasExit = Number.isInteger(event.exitCode)
     const completedAt = safeTime(event.completedAt, this.now())
     if (!hasExit && event.completedAt == null) return null
     const failed = hasExit && event.exitCode !== 0
-    this.#upsertSession({ ...event, id: sessionId, projectId, kind: 'terminal', status: failed ? 'failed' : 'done', updatedAt: completedAt })
+    this.#upsertSession({ ...existing, ...event, id: sessionId, projectId, kind: 'terminal', title: sessionTitle, provider, status: failed ? 'failed' : 'done', updatedAt: completedAt })
     return this.raise({
       projectId,
       sessionId,
       source: hasExit ? 'terminal-exit' : 'terminal-completion',
       sourceId: `${sessionId}:${event.streamEpoch || 'stream'}:${event.offset ?? completedAt}:${hasExit ? event.exitCode : 'done'}`,
       kind: failed ? 'failed' : 'completed',
-      title: failed ? `${event.title || 'Terminal'} failed` : `${event.title || 'Terminal'} finished`,
-      detail: failed ? `Exited with code ${event.exitCode}.` : undefined,
+      title: failed ? `${sessionTitle} failed` : `${sessionTitle} finished`,
+      detail: [
+        provider && provider !== sessionTitle ? `${provider} terminal` : null,
+        failed ? `Exited with code ${event.exitCode}.` : null,
+      ].filter(Boolean).join(' · ') || undefined,
       createdAt: completedAt,
       severity: failed ? 'critical' : 'info',
       windowId: event.windowId || this.windowIdForProject(projectId) || undefined,

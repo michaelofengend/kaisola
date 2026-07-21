@@ -175,9 +175,16 @@ struct SessionCard: View {
     }
 
     private var relativeTime: String {
-        guard session.updatedAt > 0 else { return "NO REPLY" }
-        let date = Date(timeIntervalSince1970: TimeInterval(session.updatedAt) / 1_000)
-        return date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
+        let activityAt: Int64
+        if session.kind == .terminal {
+            activityAt = session.completedAt ?? (session.status == .running ? 0 : session.updatedAt)
+        } else {
+            activityAt = session.updatedAt
+        }
+        guard activityAt > 0 else { return session.kind == .terminal ? "NO FINISH" : "NO REPLY" }
+        let date = Date(timeIntervalSince1970: TimeInterval(activityAt) / 1_000)
+        let relative = date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
+        return session.kind == .terminal ? "FINISHED \(relative)" : "REPLIED \(relative)"
     }
 
     private var contextLine: String {

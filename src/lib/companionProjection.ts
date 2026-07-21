@@ -36,6 +36,8 @@ export interface CompanionProjection {
     needsYou: boolean
     unread: boolean
     updatedAt: number
+    /** Terminal CLI completion clock; distinct from its latest streamed byte. */
+    completedAt?: number
     provider?: string
     model?: string
     mode?: string
@@ -287,6 +289,9 @@ export function buildCompanionProjection(
         needsYou,
         unread: needsYou,
         updatedAt: terminalResponseAt(meta),
+        ...(Number.isSafeInteger(meta?.agentCompletedAt) && Number(meta?.agentCompletedAt) >= 0
+          ? { completedAt: Number(meta?.agentCompletedAt) }
+          : {}),
         ...(terminalProvider(terminal) ? { provider: terminalProvider(terminal) } : {}),
         ...(meta?.branch ? { branch: display(meta.branch, '', 240) } : {}),
         ...(meta?.fgProcess ? { summary: display(meta.fgProcess, '', 240) } : {}),
@@ -306,6 +311,9 @@ export function buildCompanionProjection(
         needsYou,
         unread: needsYou,
         updatedAt: terminalResponseAt(meta),
+        ...(Number.isSafeInteger(meta?.agentCompletedAt) && Number(meta?.agentCompletedAt) >= 0
+          ? { completedAt: Number(meta?.agentCompletedAt) }
+          : {}),
         provider: display(terminal.agentName ?? terminal.agentKey, 'Agent', 120),
         ...(meta?.branch ? { branch: display(meta.branch, '', 240) } : {}),
         ...(meta?.fgProcess ? { summary: display(meta.fgProcess, '', 240) } : {}),

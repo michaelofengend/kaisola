@@ -112,7 +112,6 @@
   --sessionstrip-h: 0px;
 }
 :root[data-shell='desktop'][data-tab-layout='bare'] { --tabstrip-h: 40px; }
-:root[data-tab-layout='bare'] { --sessionstrip-h: 36px; }
 
 .tabstrip {
   grid-row: 1;
@@ -179,6 +178,10 @@
   align-self: center;
   margin-left: var(--sp-1);
   flex-shrink: 0; /* the track shrinks, chrome never does */
+}
+.new-project-saved-slot {
+  display: inline-flex;
+  align-items: center;
 }
 .tabstrip-new-btn {
   display: inline-flex;
@@ -364,6 +367,31 @@
   flex: 1;
   min-width: 0;
   pointer-events: none;
+}
+.ptab-group-chevron {
+  flex: 0 0 auto;
+  color: var(--text-3);
+  transition: transform var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out);
+}
+.ptab-group-chevron[data-open] {
+  color: var(--ptab-hue, var(--accent));
+  transform: rotate(180deg);
+}
+.top-project-session-group {
+  display: flex;
+  align-items: center;
+  height: var(--tabstrip-h);
+  padding-left: 5px;
+  margin-left: 1px;
+  border-left: 1px solid color-mix(in srgb, var(--ptab-hue, var(--accent)) 24%, var(--border-faint));
+  flex: 0 0 auto;
+}
+.top-project-session-group > .stabs {
+  height: 32px;
+}
+.top-project-session-group .stab {
+  width: 132px;
+  max-width: 164px;
 }
 .ptab > input,
 .ptab-close { position: relative; z-index: 2; }
@@ -827,26 +855,6 @@
 .top-progress {
   top: calc(var(--tabstrip-h) + var(--sessionstrip-h));
 }
-
-/* Top navigation is intentionally two rows. Sessions never squeeze into the
-   project row, and the row spans the workspace rather than only the dock. */
-.top-session-row {
-  grid-row: 2;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  align-items: flex-start;
-  padding: 0 var(--sp-3) 4px;
-  -webkit-app-region: drag;
-}
-.top-session-row > .stabs {
-  width: 100%;
-  height: 32px;
-  margin: 0;
-  padding: 1px 0;
-  flex: 1 1 auto;
-}
-.top-session-row .stabs-track { flex: 0 1 auto; }
 
 /* ── Project launcher — the empty-tab canvas: recents + open folder ──────── */
 .plaunch {
@@ -1583,6 +1591,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.stab-last-activity {
+  flex: 0 0 auto;
+  color: var(--text-3);
+  font-size: var(--fs-10);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
 .stab input.stab-label:focus-visible {
   border-radius: var(--r-1);
   box-shadow: 0 0 0 2px var(--accent-soft), inset 0 0 0 1px var(--accent);
@@ -1709,7 +1724,6 @@
   box-shadow: none;
 }
 .stabs-project-anchor { display: none; }
-.top-session-row .stabs { padding-left: 2px; }
 /* ── pop-out window: one glass terminal card filling the window ──────────── */
 .pop-app {
   display: flex;
@@ -1923,7 +1937,7 @@
   min-height: 0;
 }
 .project-session-sidebar {
-  --project-row-h: 31px;
+  --project-row-h: 34px;
 }
 .project-sidebar-titlebar {
   height: 44px;
@@ -2011,19 +2025,24 @@
 }
 .project-tree-node {
   min-width: 0;
+  margin-bottom: 2px;
 }
 .project-tree-row {
   height: var(--project-row-h);
   display: flex;
   align-items: center;
   min-width: 0;
-  border-radius: var(--r-2);
-  color: var(--text-2);
+  border-radius: var(--r-3);
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--bg-1) 20%, transparent);
+  border: 1px solid transparent;
 }
 .project-tree-row:hover { background: var(--hover-overlay); color: var(--text-1); }
 .project-tree-row[data-active] {
   color: var(--text-0);
-  background: color-mix(in srgb, var(--app-active-glass-tint) 22%, transparent);
+  background: color-mix(in srgb, var(--app-active-glass-tint) 28%, transparent);
+  border-color: color-mix(in srgb, var(--ptab-hue, var(--accent)) 18%, var(--border-faint));
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text-0) 4%, transparent);
 }
 .project-tree-disclosure {
   width: 24px;
@@ -2043,8 +2062,8 @@
   border: 0;
   background: transparent;
   color: inherit;
-  font-size: var(--fs-12);
-  font-weight: var(--fw-medium);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
   text-align: left;
 }
 .project-tree-select svg { color: var(--ptab-hue, var(--accent)); flex: 0 0 auto; }
@@ -2082,9 +2101,9 @@
 .project-tree-node[data-state='completed'] .project-tree-badge { display: block; background: var(--success); }
 .project-tree-node[data-state='running'] .project-tree-badge { display: block; background: var(--accent); animation: queue-pulse 1.4s var(--ease-in-out) infinite; }
 .project-tree-children {
-  margin-left: 18px;
-  padding-left: 5px;
-  border-left: 1px solid color-mix(in srgb, var(--ptab-hue, var(--accent)) 24%, var(--border-faint));
+  margin: 2px 0 5px 24px;
+  padding: 2px 0 2px 7px;
+  border-left: 1px solid color-mix(in srgb, var(--ptab-hue, var(--accent)) 34%, var(--border-faint));
 }
 .project-tree-children .session-filter { margin-top: var(--sp-1); }
 .project-session-sidebar .project-tree-children .stabs[data-orientation='vertical'] {
@@ -2099,10 +2118,15 @@
 }
 .project-session-sidebar .project-tree-children .stab,
 .project-session-sidebar .project-tree-children .stabs[data-single='true'] .stab {
-  height: 29px;
-  padding-left: var(--sp-2);
+  height: 28px;
+  padding: 0 var(--sp-2);
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-regular);
 }
 .project-session-sidebar .project-tree-children .stab[data-active='true'] {
+  color: var(--text-0);
+  background: color-mix(in srgb, var(--sid, var(--accent)) 7%, transparent);
   box-shadow: inset 2px 0 0 var(--sid, var(--accent));
 }
 .project-sidebar-bottom {

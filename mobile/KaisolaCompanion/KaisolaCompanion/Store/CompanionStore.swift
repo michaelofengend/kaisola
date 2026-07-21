@@ -164,7 +164,9 @@ final class CompanionStore: ObservableObject {
                 if let busy = fields["busy"]?.boolValue {
                     sessions[index].status = busy ? .running : .idle
                     if !busy {
-                        sessions[index].updatedAt = fields["completedAt"]?.intValue ?? envelope.sentAt
+                        let completedAt = fields["completedAt"]?.intValue ?? envelope.sentAt
+                        sessions[index].updatedAt = completedAt
+                        sessions[index].completedAt = completedAt
                     }
                 }
                 sessions[index].terminalStreamEpoch = fields["streamEpoch"]?.stringValue
@@ -241,6 +243,7 @@ final class CompanionStore: ObservableObject {
                let index = sessions.firstIndex(where: { $0.id == terminalId }) {
                 sessions[index].status = .done
                 sessions[index].updatedAt = envelope.sentAt
+                sessions[index].completedAt = envelope.sentAt
                 sessions[index].terminalEndOffset = fields["offset"]?.intValue
             }
         default:
@@ -402,7 +405,11 @@ final class CompanionStore: ObservableObject {
         guard let index = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
         let existing = replace ? "" : (sessions[index].terminalOutput
             ?? (sessions[index].terminalLines ?? []).joined(separator: "\n"))
-        let bounded = String((existing + text).suffix(128_000))
+        // Preserve a complete desktop replay with room for multibyte decoding.
+        // Codex/Claude TUIs redraw incrementally; discarding the front half of
+        // an accepted snapshot can leave a cursor on an otherwise blank
+        // alternate screen even though bytes arrived successfully.
+        let bounded = String((existing + text).suffix(512_000))
         sessions[index].terminalOutput = bounded
         sessions[index].terminalLines = bounded.components(separatedBy: "\n")
         sessions[index].terminalStreamEpoch = streamEpoch

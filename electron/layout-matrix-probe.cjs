@@ -145,7 +145,7 @@ app.whenReady().then(async () => {
         git: !!document.querySelector('.git-panel'),
         browser: !!document.querySelector('.web-panel'),
       },
-      horizontalTabs: !!document.querySelector('.top-session-row > .stabs'),
+      horizontalTabs: !!document.querySelector('.top-project-session-group > .stabs'),
       verticalTabs: !!document.querySelector('.session-sidebar .stabs'),
     }
   })()`)
@@ -362,11 +362,11 @@ app.whenReady().then(async () => {
 
   // Across-top navigation at a medium width: strip scrolls instead of clipping.
   win.setSize(1080, 720)
-  await win.webContents.executeJavaScript(`window.__kaisola.getState().setTabLayout('bare')`)
+  await win.webContents.executeJavaScript(`window.__kaisola.getState().setTabLayout('bare'); setTimeout(() => { if (!document.querySelector('.top-project-session-group')) document.querySelector('.ptab[data-active="true"] > .ptab-select')?.click() }, 40)`)
   await wait(220)
   const top = await inspect('top-tabs')
   const topStripScrolls = await win.webContents.executeJavaScript(`(() => {
-    const track = document.querySelector('.top-session-row > .stabs .stabs-track')
+    const track = document.querySelector('.top-project-session-group > .stabs .stabs-track')
     return !!track && getComputedStyle(track).overflowX === 'auto' && track.scrollWidth >= track.clientWidth
   })()`)
 

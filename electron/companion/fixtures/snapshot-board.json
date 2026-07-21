@@ -64,6 +64,7 @@
           "needsYou": false,
           "unread": true,
           "updatedAt": 1784250000900,
+          "completedAt": 1784250000900,
           "summary": "npm run build passed"
         }
       ],

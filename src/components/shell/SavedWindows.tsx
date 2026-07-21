@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useState, type CSSProperties } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { bridge, isDesktop, type SavedWindowSummary } from '../../lib/bridge'
 import { Icon } from '../Icon'
@@ -26,6 +26,8 @@ export function SavedWindows({ hostSelector = '.tabstrip' }: { hostSelector?: st
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [position, setPosition] = useState({ top: 42, left: 10 })
+  const trigger = useRef<HTMLButtonElement>(null)
 
   const refresh = useCallback(async () => {
     if (!bridge.windows?.listSaved) return
@@ -53,6 +55,19 @@ export function SavedWindows({ hostSelector = '.tabstrip' }: { hostSelector?: st
 
   if (!isDesktop || !host) return null
   const parked = saved.filter((entry) => !entry.open).length
+  const toggle = () => {
+    if (!open) {
+      const rect = trigger.current?.getBoundingClientRect()
+      if (rect) {
+        const width = Math.min(360, window.innerWidth - 20)
+        setPosition({
+          top: Math.min(rect.bottom + 6, window.innerHeight - 220),
+          left: Math.max(10, Math.min(rect.left, window.innerWidth - width - 10)),
+        })
+      }
+    }
+    setOpen((value) => !value)
+  }
 
   const reopen = async (entry: SavedWindowSummary) => {
     setBusyId(entry.id)
@@ -92,8 +107,9 @@ export function SavedWindows({ hostSelector = '.tabstrip' }: { hostSelector?: st
         <div style={triggerWrap}>
           <button
             type="button"
+            ref={trigger}
             className="tabstrip-new-btn"
-            onClick={() => setOpen((value) => !value)}
+            onClick={toggle}
             aria-label="Saved windows"
             aria-haspopup="dialog"
             aria-expanded={open}
@@ -125,7 +141,7 @@ export function SavedWindows({ hostSelector = '.tabstrip' }: { hostSelector?: st
             className="tree-menu"
             role="dialog"
             aria-label="Saved windows"
-            style={{ top: 42, right: 10, width: 360, maxWidth: 'calc(100vw - 20px)', maxHeight: 'min(520px, calc(100vh - 54px))', overflowY: 'auto', zIndex: 'calc(var(--z-palette) + 1)', padding: 8, gap: 6 }}
+            style={{ top: position.top, left: position.left, width: 360, maxWidth: 'calc(100vw - 20px)', maxHeight: 'min(520px, calc(100vh - 54px))', overflowY: 'auto', zIndex: 'calc(var(--z-palette) + 1)', padding: 8, gap: 6 }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 7px 7px' }}>
               <Icon name="AppWindow" size={14} />

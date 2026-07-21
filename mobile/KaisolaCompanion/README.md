@@ -31,17 +31,20 @@ Pairing has three coordinated paths:
 - QR embeds the current direct LAN address and port for immediate connection.
 - Bonjour remains active as discovery and reconnect fallback when an address
   changes. Discovery prefers the stable identity of the paired Mac instead of
-  trusting a stale QR address. Foregrounding and cold relaunches reconnect
+  trusting a stale QR address, and discovery changes cannot interrupt a TCP or
+  Noise resume already in flight. Foregrounding and cold relaunches reconnect
   automatically, while the visible reload action forces an immediate retry.
   Transient reconnects replay from the acknowledged cursor and restore active
   terminal subscriptions with receipt-aware retries; a cold launch requests a
-  coherent fresh snapshot.
+  coherent fresh snapshot. Desktop socket backpressure retains accepted
+  snapshots instead of treating a queued write as a disconnect.
 
 Home and Sessions use the timestamp of the latest agent or CLI response—not
 session creation—and only label a session Running while it is actively
-responding. Activity is grouped by desktop window and project. Agent transcripts
-and terminal streams follow new output to the bottom while preserving manual
-scrollback.
+responding. Terminal cards also carry a separate exact last-finished clock, so
+new output never masquerades as a completed CLI turn. Activity is grouped by
+desktop window and project. Agent transcripts and terminal streams follow new
+output to the bottom while preserving manual scrollback.
 
 ## Open in Xcode
 
@@ -67,3 +70,9 @@ xcodebuild \
   -derivedDataPath /tmp/kaisola-companion-derived \
   CODE_SIGNING_ALLOWED=NO build
 ```
+
+## TestFlight release
+
+Archive with automatic signing, then export with `ExportOptions.plist`. Its
+upload destination sends the validated archive directly to App Store Connect;
+the plist intentionally contains no credentials.

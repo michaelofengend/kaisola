@@ -175,6 +175,39 @@ test('renderer completion arriving before the main source still coalesces to one
   assert.equal(emitted.filter((event) => event.type === 'attention.raised' && event.updated !== true).length, 1)
 })
 
+test('completion notices retain the exact projected session title and provider', () => {
+  const { service, tick } = serviceHarness()
+  const exactProjection = projection({ needsYou: false })
+  exactProjection.sessions = [
+    { id: 'terminal-codex', projectId: 'project-a', kind: 'terminal', title: 'Kaisola — Codex review', provider: 'Codex', status: 'running', needsYou: false, unread: false, updatedAt: tick() },
+    { id: 'agent-claude', projectId: 'project-a', kind: 'agent', title: 'Fix companion reconnect', provider: 'Claude', status: 'running', needsYou: false, unread: false, updatedAt: tick() },
+  ]
+  exactProjection.attention = []
+  exactProjection.permissions = []
+  service.synchronizeProjections([{ windowId: 'saved-primary', projection: exactProjection }])
+
+  const terminal = service.handleTerminalEvent({
+    projectId: 'project-a',
+    sessionId: 'terminal-codex',
+    completedAt: tick(),
+    streamEpoch: 'stream-title',
+    offset: 99,
+  })
+  const agent = service.handleAcpEvent({
+    type: 'agent.turn.completed',
+    projectId: 'project-a',
+    attentionSessionId: 'agent-claude',
+    targetId: 'claude::agent-claude',
+    turnId: 'turn-title',
+    ok: true,
+  })
+
+  assert.equal(terminal.event.title, 'Kaisola — Codex review finished')
+  assert.equal(terminal.event.detail, 'Codex terminal')
+  assert.equal(agent.event.title, 'Fix companion reconnect finished')
+  assert.equal(agent.event.detail, 'Claude')
+})
+
 test('permission projection dedupes the main event and resolution clears its canonical session', () => {
   const { service } = serviceHarness()
   const requested = service.handleAcpEvent({
