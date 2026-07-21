@@ -66,7 +66,7 @@ function useProjectNav() {
     },
   })
 
-  return { editing, editValue, setEditValue, beginRename, commitRename, closeOthers, dragHandlers }
+  return { editing, setEditing, editValue, setEditValue, beginRename, commitRename, closeProject, closeOthers, dragHandlers }
 }
 
 /** One low-churn project activity selector shared by both navigation modes. */
@@ -126,7 +126,7 @@ export function ProjectTabs() {
   const switchProject = useKaisola((s) => s.switchProject)
   const setProjectColor = useKaisola((s) => s.setProjectColor)
   const detachProjectToWindow = useKaisola((s) => s.detachProjectToWindow)
-  const { editing, editValue, setEditValue, beginRename, commitRename, closeOthers, dragHandlers } = useProjectNav()
+  const { editing, setEditing, editValue, setEditValue, beginRename, commitRename, closeProject, closeOthers, dragHandlers } = useProjectNav()
 
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null)
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null)
@@ -342,7 +342,7 @@ export function ProjectSessionSidebar() {
   const detachProjectToWindow = useKaisola((s) => s.detachProjectToWindow)
   const setTabLayout = useKaisola((s) => s.setTabLayout)
   const setSessionRailWidth = useKaisola((s) => s.setSessionRailWidth)
-  const { editing, editValue, setEditValue, beginRename, commitRename, closeOthers, dragHandlers } = useProjectNav()
+  const { editing, setEditing, editValue, setEditValue, beginRename, commitRename, closeProject, closeOthers, dragHandlers } = useProjectNav()
   const sessionCount = useKaisola((s) =>
     s.assistantThreads.reduce((count, thread) => count + (thread.groupParentId ? 0 : 1), 0)
       + s.terminals.length

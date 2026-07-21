@@ -359,9 +359,9 @@ function ModelEffortMatrix({
   icon: string
   /** Keep the codex probe/test chrome classnames on the codex instance. */
   codexChrome?: boolean
-  models: Array<{ value: string; name: string; description?: string }>
+  models: ReadonlyArray<{ value: string; name: string; description?: string }>
   modelValue: string
-  efforts: Array<{ value: string; name: string; description?: string }>
+  efforts: ReadonlyArray<{ value: string; name: string; description?: string }>
   effortValue: string
   speed?: AssistantSpeed
   onModel: (value: string) => void
