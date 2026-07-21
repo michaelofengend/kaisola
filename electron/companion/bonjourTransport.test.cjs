@@ -119,9 +119,10 @@ function setup(t) {
     },
   }
   const advertiser = {
-    starts: [], stops: 0,
+    starts: [], stops: 0, refreshes: 0,
     async start(value) { this.starts.push(value) },
     async stop() { this.stops++; return true },
+    refresh() { this.refreshes++; return true },
   }
   const network = memoryNetwork()
   const service = new BonjourCompanionTransport({
@@ -216,6 +217,10 @@ test('Bonjour listener and advertisement remain disabled until the explicit enab
   assert.equal(hint.protocol, 'tcp')
   assert.equal(hint.port, enabled.port)
   if (hint.host != null) assert.match(hint.host, /^\d{1,3}(?:\.\d{1,3}){3}$/)
+  const refreshed = await service.refresh()
+  assert.equal(refreshed.enabled, true)
+  assert.equal(advertiser.refreshes, 1)
+  assert.equal(refreshed.port, enabled.port)
   assert.equal(await service.disable(), true)
   assert.equal(advertiser.stops, 1)
   assert.equal(service.status().enabled, false)

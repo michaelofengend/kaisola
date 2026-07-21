@@ -145,7 +145,7 @@ app.whenReady().then(async () => {
         git: !!document.querySelector('.git-panel'),
         browser: !!document.querySelector('.web-panel'),
       },
-      horizontalTabs: !!document.querySelector('.dock-col > .stabs'),
+      horizontalTabs: !!document.querySelector('.top-session-row > .stabs'),
       verticalTabs: !!document.querySelector('.session-sidebar .stabs'),
     }
   })()`)
@@ -212,7 +212,7 @@ app.whenReady().then(async () => {
   if (minimizedId) await win.webContents.executeJavaScript(`window.__kaisola.getState().addDockSplit(${JSON.stringify(minimizedId)})`)
   await wait(120)
   const cardLayoutControls = { maximizeStarted, maximized, restoredCards, minimized: !!minimized }
-  const savedWindowsControl = await win.webContents.executeJavaScript(`!!document.querySelector('.tabstrip [aria-label="Saved windows"]')`)
+  const savedWindowsControl = await win.webContents.executeJavaScript(`!!document.querySelector('[aria-label="Saved windows"]')`)
   const terminalUsesWorkspace = await win.webContents.executeJavaScript(`window.__kaisola.getState().terminals.find((terminal) => terminal.name === 'Shell matrix')?.cwd === ${JSON.stringify(workspace)}`)
 
   // The permanent top-right preview switch must be a real hit target inside
@@ -281,19 +281,16 @@ app.whenReady().then(async () => {
   }))()`)
 
   // New-session priority: terminal, Codex, Claude.
-  await win.webContents.executeJavaScript(`document.querySelector('.session-sidebar .drop-btn')?.click()`)
+  await win.webContents.executeJavaScript(`document.querySelector('.project-tree-children > .stabs > .drop-btn')?.click()`)
   await wait(120)
   const newSessionOrder = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.drop-menu .drop-item')].slice(0, 3).map((item) => item.textContent.trim())`)
   await win.webContents.executeJavaScript(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`)
 
-  // Settings lives in the profile menu (no standalone footer gear) and a
-  // fresh session opens it on General.
-  await win.webContents.executeJavaScript(`document.querySelector('.shell-sidebar-footer [aria-label="Kaisola account"]')?.click()`)
-  await wait(120)
-  const noFooterGear = await win.webContents.executeJavaScript(`!document.querySelector('.shell-sidebar-footer .shell-settings-trigger')`)
-  await win.webContents.executeJavaScript(`document.querySelector('.app-account-menu .shell-settings-trigger')?.click()`)
+  // Settings is a direct utility in both layouts and a fresh session opens it
+  // on General; the profile menu remains a secondary route.
+  const directSettings = await win.webContents.executeJavaScript(`(() => { const button = document.querySelector('.shell-sidebar-footer .shell-settings-trigger'); button?.click(); return !!button })()`)
   await wait(160)
-  const settingsGeneral = noFooterGear && await win.webContents.executeJavaScript(`document.querySelector('.settings-nav-item[data-active="true"]')?.textContent.trim() === 'General'`)
+  const settingsGeneral = directSettings && await win.webContents.executeJavaScript(`document.querySelector('.settings-nav-item[data-active="true"]')?.textContent.trim() === 'General'`)
   await win.webContents.executeJavaScript(`document.querySelector('.settings-head [aria-label="Close"]')?.click()`)
 
   // Account menu closes even when the away-click lands on a native drag area.
@@ -313,10 +310,8 @@ app.whenReady().then(async () => {
   const footerSingleRow = await win.webContents.executeJavaScript(`(() => {
     const footer = document.querySelector('.shell-sidebar-footer')
     const controls = [...footer?.querySelectorAll('button') ?? []]
-    // Guaranteed row: search, inbox, avatar. The usage gauge only joins when a
-    // subscription window needs attention, and the gear now lives in the
-    // profile menu.
-    if (!footer || controls.length < 3 || footer.querySelector('.app-account-name')) return { ok: false, reason: 'missing footer controls' }
+    // Guaranteed row: search, usage, settings, inbox, theme, and avatar.
+    if (!footer || controls.length < 5 || footer.querySelector('.app-account-name')) return { ok: false, reason: 'missing footer controls' }
     const tops = controls.map((control) => Math.round(control.getBoundingClientRect().top))
     const searchIcon = footer.querySelector('[aria-label="Open command palette"] svg')
     const bellIcon = footer.querySelector('.inbox-btn svg')
@@ -371,7 +366,7 @@ app.whenReady().then(async () => {
   await wait(220)
   const top = await inspect('top-tabs')
   const topStripScrolls = await win.webContents.executeJavaScript(`(() => {
-    const track = document.querySelector('.dock-col > .stabs .stabs-track')
+    const track = document.querySelector('.top-session-row > .stabs .stabs-track')
     return !!track && getComputedStyle(track).overflowX === 'auto' && track.scrollWidth >= track.clientWidth
   })()`)
 
@@ -380,6 +375,21 @@ app.whenReady().then(async () => {
     win.setSize(...size)
     if (name === 'wide-stretched') await win.webContents.executeJavaScript(`window.__kaisola.getState().setTabLayout('sidebar'); window.__kaisola.getState().setSessionRailWidth(400)`)
     await wait(160)
+    const image = await win.webContents.capturePage()
+    const target = path.join(os.tmpdir(), `kaisola-${name}.png`)
+    fs.writeFileSync(target, image.toPNG())
+    shots.push(target)
+  }
+  // Product review happens primarily in dark mode. Keep explicit, ordinary-
+  // width captures of both supported layouts alongside the geometry fixtures.
+  await win.webContents.executeJavaScript(`document.documentElement.dataset.theme = 'dark'; window.__kaisola.setState({ theme: 'dark', themeMode: 'dark' })`)
+  for (const [name, size, layout, width] of [
+    ['top-dark', [1080, 720], 'bare', null],
+    ['left-dark', [1180, 760], 'sidebar', 210],
+  ]) {
+    win.setSize(...size)
+    await win.webContents.executeJavaScript(`window.__kaisola.getState().setTabLayout(${JSON.stringify(layout)}); window.__kaisola.getState().setSessionRailWidth(${JSON.stringify(width)})`)
+    await wait(180)
     const image = await win.webContents.capturePage()
     const target = path.join(os.tmpdir(), `kaisola-${name}.png`)
     fs.writeFileSync(target, image.toPNG())

@@ -189,16 +189,24 @@ struct TerminalSessionView: View {
             .frame(height: 48)
             .background(.ultraThinMaterial)
         } else {
-            HStack(spacing: 8) {
-                Image(systemName: "eye")
-                Text(store.canControlTerminals || store.isPreview
-                     ? "View only · tap Control to type"
-                     : "View only · enable terminal control on your Mac")
+            Button {
+                guard store.canControlTerminals || store.isPreview else { return }
+                Task { await toggleControl(session) }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: store.canControlTerminals || store.isPreview ? "hand.tap" : "eye")
+                    Text(store.canControlTerminals || store.isPreview
+                         ? "Tap to type"
+                         : "View only · terminal control is disabled")
+                }
+                .font(.caption.weight(store.canControlTerminals || store.isPreview ? .semibold : .regular))
+                .foregroundStyle(store.canControlTerminals || store.isPreview ? KaisolaTheme.accent : .secondary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                .contentShape(Rectangle())
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
+            .buttonStyle(.plain)
+            .disabled(changingControl || (!store.canControlTerminals && !store.isPreview))
             .background(.ultraThinMaterial)
         }
     }

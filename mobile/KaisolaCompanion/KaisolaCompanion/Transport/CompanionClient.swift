@@ -134,11 +134,14 @@ final class CompanionClient: ObservableObject {
             if force { invalidateStreamSubscription(subscription) }
             startStreamSubscription(subscription)
         } else {
-            let wasDesired = desiredStreamSubscriptions.remove(subscription) != nil
+            desiredStreamSubscriptions.remove(subscription)
             let wasActive = activeStreamSubscriptions.contains(subscription)
             invalidateStreamSubscription(subscription)
             onStreamIssue?(sessionId, nil)
-            guard wasDesired || wasActive else { return }
+            // A subscribe that never became active has nothing remote to tear
+            // down. Skipping that no-op removes the recurring “already
+            // unsubscribed” receipt while keeping real teardown exact.
+            guard wasActive else { return }
             guard transport.state == .live else { return }
             try sendStreamSubscription(subscription, subscribed: false)
         }
@@ -154,7 +157,8 @@ final class CompanionClient: ObservableObject {
         streamSubscriptionTasks[subscription] = Task { @MainActor [weak self] in
             guard let self else { return }
             var lastMessage = "The terminal stream did not start."
-            for attempt in 0..<3 {
+            var attempt = 0
+            while true {
                 guard !Task.isCancelled,
                       self.transport.state == .live,
                       self.desiredStreamSubscriptions.contains(subscription),
@@ -178,18 +182,18 @@ final class CompanionClient: ObservableObject {
                 } catch {
                     lastMessage = (error as? LocalizedError)?.errorDescription ?? lastMessage
                 }
-                if attempt < 2 {
-                    do { try await Task.sleep(for: .milliseconds(750 * (attempt + 1))) }
-                    catch { return }
-                }
+                attempt += 1
+                // Keep healing while this terminal is on screen. A desktop
+                // relaunch can briefly publish its project before the durable
+                // broker inventory is reattached; three one-shot attempts made
+                // that harmless ordering race look permanent until a manual tap.
+                if attempt >= 3 { self.onStreamIssue?(subscription.sessionId, lastMessage) }
+                let delay = min(5_000, 500 * (1 << min(attempt, 3)))
+                do { try await Task.sleep(for: .milliseconds(delay)) }
+                catch { return }
             }
             guard self.streamSubscriptionGenerations[subscription] == generation else { return }
             self.streamSubscriptionTasks[subscription] = nil
-            if self.desiredStreamSubscriptions.contains(subscription),
-               !self.activeStreamSubscriptions.contains(subscription),
-               self.transport.state == .live {
-                self.onStreamIssue?(subscription.sessionId, lastMessage)
-            }
         }
     }
 

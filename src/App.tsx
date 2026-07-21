@@ -9,13 +9,13 @@ import { initGlassWash } from './lib/glassWash'
 import { CompanionProjectionRevisions } from './lib/companionProjection'
 import { ShellTools } from './components/shell/AgentSidebar'
 import { WorkspaceRail } from './components/shell/WorkspaceRail'
-import { ProjectTabs } from './components/shell/ProjectTabs'
+import { ProjectSessionSidebar, ProjectTabs } from './components/shell/ProjectTabs'
 import { SavedWindows } from './components/shell/SavedWindows'
 import { ProjectLauncher } from './components/shell/ProjectLauncher'
 import { CommandPalette } from './components/shell/CommandPalette'
 import { SessionCards } from './components/shell/SessionCards'
 import { shellDrag } from './components/shell/shellDrag'
-import { SessionSidebar } from './components/shell/SessionTabs'
+import { SessionTabs } from './components/shell/SessionTabs'
 import { ProvenancePopover } from './components/Provenance'
 import { ReviewFocus } from './components/ReviewFocus'
 import { McpInstallModal } from './components/shell/McpInstallModal'
@@ -352,13 +352,15 @@ async function snapshotBackground(pid: string, ws: string | null, label: string)
 function TabMenuSync() {
   const tabs = useKaisola((s) => s.projectTabs)
   const activeId = useKaisola((s) => s.activeProjectId)
+  const tabLayout = useKaisola((s) => s.tabLayout)
   useEffect(() => {
     if (!isDesktop) return
     bridge.windows?.tabsChanged?.(tabs.map((t) => ({ id: t.id, title: projectLabel(t), active: t.id === activeId })))
+    bridge.windows?.navigationLayoutChanged?.(tabLayout)
     const active = tabs.find((t) => t.id === activeId)
     // a lone unnamed launcher tab → empty title so main shows just the app name
     bridge.windows?.setTitle?.(active && (active.title || active.workspacePath) ? projectLabel(active) : '')
-  }, [tabs, activeId])
+  }, [tabs, activeId, tabLayout])
   return null
 }
 
@@ -570,6 +572,8 @@ function KaisolaApp() {
       w?.onCloseTab?.(() => { const s = useKaisola.getState(); s.closeProject(s.activeProjectId) }),
       w?.onReopenTab?.(() => useKaisola.getState().reopenClosedProject()),
       w?.onActivateTab?.((id) => useKaisola.getState().switchProject(id)),
+      w?.onNavigationLayout?.((layout) => useKaisola.getState().setTabLayout(layout)),
+      w?.onOpenSettings?.((pane) => useKaisola.getState().setSettingsOpen(true, pane)),
       // Chrome-style transfer: insert at the cursor's tab-strip position, apply
       // atomically, then ACK. The source keeps its copy until this succeeds.
       w?.onAdoptProject?.((raw) => {
@@ -577,7 +581,7 @@ function KaisolaApp() {
         let beforeId: string | undefined
         if (Number.isFinite(payload.dropX)) {
           const x = Number(payload.dropX)
-          const before = [...document.querySelectorAll<HTMLElement>('.ptab[data-project-id]')]
+          const before = [...document.querySelectorAll<HTMLElement>('.ptab[data-project-id], .project-tree-node[data-project-id]')]
             .find((el) => x < el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2)
           beforeId = before?.dataset.projectId
         }
@@ -902,14 +906,16 @@ function KaisolaApp() {
 
   const studio = layoutMode === 'studio'
   const showCanvas = !studio || canvasOpen
-  const sidebarSessions = studio && tabLayout === 'sidebar'
+  const sidebarNavigation = tabLayout === 'sidebar'
+  const topNavigation = !sidebarNavigation
 
   return (
     <div className="app" data-sidebar={false} data-layout={layoutMode}>
-      {/* grid row 1: the project strip (desktop main window only; on web/pop it
-          isn't rendered and --tabstrip-h collapses the row to 0) */}
-      {isDesktop && !POP_TERMINAL_ID && <ProjectTabs />}
-      {isDesktop && !POP_TERMINAL_ID && <SavedWindows />}
+      {/* Top mode owns two explicit rows: projects first, sessions second. Left
+          mode collapses both rows and puts the same navigation in one tree. */}
+      {isDesktop && !POP_TERMINAL_ID && topNavigation && <ProjectTabs />}
+      {isDesktop && !POP_TERMINAL_ID && topNavigation && <SavedWindows />}
+      {topNavigation && <div className="top-session-row"><SessionTabs /></div>}
       {isDesktop && <TabMenuSync />}
       {isDesktop && !POP_TERMINAL_ID && <AttentionSync />}
       {isDesktop && !POP_TERMINAL_ID && <CompanionProjectionSync />}
@@ -917,15 +923,15 @@ function KaisolaApp() {
       <div
         className="app-body"
         data-layout={layoutMode}
-        data-session-nav={sidebarSessions ? 'sidebar' : 'top'}
+        data-session-nav={sidebarNavigation ? 'sidebar' : 'top'}
         data-rail={studio && !railOpen ? 'closed' : undefined}
         style={(railWidth || sessionRailWidth) ? ({
           ...(railWidth ? { '--wsrail-w': `${railWidth}px` } : {}),
           ...(sessionRailWidth ? { '--sessionrail-w': `${sessionRailWidth}px` } : {}),
         } as CSSProperties) : undefined}
       >
-        {sidebarSessions && <SessionSidebar />}
-        {studio && railOpen && !sidebarSessions && <WorkspaceRail />}
+        {sidebarNavigation && <ProjectSessionSidebar />}
+        {studio && railOpen && !sidebarNavigation && <WorkspaceRail />}
         {/* session cards on the left, the files/canvas card on the right
             (minimizable — when hidden the cards take the whole work row) */}
         <div className="work-row">
@@ -957,8 +963,8 @@ function KaisolaApp() {
             </div>
           )}
         </div>
-        {sidebarSessions && railOpen && <WorkspaceRail side="right" />}
-        {(!studio || (!sidebarSessions && !railOpen)) && <ShellSidebarFooter floating />}
+        {sidebarNavigation && studio && railOpen && <WorkspaceRail side="right" />}
+        {!isDesktop && !sidebarNavigation && <ShellSidebarFooter floating />}
       </div>
       {/* Desktop main windows keep their permanent panel switches in the
           project strip. This utility fallback covers web + pop windows only. AFTER

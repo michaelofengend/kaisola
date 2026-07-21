@@ -19,7 +19,7 @@ export const SETTINGS_TEMPLATE = `// Kaisola settings — applied on launch and 
   // "termFontWeight": 500,                  // 400 | 500 | 700
   // "termCursorColor": "auto",              // "auto" (match text) | "#rrggbb"
   // "perfMode": "eco",                      // "glass" (native) | "eco" (opaque, lowest memory)
-  // "tabLayout": "sidebar",                 // sidebar | shelf | bare | runway | flat | compact
+  // "tabLayout": "sidebar",                 // sidebar (Left) | bare (Top)
   // "wordDiffs": true,                      // word-level highlights in research diffs
   // "showCosts": true,                      // $-cost chips on Claude session cards
   // "inbox": true,                          // cross-project needs-you inbox in the tab strip
@@ -106,7 +106,9 @@ function applySettings(raw: unknown) {
   if (typeof cfg.termCursorColor === 'string') s.setTermCursorColor(cfg.termCursorColor)
   if (cfg.perfMode === 'glass' || cfg.perfMode === 'eco') s.setPerfMode(cfg.perfMode)
   if (typeof cfg.tabLayout === 'string' && ['sidebar', 'shelf', 'bare', 'runway', 'flat', 'compact'].includes(cfg.tabLayout)) {
-    s.setTabLayout(cfg.tabLayout as 'sidebar' | 'shelf' | 'bare' | 'runway' | 'flat' | 'compact')
+    // Old horizontal styles remain valid input and migrate to the single Top
+    // layout so an existing settings.json never strands the shell.
+    s.setTabLayout(cfg.tabLayout === 'sidebar' ? 'sidebar' : 'bare')
   }
   if (typeof cfg.wordDiffs === 'boolean') s.setWordDiffs(cfg.wordDiffs)
   if (typeof cfg.showCosts === 'boolean') s.setShowCosts(cfg.showCosts)

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { useKaisola, dockShowsLiveCard, shellConfigDir, clampTermLineHeight, TERM_LINE_HEIGHTS, type ThemeMode, type PerfMode, type TabLayout, type CustomAgent, type TermBackground } from '../store/store'
+import { useKaisola, dockShowsLiveCard, shellConfigDir, clampTermLineHeight, TERM_LINE_HEIGHTS, type ThemeMode, type PerfMode, type CustomAgent, type TermBackground } from '../store/store'
 import { bridge, isDesktop, type AcpAgent, type AppAuthStatus } from '../lib/bridge'
 import type { AutonomyLevel } from '../domain/types'
 import { useAgentRegistry, openAgentSession, type RegistryAgent } from '../lib/registry'
@@ -850,44 +850,17 @@ export function Settings() {
                     />
                   </div>
                 </div>
-                <div className="settings-row" data-setting="session-placement">
-                  <span className="settings-row-label">Session placement <span className="faint" style={{ fontWeight: 400 }}>· left or top</span></span>
-                  <div className="settings-row-control">
-                    <Dropdown
-                      ariaLabel="Session placement"
-                      value={tabLayout === 'sidebar' ? 'left' : 'top'}
-                      options={[
-                        { value: 'left', name: 'Left sidebar · default' },
-                        { value: 'top', name: 'Across top' },
-                      ]}
-                      onSelect={(v) => setTabLayout(v === 'left' ? 'sidebar' : 'bare')}
-                      align="right"
-                      title="Choose whether session tabs appear on the left or across the top"
-                    />
+                <div className="settings-choice-block" data-setting="navigation-layout">
+                  <div className="settings-choice-head"><span>Navigation layout</span><small>Switches live and stays selected after restart</small></div>
+                  <div className="settings-choice-grid settings-choice-grid-two" role="group" aria-label="Navigation layout">
+                    {([
+                      { value: 'sidebar', name: 'Left', detail: 'Projects with nested sessions', icon: 'PanelsTopLeft' },
+                      { value: 'bare', name: 'Top', detail: 'Projects row, then sessions', icon: 'PanelTop' },
+                    ] as const).map((choice) => <button type="button" key={choice.value} data-active={tabLayout === choice.value || undefined} aria-pressed={tabLayout === choice.value} onClick={() => setTabLayout(choice.value)}>
+                      <Icon name={choice.icon} size={14} /><span><strong>{choice.name}</strong><small>{choice.detail}</small></span>
+                    </button>)}
                   </div>
                 </div>
-                <details className="settings-layout-advanced">
-                  <summary>Advanced session styles</summary>
-                  <div className="settings-row" data-setting="advanced-session-style">
-                    <span className="settings-row-label">Top tab style <span className="faint" style={{ fontWeight: 400 }}>· optional</span></span>
-                    <div className="settings-row-control">
-                      <Dropdown
-                        ariaLabel="Top tab style"
-                        value={tabLayout === 'sidebar' ? 'bare' : tabLayout}
-                        options={[
-                          { value: 'bare', name: 'Standard' },
-                          { value: 'shelf', name: 'Nested shelf' },
-                          { value: 'runway', name: 'Neutral runway' },
-                          { value: 'flat', name: 'Flat labels' },
-                          { value: 'compact', name: 'Compact row' },
-                        ]}
-                        onSelect={(v) => setTabLayout(v as TabLayout)}
-                        align="right"
-                        title="Optional presentation styles for top session tabs"
-                      />
-                    </div>
-                  </div>
-                </details>
                 {([
                   { label: 'Session cost chips', hint: 'what each agent session cost', value: showCosts, set: setShowCosts, title: 'A quiet $ chip on supported agent session cards — token totals on hover' },
                   { label: 'Cross-project inbox', hint: 'everything that needs you', value: inbox, set: setInbox, title: 'One bell in the tab strip rolling up waiting sessions and gates across every project tab' },
@@ -1352,7 +1325,7 @@ export function Settings() {
 /**
  * Software updates — the running version, a manual check, and the live status
  * of the background flow (checks on launch + hourly, downloads silently,
- * the tab-strip pill appears when a restart applies it).
+ * Settings owns the restart action so the navigation chrome stays quiet.
  */
 function UpdatesRow() {
   const u = useUpdateState()
@@ -1397,7 +1370,7 @@ function UpdatesRow() {
         </div>
       </div>
       {error && <p className="settings-note" style={{ color: 'var(--danger)' }}>{error}</p>}
-      <p className="settings-note">New releases download themselves — Kaisola checks at launch, when the window regains focus, and hourly. The tab-strip pill restarts into the new build; quitting applies it too.</p>
+      <p className="settings-note">New releases download themselves — Kaisola checks at launch, when the window regains focus, and hourly. Return here to restart into a ready build; quitting applies it too.</p>
     </>
   )
 }

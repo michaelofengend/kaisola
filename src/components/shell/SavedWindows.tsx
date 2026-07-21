@@ -19,7 +19,7 @@ const statusLabel = (saved: SavedWindowSummary) => saved.current
 
 const windowLabel = (saved: SavedWindowSummary) => saved.title || (saved.slot == null ? 'Primary window' : `Window ${saved.slot}`)
 
-export function SavedWindows() {
+export function SavedWindows({ hostSelector = '.tabstrip' }: { hostSelector?: string }) {
   const [host, setHost] = useState<Element | null>(null)
   const [open, setOpen] = useState(false)
   const [saved, setSaved] = useState<SavedWindowSummary[]>([])
@@ -42,8 +42,8 @@ export function SavedWindows() {
   }, [])
 
   useLayoutEffect(() => {
-    if (isDesktop) setHost(document.querySelector('.tabstrip'))
-  }, [])
+    if (isDesktop) setHost(document.querySelector(hostSelector))
+  }, [hostSelector])
   useEffect(() => {
     if (!isDesktop) return
     void refresh()

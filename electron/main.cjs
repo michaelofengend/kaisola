@@ -4,7 +4,7 @@
 // the UI is fully usable without Electron. Electron adds the native shell plus
 // the privileged "tools" the research IDE needs (model calls, filesystem,
 // running experiments) — all behind a locked-down preload bridge.
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, screen, session, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, safeStorage, screen, session, shell } = require('electron')
 const crypto = require('node:crypto')
 const path = require('node:path')
 const fs = require('node:fs')
@@ -187,6 +187,7 @@ function loadAppIcon() {
 // keep it per full window so the Window menu can mirror the FOCUSED window's
 // tabs (the application menu is global on macOS).
 const tabsByWc = new Map() // webContents.id → { id, title, active }[]
+const navigationByWc = new Map() // webContents.id → 'sidebar' | 'bare'
 const browserGuests = new BrowserGuestRegistry()
 
 // tab:* menu actions only make sense in a full window with a tab strip — never
@@ -222,13 +223,30 @@ function windowTabMenuItems() {
   ]
 }
 
+function focusedNavigationLayout() {
+  const win = BrowserWindow.getFocusedWindow()
+  if (!win || win.webContents.isDestroyed() || win.webContents.getURL().includes('pop=')) return 'sidebar'
+  return navigationByWc.get(win.webContents.id) === 'bare' ? 'bare' : 'sidebar'
+}
+
 function installAppMenu() {
   if (process.platform !== 'darwin') return
+  const navigationLayout = focusedNavigationLayout()
   const template = [
     {
       label: APP_NAME,
       submenu: [
         { role: 'about', label: `About ${APP_NAME}` },
+        { type: 'separator' },
+        {
+          label: 'Settings…',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => sendToFocusedTabWindow('settings:open'),
+        },
+        {
+          label: 'Software Updates…',
+          click: () => sendToFocusedTabWindow('settings:open', 'general'),
+        },
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
@@ -299,6 +317,24 @@ function installAppMenu() {
       label: 'View',
       submenu: [
         ...(isDev ? [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }] : []),
+        {
+          label: 'Navigation Layout',
+          submenu: [
+            {
+              label: 'Left Sidebar',
+              type: 'radio',
+              checked: navigationLayout === 'sidebar',
+              click: () => sendToFocusedTabWindow('navigation:layout', 'sidebar'),
+            },
+            {
+              label: 'Top Bar',
+              type: 'radio',
+              checked: navigationLayout === 'bare',
+              click: () => sendToFocusedTabWindow('navigation:layout', 'bare'),
+            },
+          ],
+        },
+        { type: 'separator' },
         { role: 'resetZoom' },
         { role: 'zoomIn' },
         { role: 'zoomOut' },
@@ -632,6 +668,7 @@ function createWindow(opts = {}) {
     nativeGlass.active = false
     nativeGlass.fallback = 'closed'
     tabsByWc.delete(wcId)
+    navigationByWc.delete(wcId)
     pendingAdoptions.delete(wcId)
     adoptionReadyWc.delete(wcId)
     clearDeleteRendererWaiters(wcId)
@@ -1227,9 +1264,13 @@ function existingProjectDropTarget(source, point) {
       candidate.isVisible() && !candidate.isMinimized() && tabsByWc.has(candidate.webContents.id))
     .filter((candidate) => {
       const b = candidate.getBounds()
-      // The frameless project strip is 40px; a small tolerance makes high-DPI
-      // and cross-display drops forgiving without accepting the editor body.
-      return point.x >= b.x && point.x <= b.x + b.width && point.y >= b.y && point.y <= b.y + 56
+      const layout = navigationByWc.get(candidate.webContents.id) === 'bare' ? 'bare' : 'sidebar'
+      // Top accepts the project strip; Left accepts the project-tree column.
+      // Keep both hit regions bounded so dropping over actual work never moves
+      // a project accidentally.
+      return layout === 'bare'
+        ? point.x >= b.x && point.x <= b.x + b.width && point.y >= b.y && point.y <= b.y + 56
+        : point.x >= b.x && point.x <= b.x + Math.min(420, b.width * 0.4) && point.y >= b.y && point.y <= b.y + b.height
     })
     .sort((a, b) => (b.__kaisolaLastFocus || 0) - (a.__kaisolaLastFocus || 0))[0] ?? null
 }
@@ -1523,6 +1564,16 @@ ipcMain.on('tabs:changed', (e, list) => {
   installAppMenu()
 })
 
+// Keep the global macOS View-menu checkmark aligned with the focused window's
+// persistent renderer preference. Menu clicks travel back over the inverse
+// navigation:layout event, so Settings, buttons, and native menu are one state.
+ipcMain.on('navigation:changed', (e, layout) => {
+  if (e.sender.isDestroyed()) return
+  navigationByWc.set(e.sender.id, layout === 'bare' ? 'bare' : 'sidebar')
+  const focused = BrowserWindow.getFocusedWindow()
+  if (focused?.webContents.id === e.sender.id) installAppMenu()
+})
+
 // Sync the native window title to the active project name (empty → the app name).
 ipcMain.on('win:set-title', (e, title) => {
   const win = BrowserWindow.fromWebContents(e.sender)
@@ -1653,7 +1704,7 @@ ipcMain.on('shell:app-theme', (e, theme) => {
   applyAppTheme(e.sender, theme)
 })
 
-if (hasSingleInstanceLock) app.whenReady().then(() => {
+if (hasSingleInstanceLock) app.whenReady().then(async () => {
   // Electron otherwise approves permission requests by default. Browser cards
   // get no ambient permissions; the app renderer gets only its one required,
   // explicitly enumerated permission while it remains on the trusted entry.
@@ -1730,6 +1781,14 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
       tokenProvider: currentFirebaseIdToken,
       configProvider: readPublicConfig,
     }),
+    setBackgroundLaunchEnabled: (enabled) => {
+      // A paired phone should find its Mac after a login/restart even before a
+      // Kaisola window is opened. Development never mutates the user's login
+      // items; packaged Companion follows the same durable on/off preference.
+      if (process.platform === 'darwin' && app.isPackaged) {
+        app.setLoginItemSettings({ openAtLogin: enabled === true })
+      }
+    },
     gatewayOptions: {
       epoch: companionDesktopEpoch,
       terminalObserver: subscribeTerminalObserver,
@@ -1771,7 +1830,17 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
     service: attentionService,
     projectIdsForWindow: (win) => companionDesktopState.projectIdsForWindow(win.__kaisolaSavedId),
   })
-  restoreSavedWindowsOnLaunch()
+  const companionState = await companionHandler.restore()
+  const refreshCompanion = () => { void companionHandler?.refresh() }
+  powerMonitor.on('resume', refreshCompanion)
+  powerMonitor.on('unlock-screen', refreshCompanion)
+  let openedAtLogin = false
+  if (process.platform === 'darwin' && app.isPackaged) {
+    try { openedAtLogin = app.getLoginItemSettings().wasOpenedAtLogin === true } catch { /* normal launch */ }
+  }
+  // Login launch keeps the encrypted listener alive without opening a window.
+  // Clicking the Dock icon later runs the normal `activate` path below.
+  if (!(openedAtLogin && companionState.enabled)) restoreSavedWindowsOnLaunch()
   app.on('activate', () => {
     if (visibleFullWindows().length === 0) activateSavedWindows()
   })

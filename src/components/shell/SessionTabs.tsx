@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { CLOSED_SESSION_RETENTION_MS, useKaisola, sessionOrderIds } from '../../store/store'
 import { bridge } from '../../lib/bridge'
 import { sessionHue, terminalAgentKey } from '../../lib/sessionHue'
@@ -8,7 +8,6 @@ import { Icon } from '../Icon'
 import { ProviderIcon } from '../ProviderIcon'
 import { Dropdown } from '../Dropdown'
 import { CostChip } from './CostChip'
-import { ShellSidebarFooter } from './ShellSidebarFooter'
 import { isRunningMeshPhase } from '../../lib/meshPolicy'
 import { useClickAway } from '../../lib/useClickAway'
 
@@ -464,8 +463,8 @@ export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orien
           type="button"
           className="stabs-sidebar-toggle"
           onClick={() => setTabLayout('sidebar')}
-          title="Move sessions to the left sidebar"
-          aria-label="Move sessions to the left sidebar"
+          title="Use Left navigation layout"
+          aria-label="Use Left navigation layout"
         >
           <Icon name="PanelLeftOpen" size={12} />
         </button>
@@ -570,84 +569,6 @@ export function SessionTabs({ orientation = 'horizontal', filter = '' }: { orien
         </div>
       )}
     </div>
-  )
-}
-
-/** The default session navigator: one slim, persistent rail on the left. */
-export function SessionSidebar() {
-  const setTabLayout = useKaisola((s) => s.setTabLayout)
-  const setSessionRailWidth = useKaisola((s) => s.setSessionRailWidth)
-  const sessionCount = useKaisola((s) =>
-    s.assistantThreads.reduce((count, thread) => count + (thread.groupParentId ? 0 : 1), 0)
-      + s.terminals.length
-      + s.agentTerminals.length
-      + s.panels.length,
-  )
-  const [filter, setFilter] = useState('')
-  useEffect(() => {
-    if (sessionCount <= 20 && filter) setFilter('')
-  }, [filter, sessionCount])
-  const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    event.preventDefault()
-    const handle = event.currentTarget
-    handle.setPointerCapture(event.pointerId)
-    document.body.setAttribute('data-shell-drag', '1')
-    const sidebar = handle.parentElement
-    const startX = event.clientX
-    const startWidth = sidebar?.getBoundingClientRect().width ?? 188
-    const onMove = (move: PointerEvent) => setSessionRailWidth(startWidth + move.clientX - startX)
-    const onUp = () => {
-      document.body.removeAttribute('data-shell-drag')
-      handle.removeEventListener('pointermove', onMove)
-      handle.removeEventListener('pointerup', onUp)
-      handle.removeEventListener('pointercancel', onUp)
-    }
-    handle.addEventListener('pointermove', onMove)
-    handle.addEventListener('pointerup', onUp)
-    handle.addEventListener('pointercancel', onUp)
-  }
-  return (
-    <aside className="session-sidebar" aria-label="Session sidebar">
-      <div className="session-sidebar-head">
-        <span>Sessions</span>
-        <button type="button" onClick={() => setTabLayout('bare')} title="Move sessions across the top" aria-label="Move sessions across the top">
-          <Icon name="PanelTop" size={13} />
-        </button>
-      </div>
-      {sessionCount > 20 && (
-        <label className="session-filter">
-          <Icon name="Search" size={12} />
-          <input
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-            onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); setFilter('') } }}
-            placeholder="Filter sessions"
-            aria-label="Filter sessions"
-            spellCheck={false}
-          />
-          {filter && <button type="button" onClick={() => setFilter('')} aria-label="Clear session filter" title="Clear"><Icon name="X" size={11} /></button>}
-        </label>
-      )}
-      <SessionTabs orientation="vertical" filter={filter} />
-      <ShellSidebarFooter />
-      <div
-        className="session-sidebar-resize"
-        onPointerDown={startResize}
-        onDoubleClick={() => setSessionRailWidth(null)}
-        onKeyDown={(event) => {
-          if (event.key === 'Home') { event.preventDefault(); setSessionRailWidth(null); return }
-          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-          event.preventDefault()
-          const current = event.currentTarget.parentElement?.getBoundingClientRect().width ?? 188
-          setSessionRailWidth(current + (event.key === 'ArrowLeft' ? -20 : 20))
-        }}
-        role="separator"
-        aria-label="Resize session sidebar"
-        aria-orientation="vertical"
-        tabIndex={0}
-        title="Drag to resize sessions · double-click to reset"
-      />
-    </aside>
   )
 }
 

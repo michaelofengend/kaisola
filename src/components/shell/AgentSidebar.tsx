@@ -3,9 +3,9 @@ import { Icon } from '../Icon'
 import { LimitsButton } from './LimitsButton'
 
 /**
- * The sidebar utility cluster stays deliberately small: find, usage, and
- * settings. File-tree and preview visibility live in the permanent top-right
- * pair so they never move when either surface is hidden.
+ * The global utility cluster stays deliberately small: find, usage, and
+ * settings. Top navigation places it at the upper right; Left navigation
+ * keeps the identical controls at the bottom of the project tree.
  */
 export function ShellTools({ includeSettings = true }: { includeSettings?: boolean }) {
   const openPalette = useKaisola((s) => s.openPalette)

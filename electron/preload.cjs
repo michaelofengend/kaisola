@@ -537,9 +537,20 @@ const bridge = {
       ipcRenderer.on('tab:activate', listener)
       return () => ipcRenderer.removeListener('tab:activate', listener)
     },
+    onNavigationLayout: (cb) => {
+      const listener = (_e, layout) => cb(layout)
+      ipcRenderer.on('navigation:layout', listener)
+      return () => ipcRenderer.removeListener('navigation:layout', listener)
+    },
+    onOpenSettings: (cb) => {
+      const listener = (_e, pane) => cb(pane)
+      ipcRenderer.on('settings:open', listener)
+      return () => ipcRenderer.removeListener('settings:open', listener)
+    },
     // renderer → main: push the current tab list (drives the Window menu) and
     // sync the native window title to the active project.
     tabsChanged: (list) => ipcRenderer.send('tabs:changed', list),
+    navigationLayoutChanged: (layout) => ipcRenderer.send('navigation:changed', layout),
     setTitle: (title) => ipcRenderer.send('win:set-title', title),
   },
   // App-wide attention: main aggregates every renderer into the macOS dock

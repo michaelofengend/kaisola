@@ -40,7 +40,7 @@
   --session-glass-saturate: 1.5;
   --content-glass-blur: 120px;
   display: grid;
-  grid-template-rows: var(--tabstrip-h) 1fr; /* row 1: project tab strip · row 2: app body */
+  grid-template-rows: var(--tabstrip-h) var(--sessionstrip-h) minmax(0, 1fr);
   /* pin the single column to the window: an implicit `auto` column sizes to
      max-content, so a long tab strip silently widened it past the viewport
      and pushed the tools cluster off-screen (minmax(0,1fr) also lets the
@@ -107,10 +107,15 @@
    the desktop main window only: `data-shell` already gates the desktop chrome
    (global.css:33), so on web the token drops to 0 and the row collapses (the
    element isn't rendered there either). No `data-tabs` variant is needed. */
-:root { --tabstrip-h: 40px; }
-:root:not([data-shell='desktop']) { --tabstrip-h: 0px; }
+:root {
+  --tabstrip-h: 0px;
+  --sessionstrip-h: 0px;
+}
+:root[data-shell='desktop'][data-tab-layout='bare'] { --tabstrip-h: 40px; }
+:root[data-tab-layout='bare'] { --sessionstrip-h: 36px; }
 
 .tabstrip {
+  grid-row: 1;
   display: flex;
   align-items: stretch;
   height: var(--tabstrip-h);
@@ -709,8 +714,8 @@
 .inbox-row-detail { flex-shrink: 0; color: var(--text-3); font-size: var(--fs-11); }
 .inbox-empty { padding: var(--sp-3); color: var(--text-3); font-size: var(--fs-12); }
 
-/* Global controls live with navigation, not in the project tab strip. The
-   active left sidebar owns one quiet utility row. */
+/* Global controls form one compact cluster. Desktop places it at the far right
+   of the project strip; the same component remains a floating web fallback. */
 .shell-sidebar-footer {
   position: relative;
   display: flex;
@@ -776,6 +781,36 @@
   background: var(--bg-2);
   box-shadow: var(--shadow-2);
 }
+.shell-sidebar-footer[data-topbar] {
+  align-self: center;
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 0 0 var(--sp-1);
+  margin-left: 1px;
+  border-top: 0;
+  border-left: 1px solid var(--border-faint);
+  background: transparent;
+}
+.shell-sidebar-footer[data-topbar] .shell-sidebar-footer-tools {
+  width: auto;
+  gap: 1px;
+}
+.shell-sidebar-footer[data-topbar] .shell-sidebar-footer-spacer {
+  flex: 0 0 1px;
+  min-width: 1px;
+  width: 1px;
+  height: 18px;
+  margin: 0 var(--sp-1);
+  background: var(--border-faint);
+}
+.shell-sidebar-footer[data-topbar] .shell-sidebar-footer-spacer::after { display: none; }
+.shell-sidebar-footer[data-topbar] .inbox-menu {
+  top: calc(100% + 6px);
+  right: 0;
+  bottom: auto;
+  left: auto;
+  min-width: 280px;
+}
 
 /* traffic lights ride at the strip's left — reuse the shared .lights/.light
    rules (below), just re-centered for the shorter strip. Visible in
@@ -790,8 +825,28 @@
    .top-progress lives in components.css (imported before this file), so this
    later same-specificity rule wins on `top`; .app-body is grid row 2 already. */
 .top-progress {
-  top: var(--tabstrip-h);
+  top: calc(var(--tabstrip-h) + var(--sessionstrip-h));
 }
+
+/* Top navigation is intentionally two rows. Sessions never squeeze into the
+   project row, and the row spans the workspace rather than only the dock. */
+.top-session-row {
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  padding: 0 var(--sp-3) 4px;
+  -webkit-app-region: drag;
+}
+.top-session-row > .stabs {
+  width: 100%;
+  height: 32px;
+  margin: 0;
+  padding: 1px 0;
+  flex: 1 1 auto;
+}
+.top-session-row .stabs-track { flex: 0 1 auto; }
 
 /* ── Project launcher — the empty-tab canvas: recents + open folder ──────── */
 .plaunch {
@@ -909,7 +964,7 @@
 
 .app-body {
   /* workspace rail (sessions + files) · canvas+dock · agent sidebar */
-  grid-row: 2; /* always the content row — the tab strip owns row 1 (0px on web, so it collapses) */
+  grid-row: 3; /* navigation rows above collapse to 0 in Left mode */
   display: grid;
   grid-template-columns: var(--wsrail-w) var(--sidebar-w) 1fr;
   gap: var(--sp-4);
@@ -1027,6 +1082,9 @@
 }
 .app[data-sidebar='false'] .app-body[data-layout='focus'] {
   grid-template-columns: minmax(0, 1fr);
+}
+.app[data-sidebar='false'] .app-body[data-layout='focus'][data-session-nav='sidebar'] {
+  grid-template-columns: var(--sessionrail-w) minmax(0, 1fr);
 }
 .app-body[data-layout='focus'] .work-row,
 .app-body[data-layout='focus'] .canvas-wrap {
@@ -1535,7 +1593,9 @@
   font-size: var(--fs-10);
   font-weight: var(--fw-medium);
 }
-/* the close affordance is hidden until the tab is hovered or open */
+/* Session actions stay out of the information hierarchy until interaction.
+   Active state already has a fill/rail; repeating it with two permanent icons
+   made both navigation modes look much denser than they are. */
 .stab-close {
   display: inline-flex;
   align-items: center;
@@ -1546,7 +1606,7 @@
   transition: opacity var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 .stab:hover .stab-close,
-.stab[data-active='true'] .stab-close {
+.stab:focus-within .stab-close {
   opacity: 1;
 }
 .stab-close:hover {
@@ -1568,7 +1628,6 @@
   opacity: 1;
 }
 .stab-split[data-on='true'] {
-  opacity: 1;
   color: var(--sid, var(--accent));
 }
 .stab-split:hover {
@@ -1634,16 +1693,11 @@
   display: none;
 }
 
-/* ── Live project/session hierarchy choices (Settings → Interface) ──────────
-   The default is intentionally the quietest. All variants are static paint;
-   switching them never remounts a terminal/card or creates a compositor layer. */
-:root:not([data-tab-layout='shelf']) .ptab[data-active='true']::after {
-  display: none;
-}
-:root:not([data-tab-layout='shelf']) .dock-col {
-  gap: var(--sp-3);
-}
-:root:not([data-tab-layout='shelf']) .stabs {
+/* Both navigation arrangements use the same sparse session treatment; only
+   their geometry changes. Switching never remounts a terminal or agent card. */
+.ptab[data-active='true']::after { display: none; }
+.dock-col { gap: var(--sp-3); }
+.stabs {
   height: 30px;
   min-width: 0;
   margin: 0;
@@ -1654,125 +1708,8 @@
   background: transparent;
   box-shadow: none;
 }
-:root:not([data-tab-layout='shelf']) .stabs-project-anchor {
-  display: none;
-}
-
-/* Bare hierarchy: row size + the existing project/session type scale do all
-   the work. No connector, underline, tint field, or outside container. */
-:root[data-tab-layout='bare'] .stabs {
-  padding-left: 2px;
-}
-
-/* Neutral runway: one faint neutral field, never the project's accent. */
-:root[data-tab-layout='runway'] .stabs {
-  height: 32px;
-  margin: 0 3px;
-  padding: 2px 5px;
-  border-radius: var(--r-2);
-  background: color-mix(in srgb, var(--bg-2) 64%, transparent);
-}
-:root[data-perf='eco'][data-tab-layout='runway'] .stabs {
-  background: var(--bg-1);
-}
-
-/* Flat labels: icon + name are enough. The active session is distinguished by
-   type weight and full-contrast ink, leaving every pill/border slot empty. */
-:root[data-tab-layout='flat'] .stabs {
-  padding-left: 4px;
-}
-:root[data-tab-layout='flat'] .stabs-track {
-  gap: var(--sp-4);
-}
-:root[data-tab-layout='flat'] .stab {
-  width: auto;
-  min-width: 42px;
-  max-width: 170px;
-  padding: 0 var(--sp-1);
-  border-color: transparent;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-:root[data-tab-layout='flat'] .stab:hover {
-  border-color: transparent;
-  background: transparent;
-  color: var(--text-1);
-}
-:root[data-tab-layout='flat'] .stab[data-active='true'] {
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-  color: var(--text-0);
-  font-weight: var(--fw-semibold);
-}
-:root[data-tab-layout='flat'] .stabs .drop-btn {
-  border-color: transparent;
-  background: transparent;
-}
-
-/* Compact row is the only structural variant: ProjectTabs owns the one live
-   SessionTabs instance, while SessionCards omits its ordinary second row. */
-.compact-session-slot {
-  display: flex;
-  align-items: center;
-  align-self: center;
-  flex: 0 1 52%;
-  min-width: 112px;
-  max-width: 720px;
-  height: 32px;
-  margin-left: var(--sp-2);
-  padding-left: var(--sp-2);
-  border-left: 1px solid var(--border-faint);
-  -webkit-app-region: drag;
-}
-.compact-session-slot .stabs {
-  flex: 1 1 auto;
-  width: 100%;
-  height: 30px;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-.compact-session-slot .stabs-track {
-  flex: 1 1 auto;
-}
-.compact-session-slot .stabs-project-anchor {
-  display: none;
-}
-.compact-session-slot .stab {
-  width: auto;
-  min-width: 46px;
-  max-width: 132px;
-  height: 26px;
-  padding: 0 var(--sp-2);
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-.compact-session-slot .stab:hover {
-  background: var(--hover-overlay);
-  border-color: transparent;
-}
-.compact-session-slot .stab[data-active='true'] {
-  background: color-mix(in srgb, var(--bg-1) 92%, transparent);
-  border-color: var(--border-faint);
-  box-shadow: none;
-}
-.compact-session-slot .stabs .drop-btn {
-  width: 24px;
-  height: 24px;
-  margin-left: 2px;
-  border-color: transparent;
-  background: transparent;
-}
-:root[data-tab-layout='compact'] .tabstrip-track .ptab {
-  width: 168px;
-}
+.stabs-project-anchor { display: none; }
+.top-session-row .stabs { padding-left: 2px; }
 /* ── pop-out window: one glass terminal card filling the window ──────────── */
 .pop-app {
   display: flex;
@@ -1984,6 +1921,234 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+}
+.project-session-sidebar {
+  --project-row-h: 31px;
+}
+.project-sidebar-titlebar {
+  height: 44px;
+  flex: 0 0 44px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2) 0 var(--sp-4);
+  -webkit-app-region: drag;
+}
+.project-sidebar-titlebar .lights {
+  flex: 0 0 auto;
+  gap: 7px;
+}
+.project-sidebar-drag {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: var(--sp-2);
+  -webkit-app-region: drag !important;
+}
+.project-sidebar-window-slot {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+.project-sidebar-layout,
+.project-tree-more,
+.project-tree-disclosure {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  border-radius: var(--r-2);
+  -webkit-app-region: no-drag;
+}
+.project-sidebar-layout {
+  width: 26px;
+  height: 26px;
+}
+.project-sidebar-layout:hover,
+.project-tree-more:hover,
+.project-tree-disclosure:hover {
+  color: var(--text-0);
+  background: var(--hover-overlay);
+}
+.project-tree-head {
+  height: 34px;
+  flex: 0 0 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--sp-2) 0 var(--sp-4);
+  color: var(--text-3);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+.project-tree-head > span { flex: 1 1 auto; }
+.project-tree-head .tabstrip-new {
+  margin: 0;
+}
+.project-tree-head .tabstrip-new-btn,
+.project-tree-head .drop-btn {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+}
+.project-tree-head .drop-btn-label { display: none; }
+.project-tree-head .drop-caret { width: 11px; height: 11px; }
+.project-tree-head .tabstrip-new-btn:hover,
+.project-tree-head .drop-btn:hover { color: var(--text-0); background: var(--hover-overlay); }
+.project-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 var(--sp-2) var(--sp-3);
+  -webkit-app-region: no-drag;
+}
+.project-tree-node {
+  min-width: 0;
+}
+.project-tree-row {
+  height: var(--project-row-h);
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: var(--r-2);
+  color: var(--text-2);
+}
+.project-tree-row:hover { background: var(--hover-overlay); color: var(--text-1); }
+.project-tree-row[data-active] {
+  color: var(--text-0);
+  background: color-mix(in srgb, var(--app-active-glass-tint) 22%, transparent);
+}
+.project-tree-disclosure {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+}
+.project-tree-node[aria-expanded='true'] .project-tree-disclosure svg { transform: rotate(90deg); }
+.project-tree-disclosure svg { transition: transform var(--dur-2) var(--ease-out); }
+.project-tree-select {
+  height: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-1);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  text-align: left;
+}
+.project-tree-select svg { color: var(--ptab-hue, var(--accent)); flex: 0 0 auto; }
+.project-tree-more {
+  width: 25px;
+  height: 25px;
+  flex: 0 0 25px;
+  margin-right: 2px;
+  opacity: 0;
+}
+.project-tree-row:hover .project-tree-more,
+.project-tree-more:focus-visible { opacity: 1; }
+.project-tree-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-2);
+  background: var(--bg-1);
+  color: var(--text-0);
+  font: inherit;
+  font-size: var(--fs-12);
+  padding: 0 var(--sp-2);
+  outline: none;
+}
+.project-tree-badge {
+  width: var(--activity-dot-size);
+  height: var(--activity-dot-size);
+  display: none;
+  flex: 0 0 var(--activity-dot-size);
+  border-radius: var(--r-full);
+}
+.project-tree-node[data-state='needs-you'] .project-tree-badge { display: block; background: var(--warn); }
+.project-tree-node[data-state='failed'] .project-tree-badge { display: block; background: var(--danger); }
+.project-tree-node[data-state='completed'] .project-tree-badge { display: block; background: var(--success); }
+.project-tree-node[data-state='running'] .project-tree-badge { display: block; background: var(--accent); animation: queue-pulse 1.4s var(--ease-in-out) infinite; }
+.project-tree-children {
+  margin-left: 18px;
+  padding-left: 5px;
+  border-left: 1px solid color-mix(in srgb, var(--ptab-hue, var(--accent)) 24%, var(--border-faint));
+}
+.project-tree-children .session-filter { margin-top: var(--sp-1); }
+.project-session-sidebar .project-tree-children .stabs[data-orientation='vertical'] {
+  height: auto;
+  min-height: 0;
+  padding: 1px 0 var(--sp-2);
+  flex: 0 0 auto;
+}
+.project-session-sidebar .project-tree-children .stabs-track {
+  max-height: none;
+  overflow: visible;
+}
+.project-session-sidebar .project-tree-children .stab,
+.project-session-sidebar .project-tree-children .stabs[data-single='true'] .stab {
+  height: 29px;
+  padding-left: var(--sp-2);
+}
+.project-session-sidebar .project-tree-children .stab[data-active='true'] {
+  box-shadow: inset 2px 0 0 var(--sid, var(--accent));
+}
+.project-sidebar-bottom {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border-faint);
+}
+.project-sidebar-bottom .tabstrip-view-controls {
+  width: calc(100% - 2 * var(--sp-2));
+  height: 31px;
+  margin: var(--sp-2) var(--sp-2) 0;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+}
+.project-sidebar-bottom .shell-sidebar-footer {
+  border-top: 0;
+  padding: var(--sp-1) 6px 6px;
+}
+.project-sidebar-bottom .shell-sidebar-footer-tools { gap: 1px; }
+.project-sidebar-bottom .shell-sidebar-footer-spacer { display: none; }
+.project-sidebar-bottom .shell-sidebar-footer-tools .btn-icon,
+.project-sidebar-bottom .shell-sidebar-footer-tools > .btn-icon,
+.project-sidebar-bottom .shell-sidebar-footer-tools > .inbox-wrap,
+.project-sidebar-bottom .shell-sidebar-footer-tools .inbox-btn,
+.project-sidebar-bottom .shell-sidebar-footer-tools > .app-account-avatar {
+  width: 25px;
+  height: 25px;
+  flex-basis: 25px;
+}
+.project-color-menu {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+}
+.project-color-menu > button {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-full);
+  cursor: pointer;
+}
+.project-color-menu > .project-color-auto {
+  border: 1px solid var(--border-strong);
+  background: transparent;
 }
 .session-sidebar > .session-sidebar-resize {
   position: absolute;
@@ -2684,6 +2849,8 @@
   50% { opacity: 0.45; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .project-tree-disclosure svg { transition: none; }
+  .project-tree-node[data-state='running'] .project-tree-badge { animation: none; }
   .session-needs { animation: none; }
 }
 

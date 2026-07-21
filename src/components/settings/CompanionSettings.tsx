@@ -69,7 +69,7 @@ export function CompanionSettings() {
     setError(null)
     setPairingCodeCopied(false)
     try {
-      const started = await bridge.companion.startPairing({ capabilities: ['observe'] })
+      const started = await bridge.companion.startPairing({ capabilities: ['observe', 'agent-control', 'terminal-control'] })
       pairingRef.current = started.pairingId
       setPairing(started)
     } catch (e) {
@@ -220,7 +220,7 @@ export function CompanionSettings() {
 
           <p className="settings-note companion-warning">
             <Icon name="ShieldAlert" size={13} />
-            Granting terminal control lets a paired phone run commands on this Mac. New devices start with view-only access; you widen that here, per device.
+            Paired devices can message agents and request short terminal-control leases by default. Terminal typing still requires device authentication; access can be narrowed here at any time.
           </p>
         </>
       )}

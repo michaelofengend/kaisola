@@ -346,10 +346,6 @@ export function CommandPalette() {
       { id: 'file-tree-toggle', group: 'Layout', label: railOpen ? 'Hide file tree' : 'Show file tree', hint: 'Also available in the top-right panel controls', icon: 'FolderTree', run: () => { toggleRail(); close() } },
       { id: 'sessions-left', group: 'Layout', label: 'Place sessions on the left', icon: 'PanelsTopLeft', run: () => { setTabLayout('sidebar'); close() } },
       { id: 'sessions-top', group: 'Layout', label: 'Place sessions across the top', icon: 'PanelTop', run: () => { setTabLayout('bare'); close() } },
-      { id: 'sessions-shelf', group: 'Layout', label: 'Use nested session shelf', icon: 'PanelTop', run: () => { setTabLayout('shelf'); close() } },
-      { id: 'sessions-runway', group: 'Layout', label: 'Use session runway', icon: 'PanelTop', run: () => { setTabLayout('runway'); close() } },
-      { id: 'sessions-flat', group: 'Layout', label: 'Use flat session labels', icon: 'PanelTop', run: () => { setTabLayout('flat'); close() } },
-      { id: 'sessions-compact', group: 'Layout', label: 'Use compact session row', icon: 'PanelTop', run: () => { setTabLayout('compact'); close() } },
     ]
     const autonomy: Command[] = (['observe', 'propose', 'execute', 'sprint'] as const).map((a) => ({
       id: `auto-${a}`,

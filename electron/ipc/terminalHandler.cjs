@@ -20,6 +20,127 @@ let brokerClient = null
 let terminalAttentionSink = null
 const terminalProjects = new Map()
 
+function legacyTerminalSnapshot(raw, streamEpoch = `legacy-${crypto.randomUUID()}`) {
+  if (!raw || typeof raw !== 'object' || !Object.prototype.hasOwnProperty.call(raw, 'output')) return null
+  const output = typeof raw.output === 'string' ? raw.output : ''
+  const endOffset = Buffer.byteLength(output, 'utf8')
+  const state = {
+    streamEpoch,
+    output,
+    endOffset,
+    exited: raw.exited === true,
+    exitStatus: raw.exitStatus ?? null,
+  }
+  return {
+    state,
+    snapshot: {
+      ...raw,
+      output,
+      streamEpoch,
+      endOffset,
+      truncated: raw.truncated === true,
+    },
+  }
+}
+
+/** Longest suffix of the retained previous window that is the prefix of the
+ * next one. Legacy brokers expose only a bounded rolling string, so this
+ * recovers the newly appended bytes without restarting their live PTYs. */
+function legacyTerminalOverlap(previous, next) {
+  if (!previous.length || !next.length) return 0
+  const maxOverlap = Math.min(previous.length, next.length)
+  // The overwhelmingly common cases avoid allocating KMP's prefix table:
+  // pre-cap history only grows, while a capped history window shifts forward
+  // a little and therefore still contains a sizeable prefix of the next poll.
+  if (next.length >= previous.length && next.subarray(0, previous.length).equals(previous)) return previous.length
+  const anchorLength = Math.min(64, maxOverlap)
+  if (anchorLength > 0) {
+    const anchor = next.subarray(0, anchorLength)
+    let index = Math.max(0, previous.length - maxOverlap)
+    let attempts = 0
+    while (attempts++ < 64 && (index = previous.indexOf(anchor, index)) >= 0) {
+      const overlap = previous.length - index
+      if (overlap <= next.length && previous.subarray(index).equals(next.subarray(0, overlap))) return overlap
+      index++
+    }
+  }
+  // KMP leaves `matched` equal to the longest prefix of `next` that is also a
+  // suffix of `previous`. This stays linear even when a terminal's retained
+  // megabyte is highly repetitive (for example, a progress renderer full of
+  // spaces) and still finds overlaps shorter than an arbitrary anchor.
+  const pattern = next.subarray(0, maxOverlap)
+  const prefix = new Uint32Array(pattern.length)
+  for (let i = 1, matched = 0; i < pattern.length; i++) {
+    while (matched > 0 && pattern[i] !== pattern[matched]) matched = prefix[matched - 1]
+    if (pattern[i] === pattern[matched]) matched++
+    prefix[i] = matched
+  }
+
+  let matched = 0
+  for (let i = 0; i < previous.length; i++) {
+    while (matched > 0 && previous[i] !== pattern[matched]) matched = prefix[matched - 1]
+    if (previous[i] === pattern[matched]) matched++
+    // A full match before the end is not a suffix; continue from its longest
+    // border. A full match on the final byte is the maximum possible overlap.
+    if (matched === pattern.length) {
+      if (i === previous.length - 1) return matched
+      matched = prefix[matched - 1]
+    }
+  }
+  return matched
+}
+
+function advanceLegacyTerminalSnapshot(previousState, raw, nextEpoch = `legacy-${crypto.randomUUID()}`) {
+  const normalized = legacyTerminalSnapshot(raw, previousState?.streamEpoch || nextEpoch)
+  if (!normalized) return null
+  if (!previousState) return { ...normalized, event: { channel: 'terminal:observer-snapshot', payload: normalized.snapshot } }
+
+  const previous = Buffer.from(previousState.output, 'utf8')
+  const next = Buffer.from(normalized.state.output, 'utf8')
+  const exitChanged = previousState.exited !== normalized.state.exited
+    || JSON.stringify(previousState.exitStatus) !== JSON.stringify(normalized.state.exitStatus)
+  if (previous.equals(next) && !exitChanged) return { state: { ...previousState }, snapshot: null, event: null }
+
+  const overlap = previous.length === 0 ? 0 : legacyTerminalOverlap(previous, next)
+  // No overlap means the rolling window was replaced (terminal id reuse, more
+  // than one full window of unseen output, or legacy cache reset). A new epoch
+  // makes the phone replace its emulator state instead of concatenating lies.
+  if (previous.length > 0 && next.length > 0 && overlap === 0) {
+    const reset = legacyTerminalSnapshot(raw, nextEpoch)
+    return { ...reset, event: { channel: 'terminal:observer-snapshot', payload: reset.snapshot } }
+  }
+
+  const appended = next.subarray(overlap)
+  const startOffset = previousState.endOffset
+  const endOffset = startOffset + appended.length
+  const state = {
+    ...normalized.state,
+    streamEpoch: previousState.streamEpoch,
+    endOffset,
+  }
+  const snapshot = {
+    ...normalized.snapshot,
+    streamEpoch: state.streamEpoch,
+    endOffset,
+  }
+  if (normalized.state.exited || appended.length === 0) {
+    return { state, snapshot, event: { channel: 'terminal:observer-snapshot', payload: snapshot } }
+  }
+  return {
+    state,
+    snapshot,
+    event: {
+      channel: 'terminal:observer-output',
+      payload: {
+        streamEpoch: state.streamEpoch,
+        data: appended.toString('utf8'),
+        startOffset,
+        endOffset,
+      },
+    },
+  }
+}
+
 function setTerminalAttentionSink(sink) {
   terminalAttentionSink = typeof sink === 'function' ? sink : null
 }
@@ -420,10 +541,14 @@ async function companionTerminalSnapshot({ id, projectId }) {
   const target = await companionTerminalRecord({ id, projectId })
   if (!target.ok) return target
   const snapshot = await broker().terminal('snapshot', null, { id, projectId }, { timeoutMs: 5_000 })
-  if (!snapshot?.streamEpoch) {
-    return { ok: false, status: 'unavailable', message: 'Terminal output is no longer available.' }
+  if (snapshot?.streamEpoch) return { ok: true, snapshot }
+  // Protocol-2 brokers from before terminal-observe-v1 still retain a bounded
+  // disk-backed output snapshot. Treat it as a compatibility source instead of
+  // falsely telling the phone that the terminal disappeared.
+  if (snapshot && Object.prototype.hasOwnProperty.call(snapshot, 'output')) {
+    return { ok: true, snapshot, legacy: true }
   }
-  return { ok: true, snapshot }
+  return { ok: false, status: 'unavailable', message: 'Terminal output is no longer available.' }
 }
 
 /** Main-owned terminal control adapter. Every operation revalidates the
@@ -485,15 +610,34 @@ async function subscribeTerminalObserver({
     if (!initial.ok) return { ...initial, unavailable: initial.status === 'unavailable' }
     let closed = false
     let polling = false
-    let lastEpoch = initial.snapshot.streamEpoch
-    let lastOffset = initial.snapshot.endOffset
-    let lastExited = initial.snapshot.exited === true
+    let legacyState = null
+    let initialSnapshot = initial.snapshot
+    if (initial.legacy) {
+      const normalized = legacyTerminalSnapshot(initial.snapshot)
+      if (!normalized) return { ok: false, unavailable: true, message: 'Terminal output is no longer available.' }
+      legacyState = normalized.state
+      initialSnapshot = normalized.snapshot
+    }
+    let lastEpoch = initialSnapshot.streamEpoch
+    let lastOffset = initialSnapshot.endOffset
+    let lastExited = initialSnapshot.exited === true
     const timer = setInterval(async () => {
       if (closed || polling) return
       polling = true
       try {
         const next = await companionTerminalSnapshot({ id, projectId })
         if (!next.ok || closed) return
+        if (next.legacy) {
+          const advanced = advanceLegacyTerminalSnapshot(legacyState, next.snapshot)
+          if (!advanced) return
+          legacyState = advanced.state
+          if (advanced.event) onEvent({
+            channel: advanced.event.channel,
+            payload: { id, ...advanced.event.payload },
+          })
+          if (legacyState.exited) clearInterval(timer)
+          return
+        }
         const snapshot = next.snapshot
         const changed = snapshot.streamEpoch !== lastEpoch
           || snapshot.endOffset !== lastOffset
@@ -510,7 +654,7 @@ async function subscribeTerminalObserver({
     return {
       ok: true,
       mode: 'snapshot',
-      snapshot: initial.snapshot,
+      snapshot: initialSnapshot,
       compatibilityMode: true,
       unsubscribe: async () => {
         if (closed) return { ok: true, removed: false }
@@ -565,5 +709,15 @@ module.exports = {
   subscribeTerminalObserver,
   companionTerminalControl,
   setTerminalAttentionSink,
-  __test: { codexIdFromPath, jsonStringField, codexSession, wrappedCliProcess, companionTerminalRecord, companionTerminalSnapshot },
+  __test: {
+    codexIdFromPath,
+    jsonStringField,
+    codexSession,
+    wrappedCliProcess,
+    companionTerminalRecord,
+    companionTerminalSnapshot,
+    legacyTerminalSnapshot,
+    legacyTerminalOverlap,
+    advanceLegacyTerminalSnapshot,
+  },
 }

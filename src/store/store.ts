@@ -68,7 +68,9 @@ export type LayoutMode = 'focus' | 'studio'
 /** Appearance energy: native live glass or the opaque, still Eco shell. */
 export type PerfMode = 'glass' | 'eco'
 /** Project/session hierarchy treatment. Applied live per app window. */
-export type TabLayout = 'sidebar' | 'shelf' | 'bare' | 'runway' | 'flat' | 'compact'
+/** The desktop navigation has two deliberate, durable arrangements. `sidebar`
+ * is the project -> session tree on the left; `bare` is the two-row top bar. */
+export type TabLayout = 'sidebar' | 'bare'
 export type PaletteMode = 'commands' | 'files'
 
 /** A working-tree checkpoint — a real (hidden-ref) git commit of everything. */
@@ -4418,7 +4420,7 @@ export const useKaisola = create<KaisolaState>()(
     void bridge.windowMode({ solidWindow: mode !== 'glass', ...(/^#[0-9a-fA-F]{6}$/.test(bg) ? { solidBg: bg } : {}) }).catch(() => {})
   },
   setTabLayout: (layout) => {
-    const value: TabLayout = ['sidebar', 'shelf', 'bare', 'runway', 'flat', 'compact'].includes(layout) ? layout : 'sidebar'
+    const value: TabLayout = layout === 'sidebar' ? 'sidebar' : 'bare'
     document.documentElement.dataset.tabLayout = value
     set({ tabLayout: value })
   },
@@ -6175,7 +6177,9 @@ export const useKaisola = create<KaisolaState>()(
       // explicitly selected shelf/runway/flat/compact layouts are preserved.
       // v12: the terminal's former 12px default becomes the denser 10px card
       // default. Deliberate non-default sizes stay untouched; 8–18 remains live.
-      version: 12,
+      // v13: six experimental tab treatments collapse into two navigation
+      // modes. Sidebar stays Left; every horizontal treatment becomes Top.
+      version: 13,
       migrate: (persisted, version) => {
         const toV7 = (p: unknown) => {
           const rec = p as Record<string, unknown>
@@ -6223,13 +6227,19 @@ export const useKaisola = create<KaisolaState>()(
           if (rec && typeof rec === 'object' && (rec.termFontSize == null || rec.termFontSize === 12)) rec.termFontSize = 10
           return p
         }
-        if (version >= 12) return persisted
-        if (version === 11) return toV12(persisted)
-        if (version === 10) return toV12(toV11(persisted))
-        if (version === 9) return toV12(toV11(toV10(persisted)))
-        if (version === 8) return toV12(toV11(toV10(toV9(persisted))))
-        if (version === 7) return toV12(toV11(toV10(toV9(toV8(persisted)))))
-        if (version === 6) return toV12(toV11(toV10(toV9(toV8(toV7(persisted))))))
+        const toV13 = (p: unknown) => {
+          const rec = p as Record<string, unknown>
+          if (rec && typeof rec === 'object') rec.tabLayout = rec.tabLayout === 'sidebar' ? 'sidebar' : 'bare'
+          return p
+        }
+        if (version >= 13) return persisted
+        if (version === 12) return toV13(persisted)
+        if (version === 11) return toV13(toV12(persisted))
+        if (version === 10) return toV13(toV12(toV11(persisted)))
+        if (version === 9) return toV13(toV12(toV11(toV10(persisted))))
+        if (version === 8) return toV13(toV12(toV11(toV10(toV9(persisted)))))
+        if (version === 7) return toV13(toV12(toV11(toV10(toV9(toV8(persisted))))))
+        if (version === 6) return toV13(toV12(toV11(toV10(toV9(toV8(toV7(persisted)))))))
         const flat = migrateFlatV5(persisted)
         const pid = uid('proj')
         const ws = flat.workspacePath ?? null
@@ -6242,7 +6252,7 @@ export const useKaisola = create<KaisolaState>()(
           const v = (flat as Record<string, unknown>)[k]
           if (v !== undefined) (base as Record<string, unknown>)[k] = v
         }
-        return toV12(toV11(toV10(toV9(toV8(toV7({
+        return toV13(toV12(toV11(toV10(toV9(toV8(toV7({
           ...pickGlobals(flat as Record<string, unknown>),
           // pickGlobals no longer knows ecoMode — hand it to toV7 explicitly
           ecoMode: (flat as Record<string, unknown>).ecoMode,
@@ -6250,7 +6260,7 @@ export const useKaisola = create<KaisolaState>()(
           activeProjectId: pid,
           projectSlices: { [pid]: sanitizeSliceForPersist(base) },
           recentProjects: ws ? [{ path: ws, name, at: Date.now() }] : [],
-        }))))))
+        })))))))
       },
       // split the persisted blob back apart SYNCHRONOUSLY (getItem is sync → no
       // rehydration flash). Spread `current` FIRST so action fns are never
@@ -6271,7 +6281,7 @@ export const useKaisola = create<KaisolaState>()(
           ...cur, // defaults + ACTION FUNCTIONS (must be first)
           ...pickGlobals(p), // bucket B + C
           perfMode: p.perfMode === 'glass' ? 'glass' : 'eco',
-          tabLayout: ['sidebar', 'shelf', 'bare', 'runway', 'flat', 'compact'].includes(p.tabLayout) ? p.tabLayout : 'sidebar',
+          tabLayout: p.tabLayout === 'bare' ? 'bare' : 'sidebar',
           // pre-themeMode blobs carried only an explicit theme — honor it rather
           // than silently flipping existing users to system-following
           themeMode: (p as { themeMode?: ThemeMode }).themeMode ?? (p as { theme?: Theme }).theme ?? 'system',

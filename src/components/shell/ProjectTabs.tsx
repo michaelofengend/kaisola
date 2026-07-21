@@ -1,36 +1,22 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { useKaisola, GROUP_COLORS } from '../../store/store'
 import { bridge } from '../../lib/bridge'
-import { useUpdateState } from '../../lib/updates'
 import { Icon } from '../Icon'
 import { Dropdown, type DropOption } from '../Dropdown'
 import { WindowLights } from './WindowLights'
 import { terminalAgentKey } from '../../lib/sessionHue'
 import { SessionTabs } from './SessionTabs'
+import { ShellSidebarFooter } from './ShellSidebarFooter'
+import { SavedWindows } from './SavedWindows'
 
 const basename = (p: string | null | undefined) => (p ? p.split('/').filter(Boolean).pop() : undefined)
 const tabLabel = (t: { title?: string; workspacePath: string | null }) => t.title ?? basename(t.workspacePath) ?? 'New Project'
 
-/**
- * The project strip (Chrome's tab bar). Its own grid row, drawn to the true
- * window top: traffic lights, a scrolling tablist of project tabs (each its
- * own workspace + session set), the "+" launcher menu, and a drag spacer.
- * Subscribes ONLY to `projectTabs` + `activeProjectId` (+ its actions) so a
- * background agent's writes re-render nothing but a badge here.
- */
-export function ProjectTabs() {
-  const tabs = useKaisola((s) => s.projectTabs)
-  const activeId = useKaisola((s) => s.activeProjectId)
-  const tabLayout = useKaisola((s) => s.tabLayout)
-  // Derive activity for EVERY project, including parked slices. Previously a
-  // tab only received `running` after it was already in the background, so the
-  // common flow (start agent → switch tab) lost its dot entirely.
-  // ONE shallow-compared array of derived states, not raw slice/meta
-  // subscriptions: projectSlices and terminalMeta change identity on every
-  // feed line and pty tick, which re-rendered the whole strip during streams.
-  const tabStates = useKaisola(
+/** One low-churn project activity selector shared by both navigation modes. */
+function useProjectTabStates() {
+  return useKaisola(
     useShallow((s) =>
       s.projectTabs.map((tab) => {
         const slice = tab.id === s.activeProjectId
@@ -63,6 +49,25 @@ export function ProjectTabs() {
       }),
     ),
   )
+}
+
+/**
+ * The project strip (Chrome's tab bar). Its own grid row, drawn to the true
+ * window top: traffic lights, a scrolling tablist of project tabs (each its
+ * own workspace + session set), the "+" launcher menu, and a drag spacer.
+ * Subscribes ONLY to `projectTabs` + `activeProjectId` (+ its actions) so a
+ * background agent's writes re-render nothing but a badge here.
+ */
+export function ProjectTabs() {
+  const tabs = useKaisola((s) => s.projectTabs)
+  const activeId = useKaisola((s) => s.activeProjectId)
+  // Derive activity for EVERY project, including parked slices. Previously a
+  // tab only received `running` after it was already in the background, so the
+  // common flow (start agent → switch tab) lost its dot entirely.
+  // ONE shallow-compared array of derived states, not raw slice/meta
+  // subscriptions: projectSlices and terminalMeta change identity on every
+  // feed line and pty tick, which re-rendered the whole strip during streams.
+  const tabStates = useProjectTabStates()
   const switchProject = useKaisola((s) => s.switchProject)
   const closeProject = useKaisola((s) => s.closeProject)
   const reorderProjects = useKaisola((s) => s.reorderProjects)
@@ -203,14 +208,9 @@ export function ProjectTabs() {
         })}
       </div>
       <NewProjectButton />
-      {tabLayout === 'compact' && (
-        <div className="compact-session-slot">
-          <SessionTabs />
-        </div>
-      )}
       <div className="tabstrip-fill" onDoubleClick={() => bridge.winCtl('zoom')} />
-      <UpdatePill />
       <ViewControls />
+      <ShellSidebarFooter topbar />
       {/* portalled to <body> — rendered in-strip it inherits a stacking context
           that loses to the session cards' glass layers and slides behind them */}
       {menu && createPortal(
@@ -269,6 +269,213 @@ export function ProjectTabs() {
         document.body,
       )}
     </div>
+  )
+}
+
+/**
+ * Left navigation is a real two-level tree: projects are the stable parents;
+ * the active project's sessions are their children. Selecting another parent
+ * switches projects and expands it in one click, while its processes keep
+ * running exactly as they do in Top mode.
+ */
+export function ProjectSessionSidebar() {
+  const tabs = useKaisola((s) => s.projectTabs)
+  const activeId = useKaisola((s) => s.activeProjectId)
+  const tabStates = useProjectTabStates()
+  const switchProject = useKaisola((s) => s.switchProject)
+  const closeProject = useKaisola((s) => s.closeProject)
+  const reorderProjects = useKaisola((s) => s.reorderProjects)
+  const renameProjectTab = useKaisola((s) => s.renameProjectTab)
+  const setProjectColor = useKaisola((s) => s.setProjectColor)
+  const detachProjectToWindow = useKaisola((s) => s.detachProjectToWindow)
+  const setTabLayout = useKaisola((s) => s.setTabLayout)
+  const setSessionRailWidth = useKaisola((s) => s.setSessionRailWidth)
+  const sessionCount = useKaisola((s) =>
+    s.assistantThreads.reduce((count, thread) => count + (thread.groupParentId ? 0 : 1), 0)
+      + s.terminals.length
+      + s.agentTerminals.length
+      + s.panels.length,
+  )
+  const [collapsed, setCollapsed] = useState(false)
+  const [editing, setEditing] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState('')
+  const [filter, setFilter] = useState('')
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null)
+  const dragRef = useRef<string | null>(null)
+
+  useEffect(() => { setCollapsed(false); setFilter('') }, [activeId])
+  useEffect(() => { if (sessionCount <= 20 && filter) setFilter('') }, [filter, sessionCount])
+
+  const beginRename = (id: string, label: string) => { setEditing(id); setEditValue(label) }
+  const commitRename = () => {
+    if (editing) renameProjectTab(editing, editValue.trim() || undefined)
+    setEditing(null)
+  }
+  const closeOthers = (id: string) => {
+    for (const tab of tabs.filter((candidate) => candidate.id !== id)) closeProject(tab.id)
+  }
+  const selectProject = (id: string) => {
+    if (id === activeId) setCollapsed((value) => !value)
+    else {
+      setCollapsed(false)
+      switchProject(id)
+    }
+  }
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const handle = event.currentTarget
+    handle.setPointerCapture(event.pointerId)
+    document.body.setAttribute('data-shell-drag', '1')
+    const sidebar = handle.parentElement
+    const startX = event.clientX
+    const startWidth = sidebar?.getBoundingClientRect().width ?? 208
+    const onMove = (move: PointerEvent) => setSessionRailWidth(startWidth + move.clientX - startX)
+    const onUp = () => {
+      document.body.removeAttribute('data-shell-drag')
+      handle.removeEventListener('pointermove', onMove)
+      handle.removeEventListener('pointerup', onUp)
+      handle.removeEventListener('pointercancel', onUp)
+    }
+    handle.addEventListener('pointermove', onMove)
+    handle.addEventListener('pointerup', onUp)
+    handle.addEventListener('pointercancel', onUp)
+  }
+
+  return (
+    <aside className="session-sidebar project-session-sidebar" aria-label="Projects and sessions">
+      <div className="project-sidebar-titlebar">
+        <WindowLights />
+        <div className="project-sidebar-drag" onDoubleClick={() => bridge.winCtl('zoom')} />
+        <div className="project-sidebar-window-slot" />
+        <button type="button" className="project-sidebar-layout" onClick={() => setTabLayout('bare')} title="Use Top layout" aria-label="Use Top navigation layout">
+          <Icon name="PanelTop" size={13} />
+        </button>
+      </div>
+      <SavedWindows hostSelector=".project-sidebar-window-slot" />
+      <div className="project-tree-head">
+        <span>Projects</span>
+        <NewProjectButton />
+      </div>
+      <div className="project-tree" role="tree" aria-label="Project and session tree">
+        {tabs.map((tab, index) => {
+          const active = tab.id === activeId
+          const expanded = active && !collapsed
+          const label = tabLabel(tab)
+          const state = tabStates[index] || undefined
+          return (
+            <div
+              key={tab.id}
+              className="project-tree-node"
+              data-project-id={tab.id}
+              data-active={active || undefined}
+              data-state={state}
+              style={{ '--ptab-hue': tab.color ?? tab.hue } as CSSProperties}
+              role="treeitem"
+              aria-expanded={expanded}
+              draggable={editing !== tab.id}
+              onDragStart={(event) => {
+                dragRef.current = tab.id
+                event.dataTransfer.effectAllowed = 'move'
+                event.dataTransfer.setData('text/plain', tab.id)
+              }}
+              onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move' }}
+              onDrop={() => { if (dragRef.current) reorderProjects(dragRef.current, tab.id); dragRef.current = null }}
+              onDragEnd={() => { dragRef.current = null }}
+            >
+              <div className="project-tree-row" data-active={active || undefined}>
+                <button type="button" className="project-tree-disclosure" onClick={() => selectProject(tab.id)} aria-label={`${expanded ? 'Collapse' : 'Expand'} ${label}`}>
+                  <Icon name="ChevronRight" size={11} />
+                </button>
+                {editing === tab.id ? (
+                  <input
+                    className="project-tree-rename"
+                    value={editValue}
+                    autoFocus
+                    aria-label="Project name"
+                    onChange={(event) => setEditValue(event.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') commitRename()
+                      if (event.key === 'Escape') setEditing(null)
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="project-tree-select"
+                    aria-current={active ? 'page' : undefined}
+                    onClick={() => selectProject(tab.id)}
+                    onDoubleClick={() => beginRename(tab.id, label)}
+                    onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, id: tab.id }) }}
+                    title={tab.workspacePath ?? label}
+                  >
+                    <span className="project-tree-badge" />
+                    <Icon name="Folder" size={13} />
+                    <span className="truncate">{label}</span>
+                  </button>
+                )}
+                <button type="button" className="project-tree-more" onClick={(event) => setMenu({ x: event.clientX, y: event.clientY, id: tab.id })} aria-label={`More actions for ${label}`} title="Project actions">
+                  <Icon name="Ellipsis" size={13} />
+                </button>
+              </div>
+              {expanded && (
+                <div className="project-tree-children" role="group" aria-label={`${label} sessions`}>
+                  {sessionCount > 20 && (
+                    <label className="session-filter">
+                      <Icon name="Search" size={12} />
+                      <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter sessions" aria-label="Filter sessions" spellCheck={false} />
+                      {filter && <button type="button" onClick={() => setFilter('')} aria-label="Clear session filter" title="Clear"><Icon name="X" size={11} /></button>}
+                    </label>
+                  )}
+                  <SessionTabs orientation="vertical" filter={filter} />
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      <div className="project-sidebar-bottom">
+        <ViewControls />
+        <ShellSidebarFooter />
+      </div>
+      <div
+        className="session-sidebar-resize"
+        onPointerDown={startResize}
+        onDoubleClick={() => setSessionRailWidth(null)}
+        onKeyDown={(event) => {
+          if (event.key === 'Home') { event.preventDefault(); setSessionRailWidth(null); return }
+          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+          event.preventDefault()
+          const current = event.currentTarget.parentElement?.getBoundingClientRect().width ?? 208
+          setSessionRailWidth(current + (event.key === 'ArrowLeft' ? -20 : 20))
+        }}
+        role="separator"
+        aria-label="Resize navigation sidebar"
+        aria-orientation="vertical"
+        tabIndex={0}
+        title="Drag to resize navigation · double-click to reset"
+      />
+      {menu && createPortal(
+        <>
+          <button type="button" className="tree-menu-overlay" aria-label="Close project menu" onMouseDown={() => setMenu(null)} style={{ background: 'transparent', border: 'none', padding: 0 }} />
+          <div className="tree-menu" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - 240), zIndex: 'calc(var(--z-palette) + 1)' }}>
+            <button type="button" className="tree-menu-item" onClick={() => { const tab = tabs.find((candidate) => candidate.id === menu.id); if (tab) beginRename(tab.id, tabLabel(tab)); setMenu(null) }}>
+              <Icon name="PenLine" size={13} /> Rename…
+            </button>
+            <div className="tree-menu-sep" />
+            <div className="project-color-menu">
+              {GROUP_COLORS.map((color) => <button type="button" key={color} title="Set project color" aria-label={`Set project color to ${color}`} onClick={() => { setProjectColor(menu.id, color); setMenu(null) }} style={{ background: color }} />)}
+              <button type="button" className="project-color-auto" title="Automatic project color" aria-label="Use automatic project color" onClick={() => { setProjectColor(menu.id, undefined); setMenu(null) }} />
+            </div>
+            <div className="tree-menu-sep" />
+            <button type="button" className="tree-menu-item" onClick={() => { void detachProjectToWindow(menu.id); setMenu(null) }}><Icon name="AppWindow" size={13} /> Move to new window</button>
+            <button type="button" className="tree-menu-item" onClick={() => { closeProject(menu.id); setMenu(null) }}><Icon name="X" size={13} /> Close project</button>
+            {tabs.length > 1 && <button type="button" className="tree-menu-item" onClick={() => { closeOthers(menu.id); setMenu(null) }}><Icon name="X" size={13} /> Close other projects</button>}
+          </div>
+        </>,
+        document.body,
+      )}
+    </aside>
   )
 }
 
@@ -331,7 +538,7 @@ const togglePreview = () => runViewTransition('preview-right', () => useKaisola.
  * View Transitions animate entry and exit without keeping a hidden editor or
  * terminal subtree mounted just for an exit animation.
  */
-function ViewControls() {
+export function ViewControls() {
   const layoutMode = useKaisola((s) => s.layoutMode)
   const tabLayout = useKaisola((s) => s.tabLayout)
   const railOpen = useKaisola((s) => s.railOpen)
@@ -373,52 +580,11 @@ function ViewControls() {
 }
 
 /**
- * Chrome's update pill, in Chrome's spot (strip far-right). A found release
- * shows up here immediately — first as quiet download progress, then as the
- * one-click "Restart to update". Checking stays silent; Settings → General
- * shows the full live status.
- */
-function UpdatePill() {
-  const u = useUpdateState()
-  if (u.type === 'downloading') {
-    const preparing = (u.percent ?? 0) >= 100
-    return (
-      <span className="update-pill" data-busy title={preparing ? `Preparing Kaisola ${u.version ?? ''} for a reliable restart` : `Downloading Kaisola ${u.version ?? ''} — restart button appears when it's ready`}>
-        <Icon name="ArrowDownToLine" size={12} />
-        {preparing ? 'Preparing…' : `${u.percent ?? 0}%`}
-      </span>
-    )
-  }
-  if (u.type === 'installing') {
-    return (
-      <span className="update-pill" data-busy title={u.message ?? 'Restarting Kaisola to apply the downloaded update'}>
-        <Icon name="RefreshCw" size={12} />
-        {u.message?.startsWith('Waiting') ? 'Waiting for agents…' : 'Restarting…'}
-      </span>
-    )
-  }
-  if (u.type !== 'ready') return null
-  return (
-    <button type="button"
-      className="update-pill"
-      disabled={!!u.checkingForLatest}
-      onClick={() => void bridge.update?.install()}
-      title={u.checkingForLatest
-        ? `Checking whether Kaisola ${u.version} is still latest`
-        : u.checkError ?? `Kaisola ${u.version} is downloaded — restart the app to apply`}
-    >
-      <Icon name={u.checkingForLatest ? 'RefreshCw' : 'ArrowDownToLine'} size={12} />
-      {u.checkingForLatest ? 'Checking latest…' : 'Restart to update'}
-    </button>
-  )
-}
-
-/**
  * The "+" launcher menu — a Dropdown of recently opened folders, an "Open
  * folder…" picker, and the recently-closed undo list. Kept in its own
  * component so its recents/closed subscriptions don't storm the strip.
  */
-function NewProjectButton() {
+export function NewProjectButton() {
   const recentProjects = useKaisola((s) => s.recentProjects)
   const closedProjectStack = useKaisola((s) => s.closedProjectStack)
   const newProject = useKaisola((s) => s.newProject)

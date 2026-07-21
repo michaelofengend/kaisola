@@ -39,6 +39,7 @@ class FakeTransport extends EventEmitter {
     this.enabled = false
     this.enableCalls = 0
     this.disableCalls = 0
+    this.refreshCalls = 0
     this.confirmed = []
     this.cancelled = []
   }
@@ -56,6 +57,11 @@ class FakeTransport extends EventEmitter {
     this.enabled = false
     if (changed) this.emit('disabled')
     return changed
+  }
+
+  async refresh() {
+    this.refreshCalls++
+    return this.status()
   }
 
   confirmPairing(pairingId) {
@@ -108,8 +114,16 @@ function phoneRecord(seed = 51, deviceId = 'device-handler-iphone') {
   }
 }
 
-function setup(t, { now = 1_784_250_100_000, accountRendezvous = null } = {}) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'kaisola-companion-handler-'))
+function setup(t, {
+  now = 1_784_250_100_000,
+  accountRendezvous = null,
+  directory: suppliedDirectory = null,
+  setBackgroundLaunchEnabled = null,
+  makeTransport = null,
+  retryBaseMs,
+  retryMaxMs,
+} = {}) {
+  const directory = suppliedDirectory ?? fs.mkdtempSync(path.join(os.tmpdir(), 'kaisola-companion-handler-'))
   const handlers = new Map()
   const removedHandlers = []
   const sent = []
@@ -148,14 +162,17 @@ function setup(t, { now = 1_784_250_100_000, accountRendezvous = null } = {}) {
     accountRendezvous,
     now: () => now,
     transportFactory: (options) => {
-      transport = new FakeTransport(options)
+      transport = makeTransport ? makeTransport(options) : new FakeTransport(options)
       return transport
     },
+    setBackgroundLaunchEnabled,
+    retryBaseMs,
+    retryMaxMs,
     logger: { warn() {} },
   })
   t.after(async () => {
     await handler.dispose()
-    fs.rmSync(directory, { recursive: true, force: true })
+    if (!suppliedDirectory) fs.rmSync(directory, { recursive: true, force: true })
   })
   return { directory, gateway, handler, handlers, ipcMain, removedHandlers, sent, transport }
 }
@@ -175,7 +192,10 @@ test('Companion IPC is registered default-disabled without starting a LAN listen
 })
 
 test('enable then getState reflects a live loopback-and-LAN listener without exposing its port', async (t) => {
-  const { handler, handlers, transport } = setup(t)
+  const backgroundLaunch = []
+  const { directory, handler, handlers, transport } = setup(t, {
+    setBackgroundLaunchEnabled: (enabled) => backgroundLaunch.push(enabled),
+  })
   const enabled = await handlers.get('companion:setEnabled')({}, { enabled: true })
   assert.equal(transport.enableCalls, 1)
   assert.equal(enabled.enabled, true)
@@ -183,6 +203,76 @@ test('enable then getState reflects a live loopback-and-LAN listener without exp
   assert.equal(enabled.status, 'Listening for paired devices on your local network.')
   assert.deepEqual(await handlers.get('companion:getState')(), enabled)
   assert.equal(JSON.stringify(enabled).includes('49321'), false)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'companion', 'settings.json'), 'utf8')), {
+    v: 1,
+    enabled: true,
+  })
+  assert.deepEqual(backgroundLaunch, [true])
+})
+
+test('persisted Companion intent restores the listener after an app restart', async (t) => {
+  const first = setup(t)
+  await first.handler.setEnabled(true)
+  await first.handler.dispose()
+
+  const backgroundLaunch = []
+  const second = setup(t, {
+    directory: first.directory,
+    setBackgroundLaunchEnabled: (enabled) => backgroundLaunch.push(enabled),
+  })
+  assert.equal(second.handler.getState().enabled, true)
+  assert.equal(second.handler.getState().listening, false)
+  const restored = await second.handler.restore()
+  assert.equal(restored.enabled, true)
+  assert.equal(restored.listening, true)
+  assert.equal(second.transport.enableCalls, 1)
+  assert.deepEqual(backgroundLaunch, [true])
+})
+
+test('a transient listener failure keeps intent on and heals automatically', async (t) => {
+  class FailOnceTransport extends FakeTransport {
+    async enable() {
+      this.enableCalls++
+      if (this.enableCalls === 1) throw new Error('network not ready after wake')
+      this.enabled = true
+      this.emit('enabled', this.status())
+      return this.status()
+    }
+  }
+  const { handler, transport } = setup(t, {
+    makeTransport: (options) => new FailOnceTransport(options),
+    retryBaseMs: 100,
+    retryMaxMs: 100,
+  })
+  const initial = await handler.setEnabled(true)
+  assert.equal(initial.enabled, true, 'saved intent remains on while the socket recovers')
+  assert.equal(initial.listening, false)
+  assert.match(initial.status, /reconnecting/)
+  await new Promise((resolve) => setTimeout(resolve, 160))
+  assert.equal(transport.enableCalls, 2)
+  assert.equal(handler.getState().listening, true)
+})
+
+test('wake refresh republishes the listener without dropping its connection', async (t) => {
+  const { handler, transport } = setup(t)
+  await handler.setEnabled(true)
+  const refreshed = await handler.refresh()
+  assert.equal(refreshed.listening, true)
+  assert.equal(transport.refreshCalls, 1)
+  assert.equal(transport.enableCalls, 1)
+  assert.equal(transport.disableCalls, 0)
+})
+
+test('paired devices migrate to automatic listener restore when the preference is first introduced', async (t) => {
+  const first = setup(t)
+  first.handler.deviceStore.pairDevice(phoneRecord(61, 'device-existing-before-preference').record)
+  await first.handler.dispose()
+  fs.unlinkSync(path.join(first.directory, 'companion', 'settings.json'))
+
+  const second = setup(t, { directory: first.directory })
+  assert.equal(second.handler.getState().enabled, true)
+  const restored = await second.handler.restore()
+  assert.equal(restored.listening, true)
 })
 
 test('startPairing returns one opaque QR payload and expiry, then emits awaiting and four-word confirmation events', async (t) => {
@@ -240,6 +330,7 @@ test('a pairing offer is published for the signed-in account and withdrawn on ca
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(published.length, 1)
   assert.equal(published[0].pairingNonce, started.pairingId)
+  assert.deepEqual(published[0].requestedCapabilities, ['observe', 'agent-control', 'terminal-control'])
 
   assert.deepEqual(await handler.cancelPairing(started.pairingId), { ok: true })
   await new Promise((resolve) => setImmediate(resolve))

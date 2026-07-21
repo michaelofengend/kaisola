@@ -13,6 +13,7 @@ const {
 const { BonjourCompanionTransport } = require('../companion/bonjourTransport.cjs')
 const { CompanionGateway } = require('../companion/gateway.cjs')
 const { CompanionStateHub } = require('../companion/stateHub.cjs')
+const { CompanionPreferenceStore } = require('../companion/preferenceStore.cjs')
 
 const STATE_CHANNEL = 'companion:state'
 const PAIRING_CHANNEL = 'companion:pairing-event'
@@ -36,6 +37,8 @@ const HANDLER_CHANNELS = Object.freeze([
   'companion:renameDevice',
   'companion:setDeviceCapabilities',
 ])
+const DEFAULT_RETRY_BASE_MS = 2_000
+const DEFAULT_RETRY_MAX_MS = 30_000
 
 function pairingFailureMessage(reason) {
   if (reason === 'authentication_timeout') return 'Pairing timed out. Try again.'
@@ -64,7 +67,9 @@ class CompanionHandler {
     desktopState,
     gatewayOptions = {},
     filePath,
+    settingsPath,
     deviceStore,
+    preferenceStore,
     pairingManager,
     stateHub,
     gateway,
@@ -75,6 +80,9 @@ class CompanionHandler {
     pairingTtlMs = DEFAULT_PAIRING_TTL_MS,
     setTimer = setTimeout,
     clearTimer = clearTimeout,
+    setBackgroundLaunchEnabled = null,
+    retryBaseMs = DEFAULT_RETRY_BASE_MS,
+    retryMaxMs = DEFAULT_RETRY_MAX_MS,
     logger = console,
   } = {}) {
     if (!app?.getPath || !BrowserWindow?.getAllWindows) throw new Error('companion handler Electron dependencies are invalid')
@@ -86,15 +94,29 @@ class CompanionHandler {
     this.clearTimer = clearTimer
     this.logger = logger
     this.accountRendezvous = accountRendezvous
+    this.setBackgroundLaunchEnabled = typeof setBackgroundLaunchEnabled === 'function' ? setBackgroundLaunchEnabled : null
     this.enabled = false
+    this.desiredEnabled = false
     this.startFailed = false
     this.disposed = false
     this.transition = Promise.resolve()
     this.activePairings = new Map()
     this.ipcMain = null
+    this.retryBaseMs = Math.max(100, Number(retryBaseMs) || DEFAULT_RETRY_BASE_MS)
+    this.retryMaxMs = Math.max(this.retryBaseMs, Number(retryMaxMs) || DEFAULT_RETRY_MAX_MS)
+    this.retryAttempt = 0
+    this.retryTimer = null
 
     const storePath = filePath ?? path.join(app.getPath('userData'), 'companion', 'devices.json')
     this.deviceStore = deviceStore ?? new CompanionDeviceStore({ filePath: storePath, safeStorage })
+    const preferencePath = settingsPath ?? path.join(path.dirname(storePath), 'settings.json')
+    this.preferenceStore = preferenceStore ?? new CompanionPreferenceStore({ filePath: preferencePath })
+    this.desiredEnabled = this.preferenceStore.load({
+      // Migration for builds that already paired a phone before the listener
+      // preference existed: a trusted device means Companion was intentionally
+      // enabled, so restore it automatically on the first upgraded launch.
+      defaultEnabled: this.deviceStore.listDevices().length > 0,
+    }).enabled
     this.stateHub = stateHub ?? gateway?.stateHub ?? new CompanionStateHub({ desktopState })
     this.gateway = gateway ?? new CompanionGateway({
       ...gatewayOptions,
@@ -127,11 +149,14 @@ class CompanionHandler {
       enabled: () => {
         this.enabled = true
         this.startFailed = false
+        this.retryAttempt = 0
+        this.#cancelRetry()
         this.#emitState()
       },
       disabled: () => {
         this.enabled = false
         this.#emitState()
+        this.#scheduleRetry()
       },
       pairingPhrase: (event) => this.#pairingPhrase(event),
       pairingFailed: (event) => this.#pairingFailed(event),
@@ -169,30 +194,25 @@ class CompanionHandler {
     }))
     const connected = devices.reduce((count, device) => count + Number(device.connected), 0)
     let status
-    if (this.startFailed) status = 'Companion could not start on the local network.'
-    else if (!this.enabled) status = 'Companion is off. No local-network listener is running.'
+    if (this.startFailed) status = 'Companion is reconnecting to the local network.'
+    else if (!this.desiredEnabled) status = 'Companion is off. No local-network listener is running.'
     else if (!listening) status = 'Companion is starting on the local network.'
     else if (connected === 0) status = 'Listening for paired devices on your local network.'
     else status = `${connected} paired ${connected === 1 ? 'device is' : 'devices are'} connected.`
-    return { enabled: this.enabled, listening, status, devices }
+    return { enabled: this.desiredEnabled, listening, status, devices }
   }
 
   async setEnabled(value) {
     if (typeof value !== 'boolean') throw new Error('Companion enabled state must be true or false.')
     return this.#enqueueTransition(async () => {
       if (this.disposed) return this.getState()
+      this.preferenceStore.setEnabled(value)
+      this.desiredEnabled = value
+      this.#syncBackgroundLaunch()
       if (value) {
-        try {
-          await this.transport.enable()
-          this.enabled = this.transport.status()?.enabled === true
-          this.startFailed = !this.enabled
-        } catch (error) {
-          this.enabled = false
-          this.startFailed = true
-          try { await this.transport.disable() } catch { /* a failed start remains off */ }
-          try { this.logger.warn('[companion] local-network listener did not start') } catch { /* diagnostics are best-effort */ }
-        }
+        await this.#startListening()
       } else {
+        this.#cancelRetry()
         this.enabled = false
         this.startFailed = false
         try { await this.transport.disable() } catch {
@@ -214,7 +234,36 @@ class CompanionHandler {
     })
   }
 
-  async startPairing({ capabilities = ['observe'] } = {}) {
+  /** Restore the persisted listener intent after every launch/update. Pairing
+   * keys and grants already survive in devices.json; this closes the former gap
+   * where the listener itself silently reset to off. */
+  async restore() {
+    return this.#enqueueTransition(async () => {
+      if (this.disposed) return this.getState()
+      this.#syncBackgroundLaunch()
+      if (this.desiredEnabled) await this.#startListening()
+      return this.getState()
+    })
+  }
+
+  /** Refresh Bonjour after wake or a network-interface change without dropping
+   * an otherwise healthy authenticated phone connection. */
+  async refresh() {
+    return this.#enqueueTransition(async () => {
+      if (this.disposed || !this.desiredEnabled) return this.getState()
+      if (this.getState().listening && typeof this.transport.refresh === 'function') {
+        try {
+          await this.transport.refresh()
+          this.startFailed = false
+          return this.getState()
+        } catch { /* fall through to a bounded listener restart */ }
+      }
+      await this.#startListening()
+      return this.getState()
+    })
+  }
+
+  async startPairing({ capabilities = CAPABILITIES } = {}) {
     await this.transition.catch(() => {})
     if (this.disposed || !this.getState().listening) throw new Error('Enable Companion before pairing a device.')
     const requestedCapabilities = validateCapabilities(capabilities, { defaultObserve: true })
@@ -317,6 +366,7 @@ class CompanionHandler {
   async dispose() {
     if (this.disposed) return false
     this.disposed = true
+    this.#cancelRetry()
     for (const [pairingId, record] of this.activePairings) {
       if (record.timer) this.clearTimer(record.timer)
       this.#withdrawAccountOffer(record)
@@ -335,6 +385,49 @@ class CompanionHandler {
     const result = this.transition.catch(() => {}).then(task)
     this.transition = result.then(() => undefined, () => undefined)
     return result
+  }
+
+  async #startListening() {
+    if (this.disposed || !this.desiredEnabled) return false
+    this.#cancelRetry()
+    try {
+      await this.transport.enable()
+      this.enabled = this.transport.status()?.enabled === true
+      this.startFailed = !this.enabled
+    } catch {
+      this.enabled = false
+      this.startFailed = true
+      try { await this.transport.disable() } catch { /* retry owns later recovery */ }
+      try { this.logger.warn('[companion] local-network listener did not start; retrying') } catch { /* diagnostics are best-effort */ }
+    }
+    if (!this.enabled) this.#scheduleRetry()
+    return this.enabled
+  }
+
+  #scheduleRetry() {
+    if (this.disposed || !this.desiredEnabled || this.retryTimer) return false
+    const delay = Math.min(this.retryMaxMs, this.retryBaseMs * (2 ** Math.min(this.retryAttempt, 6)))
+    this.retryAttempt++
+    this.retryTimer = this.setTimer(() => {
+      this.retryTimer = null
+      void this.restore()
+    }, delay)
+    this.retryTimer?.unref?.()
+    return true
+  }
+
+  #cancelRetry() {
+    if (!this.retryTimer) return false
+    this.clearTimer(this.retryTimer)
+    this.retryTimer = null
+    return true
+  }
+
+  #syncBackgroundLaunch() {
+    if (!this.setBackgroundLaunchEnabled) return
+    try { this.setBackgroundLaunchEnabled(this.desiredEnabled) } catch {
+      try { this.logger.warn('[companion] login launch setting could not be updated') } catch { /* best effort */ }
+    }
   }
 
   #pairingPhrase(event) {

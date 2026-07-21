@@ -6,7 +6,6 @@ import { fileIcon } from '../../lib/fileIcon'
 import { AGENTS_TEMPLATE } from '../../lib/agentsTemplate'
 import { useClickAway } from '../../lib/useClickAway'
 import { shellDrag } from './shellDrag'
-import { ShellSidebarFooter } from './ShellSidebarFooter'
 
 /**
  * The left rail card — the PROJECT: its file tree (plus the open file's
@@ -14,8 +13,6 @@ import { ShellSidebarFooter } from './ShellSidebarFooter'
  * cards — the strip is the one session list; no duplicate rail list here.
  */
 export function WorkspaceRail({ side = 'left' }: { side?: 'left' | 'right' }) {
-  const tabLayout = useKaisola((s) => s.tabLayout)
-  const hostsGlobalControls = side === 'left' && tabLayout !== 'sidebar'
   return (
     <aside className="wsrail" data-side={side} aria-label="Files sidebar">
       <FileTreeHeader />
@@ -23,7 +20,6 @@ export function WorkspaceRail({ side = 'left' }: { side?: 'left' | 'right' }) {
       <OutlineSection />
       <QuotesSection />
       <FilesTree />
-      {hostsGlobalControls && <ShellSidebarFooter />}
       <RailResize side={side} />
     </aside>
   )

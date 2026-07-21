@@ -207,10 +207,24 @@ class MinimalMdnsAdvertiser {
   #announce(ttl) {
     if (!this.socket || !this.config) return false
     try {
+      // Laptops routinely wake on a different Wi-Fi address. Refresh the A
+      // records and multicast membership before every announcement so the
+      // paired phone discovers the current Mac without re-pairing.
+      const addresses = localIpv4Addresses(this.networkInterfaces())
+      const previous = new Set(this.config.addresses)
+      for (const address of addresses) {
+        if (previous.has(address)) continue
+        try { this.socket.addMembership(MDNS_ADDRESS, address) } catch { /* another interface can still advertise */ }
+      }
+      this.config = { ...this.config, addresses }
       const packet = encodeMdnsResponse({ ...this.config, ttl })
       this.socket.send(packet, MDNS_PORT, MDNS_ADDRESS)
       return true
     } catch { return false }
+  }
+
+  refresh() {
+    return this.#announce(MDNS_TTL_SECONDS)
   }
 
   async stop() {
@@ -384,6 +398,12 @@ class BonjourCompanionTransport extends EventEmitter {
     })
     this.emit('disabled')
     return true
+  }
+
+  async refresh() {
+    if (!this.enabled || !this.server || !this.advertiser) return this.status()
+    this.advertiser.refresh?.()
+    return this.status()
   }
 
   #accept(socket) {

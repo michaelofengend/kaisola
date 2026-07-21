@@ -38,8 +38,9 @@ Apple Silicon**.
   prompts, and terminal programs behave like they do in your normal shell.
 - **Project workspace.** Browse and search files, edit source, inspect diffs,
   and preview documents without leaving the agent sessions doing the work.
-- **Flexible session layout.** Keep sessions in the default vertical rail, move
-  them across the top, split them side by side, and resize the surrounding UI.
+- **Two clear navigation layouts.** Use the default Left tree with projects as
+  parents and their sessions nested below, or a two-row Top bar with projects
+  above sessions. Switch live from the shell, Settings, or the macOS View menu.
 - **Markdown and LaTeX.** Edit GitHub-flavored Markdown in a clean rendered
   surface; build LaTeX locally, read parsed errors, and inspect the PDF output.
 - **MCP and extensions.** Carry configured MCP servers into supported agent

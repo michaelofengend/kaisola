@@ -8,7 +8,6 @@ import { urlHost, terminalLabel, threadLabel } from '@/lib/sessionLabel'
 import { Terminal } from '../Terminal'
 import { BrowserCard } from './BrowserCard'
 import { LedgerCard } from './LedgerCard'
-import { SessionTabs } from './SessionTabs'
 import { Icon } from '../Icon'
 import { ProviderIcon } from '../ProviderIcon'
 import { shellDrag } from './shellDrag'
@@ -69,7 +68,6 @@ export function SessionCards() {
   const terminalMeta = useKaisola((s) => s.terminalMeta)
   const workspacePath = useKaisola((s) => s.workspacePath)
   const perfMode = useKaisola((s) => s.perfMode)
-  const tabLayout = useKaisola((s) => s.tabLayout)
   const removeDockView = useKaisola((s) => s.removeDockView)
   const placeDockView = useKaisola((s) => s.placeDockView)
   const popOutTerminal = useKaisola((s) => s.popOutTerminal)
@@ -357,7 +355,6 @@ export function SessionCards() {
 
   return (
     <div className="dock-col">
-      {tabLayout !== 'compact' && tabLayout !== 'sidebar' && <SessionTabs />}
       <div
         ref={gridRef}
         className="session-grid"

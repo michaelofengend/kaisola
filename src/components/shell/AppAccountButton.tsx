@@ -85,8 +85,8 @@ export function AppAccountButton({ showLabel = false }: { showLabel?: boolean })
             </div>
           </div>
           <div className="tree-menu-sep" />
-          {/* The row's standalone gear moved here; opening without a pane
-              keeps its remembered-last-pane behavior. */}
+          {/* Account details retain a Settings route too; the shell also keeps
+              a direct gear for fast, one-click access. */}
           <button type="button" className="shell-settings-trigger" onClick={() => { setOpen(false); openSettings(true) }}>
             <Icon name="Settings" size={13} /> Settings
           </button>

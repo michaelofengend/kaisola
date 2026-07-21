@@ -223,8 +223,9 @@ app.whenReady().then(async () => {
   const rootChildren = await win.webContents.executeJavaScript(`document.getElementById('root').children.length`)
   const minimalShell = await win.webContents.executeJavaScript(`(() => ({
     noWorkflowSidebar: !document.querySelector('.sidebar') && !document.querySelector('.side-nav') && !document.querySelector('.side-section'),
-    // fresh installs use the split composition: sessions left, files right.
-    splitSidebarsDefault: !!document.querySelector('.app-body[data-session-nav="sidebar"] > .session-sidebar') &&
+    // Fresh installs use the two-level project/session tree at left and files
+    // at right. The project row is the parent of the one live session list.
+    splitSidebarsDefault: !!document.querySelector('.app-body[data-session-nav="sidebar"] > .project-session-sidebar') &&
       !!document.querySelector('.app-body[data-session-nav="sidebar"] > .wsrail[data-side="right"]'),
     // the fresh shell is ONE session (the seed terminal; chats are opt-in)
     hasSessions: document.querySelectorAll('.stabs .stab').length >= 1,
@@ -237,10 +238,12 @@ app.whenReady().then(async () => {
     hasEmptyLauncher: !!document.querySelector('.canvas .plaunch'),
     stageFiles: window.__kaisola.getState().stage === 'files',
     studioDefault: window.__kaisola.getState().layoutMode === 'studio',
-    // Utilities stay in the navigation footer; the two structural switches
-    // stay in one stable top-right group.
-    sidebarFooter: !!document.querySelector('.session-sidebar > .shell-sidebar-footer'),
-    topViewControls: (() => {
+    // Left mode keeps the same compact utilities at the bottom of the tree;
+    // Top mode moves them to the upper-right without duplicating the controls.
+    controlsFollowLeft: !!document.querySelector('.project-sidebar-bottom > .shell-sidebar-footer') &&
+      !document.querySelector('.tabstrip > .shell-sidebar-footer[data-topbar]') &&
+      !document.querySelector('.wsrail > .shell-sidebar-footer'),
+    permanentViewControls: (() => {
       const controls = [...document.querySelectorAll('.tabstrip-view-controls > button')]
       return controls.length === 2 &&
         controls[0]?.getAttribute('aria-label') === 'Hide file preview' &&
@@ -267,7 +270,7 @@ app.whenReady().then(async () => {
   }
   await injectAuthProfile()
   const accountUi = await win.webContents.executeJavaScript(`(async () => {
-    const footer = document.querySelector('.session-sidebar > .shell-sidebar-footer')
+    const footer = document.querySelector('.shell-sidebar-footer')
     const avatar = footer?.querySelector('.app-account-avatar')
     avatar?.click()
     await new Promise((resolve) => setTimeout(resolve, 60))
@@ -279,13 +282,21 @@ app.whenReady().then(async () => {
       usageInMenu: !!menu && /Usage/.test(menu.textContent || ''),
       settingsInMenu: !!menu?.querySelector('.shell-settings-trigger'),
       avatarOnly: !/Kaisola Tester/.test(avatar?.textContent || ''),
-      bottomLeft: (() => {
+      anchoredToLayout: (() => {
         if (!footer) return false
-        const rail = document.querySelector('.session-sidebar')?.getBoundingClientRect()
-        const rect = footer.getBoundingClientRect()
-        return !!rail && Math.abs(rect.left - rail.left) <= 1 && Math.abs(rect.bottom - rail.bottom) <= 1
+        const left = footer.closest('.project-sidebar-bottom')
+        const top = footer.closest('.tabstrip')
+        return (!!left && window.__kaisola.getState().tabLayout === 'sidebar') ||
+          (!!top && window.__kaisola.getState().tabLayout === 'bare')
       })(),
-      menuAbove: !!menu && !!avatar && menu.getBoundingClientRect().bottom <= avatar.getBoundingClientRect().top,
+      menuAdjacent: (() => {
+        if (!menu || !avatar) return false
+        const menuRect = menu.getBoundingClientRect()
+        const avatarRect = avatar.getBoundingClientRect()
+        return avatarRect.bottom > window.innerHeight * 0.62
+          ? menuRect.bottom <= avatarRect.top
+          : menuRect.top >= avatarRect.bottom
+      })(),
       menuFits: !!menu && menu.getBoundingClientRect().left >= 8 && menu.getBoundingClientRect().right <= window.innerWidth - 8,
       aligned: (() => {
         const row = footer?.querySelector('.shell-sidebar-footer-tools')
@@ -294,7 +305,7 @@ app.whenReady().then(async () => {
         const rects = buttons.map((button) => button.getBoundingClientRect())
         const centers = rects.map((rect) => rect.top + rect.height / 2)
         const sameCenter = Math.max(...centers) - Math.min(...centers) <= 0.5
-        const sameHeight = rects.every((rect) => Math.abs(rect.height - 28) <= 0.5)
+        const sameHeight = rects.every((rect) => Math.abs(rect.height - rects[0].height) <= 0.5) && rects[0].height >= 24 && rects[0].height <= 28
         return getComputedStyle(row).alignItems === 'center' && sameCenter && sameHeight
       })(),
       usageOpened: false,
@@ -450,18 +461,19 @@ app.whenReady().then(async () => {
     const blurredFp = fp()
     const surfacesEqual = ['appGlassDisplay', 'appBg', 'railBg', 'railBd', 'canvasBg', 'canvasBd', 'cardBg', 'cardBd', 'termBg']
       .every((k) => activeFp[k] === blurredFp[k])
-    const tabstrip = document.querySelector('.tabstrip')
-    const tabstripGlassBd = tabstrip ? backdrop(getComputedStyle(tabstrip, '::before')) : ''
+    const navigationChrome = document.querySelector('.tabstrip') || document.querySelector('.project-session-sidebar')
+    const navigationPseudo = navigationChrome ? getComputedStyle(navigationChrome, '::before') : null
+    const tabstripGlassBd = navigationPseudo ? backdrop(navigationPseudo) : ''
     const railGlassBd = backdrop(getComputedStyle(rail, '::before'))
     const out = {
       // ECO CHROME: pure white, opaque and compositor-still. The app/window
       // field owns the paper base and no descendant reintroduces a blur.
       appSamplingLayer: !/blur/.test(activeAppBackdrop) && !/blur/.test(activeAppGlassBackdrop)
         && alpha(activeAppBackground) < 0.05 && appGlassStyle.backgroundColor === 'rgb(255, 255, 255)',
-      chromeGlass: !/blur/.test(tabstripGlassBd) && !/blur/.test(railGlassBd)
+      chromeGlass: !!navigationChrome && !!navigationPseudo && !/blur/.test(tabstripGlassBd) && !/blur/.test(railGlassBd)
         && getComputedStyle(rail, '::before').display === 'none'
-        && !getComputedStyle(tabstrip, '::before').backgroundImage.includes('linear-gradient')
-        && alpha(getComputedStyle(tabstrip).backgroundColor) <= 0.02,
+        && (navigationPseudo.display === 'none' || !navigationPseudo.backgroundImage.includes('linear-gradient'))
+        && alpha(getComputedStyle(navigationChrome).backgroundColor) <= 0.02,
       activeTintWhite: activeAppTint === '#fffefd',
       railBackdrop: activeRailBackdrop,
       railLayerFlattened: !activeRailBackdrop && activeRailBackgroundAlpha <= 0.02 && (!activeRailBgImage || activeRailBgImage === 'none') && activeSessionListFlat && activeRailDividerFlat && activeRailSearchFlat && veilAlpha >= 0 && veilAlpha <= 1,
@@ -889,7 +901,7 @@ app.whenReady().then(async () => {
       noMention: !document.querySelector('button[title^="Reference a paper"]'),
       compactChrome: !document.querySelector('.tabstrip-tools') && !!document.querySelector('.shell-sidebar-footer'),
       noLayoutControl: !document.querySelector('.shell-layout-trigger'),
-      settingsControl: !document.querySelector('.shell-sidebar-footer .shell-settings-trigger') && !!document.querySelector('.shell-sidebar-footer .app-account-avatar'),
+      settingsControl: !!document.querySelector('.shell-sidebar-footer .shell-settings-trigger[aria-label="Open settings"]') && !!document.querySelector('.shell-sidebar-footer .app-account-avatar'),
       addContext: !!document.querySelector('.composer-add[aria-label*="Add files"]'),
     }
   })()`)
@@ -944,8 +956,9 @@ app.whenReady().then(async () => {
       assistantThreads: sl.assistantThreads.map((thread) => thread.id === tid ? { ...thread, busy: true } : thread),
     }))
     await new Promise((resolve) => setTimeout(resolve, 100))
-    let tab = document.querySelector('.ptab[data-project-id="' + pid + '"]')
-    const dot = tab?.querySelector('.ptab-badge')
+    const projectSelector = '[data-project-id="' + pid + '"]'
+    let tab = document.querySelector('.ptab' + projectSelector + ', .project-tree-node' + projectSelector)
+    const dot = tab?.querySelector('.ptab-badge, .project-tree-badge')
     const running = tab?.getAttribute('data-state') === 'running'
     const pulse = dot ? getComputedStyle(dot).animationName.includes('queue-pulse') : false
     st.patchProject(pid, (sl) => ({
@@ -953,12 +966,13 @@ app.whenReady().then(async () => {
       needsYou: { ...sl.needsYou, [tid]: true },
     }))
     await new Promise((resolve) => setTimeout(resolve, 80))
-    tab = document.querySelector('.ptab[data-project-id="' + pid + '"]')
+    tab = document.querySelector('.ptab' + projectSelector + ', .project-tree-node' + projectSelector)
     const completed = tab?.getAttribute('data-state') === 'completed'
-    const still = tab?.querySelector('.ptab-badge') ? getComputedStyle(tab.querySelector('.ptab-badge')).animationName === 'none' : false
+    const settledDot = tab?.querySelector('.ptab-badge, .project-tree-badge')
+    const still = settledDot ? getComputedStyle(settledDot).animationName === 'none' : false
     st.patchProject(pid, (sl) => ({ needsYou: {} }))
     await new Promise((resolve) => setTimeout(resolve, 80))
-    tab = document.querySelector('.ptab[data-project-id="' + pid + '"]')
+    tab = document.querySelector('.ptab' + projectSelector + ', .project-tree-node' + projectSelector)
     const cleared = !tab?.getAttribute('data-state')
     const nativeAttention = typeof window.kaisola.attention?.setCount === 'function' && typeof window.kaisola.attention?.notify === 'function'
     st.closeProject(pid, { force: true })
@@ -980,7 +994,10 @@ app.whenReady().then(async () => {
     await window.kaisola.terminal.write(id, 'printf agent-response-clock\\r', projectId)
     await new Promise((resolve) => setTimeout(resolve, 160))
     const detached = await window.kaisola.terminal.detachRenderer(id, undefined, projectId)
-    for (let i = 0; i < 32 && !events.some((event) => !event.busy && event.completedAt); i++) {
+    // CI and release builds can briefly starve the broker while GPU/Xcode work
+    // settles; allow two full quiet windows before calling activity durability
+    // broken instead of flaking at the old ~5.8s edge.
+    for (let i = 0; i < 50 && !events.some((event) => !event.busy && event.completedAt); i++) {
       await new Promise((resolve) => setTimeout(resolve, 180))
     }
     const snapshot = await window.kaisola.terminal.snapshot(id, projectId)
@@ -1961,19 +1978,21 @@ a^2 + b^2 = c^2
   console.log('CANVASMIN=' + JSON.stringify(canvasMin))
 
   // 13e) renderer-drawn window lights — slightly larger than the native 12px,
-  //      now living at the top-left of the project tab strip (moved out of the
-  //      rail head), clickable (no-drag), IPC-wired
+  //      living at the top-left of whichever navigation layout is active,
+  //      clickable (no-drag), IPC-wired.
   const lights = await win.webContents.executeJavaScript(`(async () => {
-    const ls = [...document.querySelectorAll('.tabstrip .lights .light')]
+    const host = document.querySelector('.tabstrip') || document.querySelector('.project-sidebar-titlebar')
+    const ls = [...(host?.querySelectorAll('.lights .light') || [])]
     if (ls.length !== 3) return { three: false }
-    const strip = document.querySelector('.tabstrip').getBoundingClientRect()
+    const strip = host.getBoundingClientRect()
     const r = ls[0].getBoundingClientRect()
     return {
       three: true,
       bigger: r.width >= 13,
-      // tucked into the strip's top-left corner, and the strip reaches the
-      // true window top (the lights are the leftmost chrome now)
-      corner: strip.top <= 2 && r.left - strip.left <= 12 && r.top - strip.top <= 16,
+      // Top mode meets the true window edge; Left mode is the intentionally
+      // inset rounded navigation surface. In both, lights own its top-left.
+      corner: (host.classList.contains('tabstrip') ? strip.top <= 2 : strip.top <= 20) &&
+        r.left - strip.left <= 24 && r.top - strip.top <= 16,
       noDrag: getComputedStyle(ls[0].parentElement).getPropertyValue('-webkit-app-region') === 'no-drag',
       ctlApi: typeof window.kaisola.winCtl === 'function',
     }
@@ -1983,7 +2002,7 @@ a^2 + b^2 = c^2
   // 13e-ii) PROJECT TABS — the strip drives independent workspaces. Open a
   //         second tab, prove terminal/dock isolation, round-trip a switch
   //         (both slices survive), and close→reopen to restore the slice. The
-  //         strip DOM must show one .ptab per tab with exactly one active.
+  //         navigation DOM must show one project row per tab with one active.
   const projtabs = await win.webContents.executeJavaScript(`(async () => {
     const g = () => window.__kaisola.getState()
     const wait = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -2036,8 +2055,8 @@ a^2 + b^2 = c^2
     const parkedSecondOk = !!parkedSecond && parkedSecond.terminals.map((t) => t.id).sort().join() === secondTerms
     // Restore the first tab's ordinary Studio layout for downstream probes.
     g().setLayoutMode('studio')
-    // 3) DOM: a .ptab per tab, exactly one marked active
-    const ptabs = [...document.querySelectorAll('.tabstrip .ptab')]
+    // 3) DOM: a top tab or tree parent per project, exactly one marked active.
+    const ptabs = [...document.querySelectorAll('.ptab[data-project-id], .project-tree-node[data-project-id]')]
     const domTwoTabs = ptabs.length === startTabs + 1
     const domActiveOne = ptabs.filter((p) => p.getAttribute('data-active') === 'true').length === 1
     // 4) close the second tab, then reopen it from the undo stack — its slice
@@ -2055,7 +2074,9 @@ a^2 + b^2 = c^2
     g().closeProject(secondId, { force: true })
     await wait(140)
     const backToSingle = g().projectTabs.length === startTabs && g().activeProjectId === firstId
-    const adaptiveSingle = !!document.querySelector('.tabstrip[data-single="true"] .ptab')
+    const adaptiveSingle = g().tabLayout === 'sidebar'
+      ? document.querySelectorAll('.project-tree-node[data-project-id]').length === 1
+      : !!document.querySelector('.tabstrip[data-single="true"] .ptab')
     return {
       twoTabs, isSecondActive, termsDiffer, gridsDiffer, parkedFirstOk, runtimeRouted, activeRuntimeUntouched,
       layoutIndependent, showSessionsWorks, hideFilesWorks, showFilesWorks, studioWorks, focusRestored,
@@ -2182,7 +2203,7 @@ a^2 + b^2 = c^2
       windetach.draftMoved = !!probe && probe.draft === 'detach-smoke-draft'
 
       const adoptWcId = adoptWin.webContents.id
-      const firstTabLeft = await win.webContents.executeJavaScript(`document.querySelector('.ptab')?.getBoundingClientRect().left ?? 180`)
+      const firstTabLeft = await win.webContents.executeJavaScript(`document.querySelector('.ptab, .project-tree-node')?.getBoundingClientRect().left ?? 180`)
       await adoptWin.webContents.executeJavaScript(`window.__kaisola.getState().detachProjectToWindow(${JSON.stringify(detachInfo.pid)}, { x: ${Math.round(win.getBounds().x)} + ${Number(firstTabLeft) + 2}, y: ${Math.round(win.getBounds().y)} + 20 })`).catch(() => null)
       const t3 = Date.now()
       while (Date.now() - t3 < 15000 && !adoptWin.isDestroyed()) await new Promise((r) => setTimeout(r, 120))
@@ -2236,8 +2257,9 @@ a^2 + b^2 = c^2
       return tab ? tab.querySelector('.stab-split') : null
     }
     if (!fig()) return { hasFig: false }
-    // while its pane is up the figure stays visible (accent, data-on)
-    const visibleAtRest = getComputedStyle(fig()).opacity === '1'
+    // Minimal navigation keeps actions quiet until hover/focus; the active
+    // pane is still encoded semantically and the action remains operable.
+    const quietAtRest = getComputedStyle(fig()).opacity === '0' && fig().getAttribute('data-on') === 'true' && !!fig().getAttribute('aria-label')
     fig().click()
     await new Promise((r) => setTimeout(r, 120))
     const putAway = !get().dockViews.includes(a1) || !get().dockOpen
@@ -2248,7 +2270,7 @@ a^2 + b^2 = c^2
     await new Promise((r) => setTimeout(r, 120))
     const hidesAll = get().dockOpen === false && !document.querySelector('.session-card[data-show="true"]')
     get().setDock(true, 'assistant')
-    return { hasFig: true, visibleAtRest, putAway, back, hidesAll }
+    return { hasFig: true, quietAtRest, putAway, back, hidesAll }
   })()`)
   console.log('TOGGLE=' + JSON.stringify(toggle))
 
@@ -2286,15 +2308,17 @@ a^2 + b^2 = c^2
   })()`)
   console.log('AUTONAME=' + JSON.stringify(autoname))
 
-  // 14) the old workflow sidebar is hidden; only the focused sessions/files
-  //     sidebars remain.
+  // 14) the old workflow sidebar is hidden; Left navigation is a two-level
+  //     project/session tree, while the file tree remains independently right.
   const minimalUi = await win.webContents.executeJavaScript(`(async () => {
     await new Promise((r) => setTimeout(r, 120))
     return {
       noSidebar: !document.querySelector('.sidebar'),
       noSidebarResize: !document.querySelector('.sidebar-resize'),
       noStageNav: document.querySelectorAll('.side-nav-item').length === 0,
-      hasSessionSidebar: !!document.querySelector('.session-sidebar'),
+      hasSessionSidebar: !!document.querySelector('.project-session-sidebar'),
+      hasProjectParents: document.querySelectorAll('.project-tree-node[data-project-id]').length === window.__kaisola.getState().projectTabs.length,
+      sessionsNested: !!document.querySelector('.project-tree-node[data-active="true"] > .project-tree-children > .stabs[aria-orientation="vertical"]'),
       hasRail: !!document.querySelector('.wsrail'),
       filesOnRight: !!document.querySelector('.app-body > .wsrail[data-side="right"]'),
       hasPlus: !!document.querySelector('.stabs .drop-btn'),
@@ -2305,97 +2329,92 @@ a^2 + b^2 = c^2
   })()`)
   console.log('MINIMAL_UI=' + JSON.stringify(minimalUi))
 
-  // 14b) project/session hierarchy is user-selectable and switches in place.
-  //      Every treatment keeps the same terminal/thread identities and drafts;
-  //      even Compact moves the one existing session row rather than cloning it.
+  // 14b) Left and Top are the only two navigation treatments. Left is a real
+  //      two-level project/session tree; Top is two distinct horizontal rows.
+  //      Switching never clones or replaces live session identity.
   const tabLayouts = await win.webContents.executeJavaScript(`(async () => {
     const get = () => window.__kaisola.getState()
-    const wait = () => new Promise((r) => setTimeout(r, 45))
-    const project = document.querySelector('.ptab[data-active="true"]')
-    if (!project) return { rendered: false }
+    const wait = (ms = 90) => new Promise((r) => setTimeout(r, ms))
     const original = get().tabLayout
+    const firstId = get().activeProjectId
     const termIds = get().terminals.map((t) => t.id).join('|')
     const threadIds = get().assistantThreads.map((t) => t.id).join('|')
     const active = get().activeThreadId
-    get().setAssistantDraft(active, { text: 'layout-switch-draft' })
-    const inspect = () => {
-      const shelf = document.querySelector('.stabs')
-      const marker = shelf?.querySelector('.stabs-project-anchor')
-      const session = shelf?.querySelector('.stab[data-active="true"]') || shelf?.querySelector('.stab')
-      const style = shelf ? getComputedStyle(shelf) : null
-      return { shelf, marker, session, style }
-    }
+    if (active) get().setAssistantDraft(active, { text: 'layout-switch-draft' })
+
     get().setTabLayout('sidebar'); await wait()
-    const sidebar = inspect()
-    const sidebarOk = document.querySelectorAll('.stabs').length === 1 &&
-      !!document.querySelector('.session-sidebar > .stabs[aria-orientation="vertical"]') &&
-      !document.querySelector('.dock-col > .stabs') &&
-      !!document.querySelector('.app-body > .wsrail[data-side="right"]') && !!sidebar.session
+    let activeProject = document.querySelector('.project-tree-node[data-project-id="' + firstId + '"]')
+    let verticalTabs = activeProject?.querySelector(':scope > .project-tree-children > .stabs[aria-orientation="vertical"]')
+    const leftSurface = document.querySelector('.project-session-sidebar')
+    const leftOk = document.documentElement.dataset.tabLayout === 'sidebar' && !!leftSurface && !!activeProject &&
+      activeProject.getAttribute('aria-expanded') === 'true' && !!verticalTabs &&
+      !!document.querySelector('.app-body > .wsrail[data-side="right"]') &&
+      !document.querySelector('.tabstrip, .top-session-row')
+    const hierarchy = !!activeProject?.querySelector(':scope > .project-tree-row + .project-tree-children') &&
+      document.querySelectorAll('.project-tree-node[data-project-id]').length === get().projectTabs.length
+    const leftUtilities = !!document.querySelector('.project-sidebar-bottom .shell-sidebar-footer .shell-settings-trigger') &&
+      !!document.querySelector('.project-sidebar-bottom .tabstrip-view-controls')
 
-    get().setTabLayout('shelf'); await wait()
-    const shelf = inspect()
-    const shelfOk = !!shelf.shelf && !!shelf.marker && shelf.marker.getBoundingClientRect().width >= 16 &&
-      getComputedStyle(project, '::after').display !== 'none' && shelf.style.borderTopWidth !== '0px'
+    // A project remains selectable after returning to it, and selecting the
+    // active parent simply collapses/re-expands its children.
+    const secondId = get().newProject({ path: null, focus: false })
+    await wait()
+    document.querySelector('.project-tree-node[data-project-id="' + secondId + '"] .project-tree-select')?.click(); await wait()
+    const selectedSecond = get().activeProjectId === secondId && !!document.querySelector('.project-tree-node[data-project-id="' + secondId + '"] > .project-tree-children')
+    document.querySelector('.project-tree-node[data-project-id="' + firstId + '"] .project-tree-select')?.click(); await wait()
+    const selectedFirstAgain = get().activeProjectId === firstId && !!document.querySelector('.project-tree-node[data-project-id="' + firstId + '"] > .project-tree-children')
+    document.querySelector('.project-tree-node[data-project-id="' + firstId + '"] .project-tree-select')?.click(); await wait()
+    const collapsed = !document.querySelector('.project-tree-node[data-project-id="' + firstId + '"] > .project-tree-children')
+    document.querySelector('.project-tree-node[data-project-id="' + firstId + '"] .project-tree-select')?.click(); await wait()
+    const reexpanded = !!document.querySelector('.project-tree-node[data-project-id="' + firstId + '"] > .project-tree-children')
+    get().closeProject(secondId, { force: true }); await wait()
+    const projectRoundTrip = selectedSecond && selectedFirstAgain && collapsed && reexpanded && get().activeProjectId === firstId
 
-    get().setTabLayout('bare'); await wait()
-    const bare = inspect()
-    const bareOk = document.documentElement.dataset.tabLayout === 'bare' && !!bare.shelf &&
-      getComputedStyle(project, '::after').display === 'none' && getComputedStyle(bare.marker).display === 'none' &&
-      bare.style.borderTopWidth === '0px' && bare.style.backgroundImage === 'none'
-
-    get().setTabLayout('runway'); await wait()
-    const runway = inspect()
-    const runwayOk = !!runway.shelf && runway.style.backgroundColor !== 'rgba(0, 0, 0, 0)' &&
-      runway.style.backgroundColor !== 'transparent' && getComputedStyle(runway.marker).display === 'none'
-
-    get().setTabLayout('flat'); await wait()
-    const flat = inspect()
-    const flatSession = flat.session && getComputedStyle(flat.session)
-    const flatOk = document.documentElement.dataset.tabLayout === 'flat' && !!flatSession &&
-      Number.parseInt(flatSession.fontWeight, 10) >= 600 && flatSession.boxShadow === 'none' &&
-      getComputedStyle(flat.marker).display === 'none'
-
-    get().setTabLayout('compact'); await wait()
-    const compact = inspect()
-    const compactOk = document.querySelectorAll('.stabs').length === 1 &&
-      !!document.querySelector('.compact-session-slot > .stabs') && !document.querySelector('.dock-col > .stabs') &&
-      !!compact.session
-
-    get().setTabLayout('bare'); await wait()
-    const toSidebar = document.querySelector('.stabs-sidebar-toggle')
-    const sidebarActionClear = /left sidebar/i.test(toSidebar?.getAttribute('aria-label') || toSidebar?.getAttribute('title') || '')
-    toSidebar?.click(); await wait()
-    const verticalTabs = document.querySelector('.session-sidebar > .stabs[aria-orientation="vertical"]')
+    activeProject = document.querySelector('.project-tree-node[data-project-id="' + firstId + '"]')
+    verticalTabs = activeProject?.querySelector(':scope > .project-tree-children > .stabs[aria-orientation="vertical"]')
     const verticalTrack = verticalTabs?.querySelector(':scope > .stabs-track')
     const verticalAdd = verticalTabs?.querySelector(':scope > .drop-btn')
     const addBelowLastTab = !!verticalTrack && verticalTrack.nextElementSibling === verticalAdd
     verticalAdd?.click(); await wait()
-    const addMenu = document.querySelector('.drop-menu')
-    const addRect = verticalAdd?.getBoundingClientRect()
-    const menuRect = addMenu?.getBoundingClientRect()
-    const addOptionsBelow = !!addRect && !!menuRect && menuRect.top >= addRect.bottom - 1
+    const addOptionsVisible = !!document.querySelector('.drop-menu .drop-item')
     verticalAdd?.click(); await wait()
-    const movedToSidebar = get().tabLayout === 'sidebar' && !!verticalTabs
-    const toTop = document.querySelector('.session-sidebar-head button')
-    const topActionClear = /across the top/i.test(toTop?.getAttribute('aria-label') || toTop?.getAttribute('title') || '')
-    toTop?.click(); await wait()
-    const movedBackTop = get().tabLayout === 'bare' && !!document.querySelector('.stabs-sidebar-toggle')
-    const reciprocalToggle = !!toSidebar && !!toTop && movedToSidebar && movedBackTop && sidebarActionClear && topActionClear
-    const verticalAddFlow = addBelowLastTab && addOptionsBelow
+
+    const leftToTop = document.querySelector('.project-sidebar-layout')
+    const topActionClear = /top navigation layout/i.test(leftToTop?.getAttribute('aria-label') || '')
+    leftToTop?.click(); await wait()
+    const projectRow = document.querySelector('.tabstrip')
+    const sessionRow = document.querySelector('.top-session-row > .stabs[aria-orientation="horizontal"]')
+    const projectRect = projectRow?.getBoundingClientRect()
+    const sessionRect = sessionRow?.getBoundingClientRect()
+    const topOk = get().tabLayout === 'bare' && document.documentElement.dataset.tabLayout === 'bare' &&
+      !!projectRow && !!sessionRow && !document.querySelector('.project-session-sidebar') &&
+      !!projectRect && !!sessionRect && sessionRect.top >= projectRect.bottom - 1
+    const topUtilities = !!document.querySelector('.tabstrip > .shell-sidebar-footer[data-topbar] .shell-settings-trigger')
+    const topToLeft = document.querySelector('.stabs-sidebar-toggle')
+    const leftActionClear = /left navigation layout/i.test(topToLeft?.getAttribute('aria-label') || '')
+    topToLeft?.click(); await wait()
+    const reciprocalToggle = get().tabLayout === 'sidebar' && !!document.querySelector('.project-session-sidebar') &&
+      !!leftToTop && !!topToLeft && topActionClear && leftActionClear
+    const verticalAddFlow = addBelowLastTab && addOptionsVisible
 
     const stateKept = get().terminals.map((t) => t.id).join('|') === termIds &&
       get().assistantThreads.map((t) => t.id).join('|') === threadIds &&
-      get().assistantDrafts[active]?.text === 'layout-switch-draft'
-    const staticPaint = [sidebar, shelf, bare, runway, flat, compact].every((v) => !v.style?.backdropFilter || v.style.backdropFilter === 'none')
-    const accessible = /sessions$/i.test(compact.shelf?.getAttribute('aria-label') || '') && sidebar.shelf?.getAttribute('aria-orientation') === 'vertical'
-    const sessionIdentity = !!compact.session?.style.getPropertyValue('--sid').trim()
+      (!active || get().assistantDrafts[active]?.text === 'layout-switch-draft')
+    const leftStyle = leftSurface ? getComputedStyle(leftSurface) : null
+    get().setTabLayout('bare'); await wait()
+    const topShelf = document.querySelector('.top-session-row > .stabs')
+    const staticPaint = (!leftStyle?.backdropFilter || leftStyle.backdropFilter === 'none') &&
+      (!topShelf || !getComputedStyle(topShelf).backdropFilter || getComputedStyle(topShelf).backdropFilter === 'none')
+    const accessible = document.querySelector('.top-session-row > .stabs')?.getAttribute('aria-orientation') === 'horizontal'
+    const topSession = document.querySelector('.top-session-row .stab[data-active="true"], .top-session-row .stab')
+    const sessionIdentity = !!topSession?.style.getPropertyValue('--sid').trim()
     get().setTabLayout(original); await wait()
-    return { rendered: true, sidebarOk, shelfOk, bareOk, runwayOk, flatOk, compactOk, reciprocalToggle, verticalAddFlow, stateKept, staticPaint, accessible, sessionIdentity }
+    return { rendered: true, leftOk, topOk, hierarchy, leftUtilities, topUtilities, projectRoundTrip, reciprocalToggle, verticalAddFlow, stateKept, staticPaint, accessible, sessionIdentity }
   })()`)
   console.log('TAB_LAYOUTS=' + JSON.stringify(tabLayouts))
 
-  // 14b2) layout actions remain reversible and the structural switches stay
-  //       in the same top-right slots regardless of panel visibility.
+  // 14b2) Settings owns the polished visual chooser, while the structural
+  //       controls follow the active navigation edge and remain reversible.
   await injectAuthProfile()
   const intuitiveLayoutControls = await win.webContents.executeJavaScript(`(async () => {
     const get = () => window.__kaisola.getState()
@@ -2407,7 +2426,7 @@ a^2 + b^2 = c^2
     get().setTabLayout('sidebar')
     if (!get().railOpen) get().toggleRail()
     await wait()
-    const permanentTopControls = document.querySelectorAll('.tabstrip-view-controls > button').length === 2
+    const permanentViewControls = document.querySelectorAll('.project-sidebar-bottom .tabstrip-view-controls > button').length === 2
     const tree = document.querySelector('.wsrail[data-side="right"]')
     const topClose = document.querySelector('.tabstrip-view-controls [aria-label="Hide file tree"]')
     const noLocalClose = !!tree && !tree.querySelector('.wsrail-head button')
@@ -2419,27 +2438,26 @@ a^2 + b^2 = c^2
     topRestore?.click(); await new Promise((r) => setTimeout(r, 300))
     const restored = !!document.querySelector('.wsrail[data-side="right"]') && get().railOpen === true
 
-    // The footer gear moved into the profile popover; remembered-pane reopen
-    // now rides the menu's Settings row.
-    const openSettingsFromProfile = async () => {
-      document.querySelector('.shell-sidebar-footer .app-account-avatar')?.click(); await wait()
-      document.querySelector('.app-account-menu .shell-settings-trigger')?.click(); await wait()
+    // The direct gear and native Settings command both reopen the last pane.
+    const openSettingsDirect = async () => {
+      document.querySelector('.shell-sidebar-footer .shell-settings-trigger[aria-label="Open settings"]')?.click(); await wait()
     }
     get().setSettingsOpen(true, 'general'); await wait()
     const opensRequestedGeneral = /Appearance/.test(document.querySelector('.settings-pane')?.textContent || '')
     get().setSettingsOpen(false); await wait()
-    await openSettingsFromProfile()
-    const footerReopensLast = /Appearance/.test(document.querySelector('.settings-pane')?.textContent || '')
+    await openSettingsDirect()
+    const directReopensLast = /Appearance/.test(document.querySelector('.settings-pane')?.textContent || '')
     const interfaceNav = [...document.querySelectorAll('.settings-nav-item')].find((node) => /Interface/.test(node.textContent || ''))
     interfaceNav?.click()
     await wait()
     get().setSettingsOpen(false); await wait()
-    await openSettingsFromProfile()
+    await openSettingsDirect()
     const remembersInterface = /Interface/.test(document.querySelector('.settings-pane-title')?.textContent || '')
     const settingsOwned = !!document.querySelector('.settings-row[data-setting="workspace-view"]') &&
       !!document.querySelector('.settings-row[data-setting="session-panels"]') &&
-      !!document.querySelector('.settings-row[data-setting="session-placement"]')
-    const advancedStylesDisclosed = !!document.querySelector('.settings-layout-advanced [data-setting="advanced-session-style"]')
+      !!document.querySelector('[data-setting="navigation-layout"]')
+    const onlyTwoNavigationLayouts = document.querySelectorAll('[data-setting="navigation-layout"] button').length === 2 &&
+      !document.querySelector('[data-setting="session-placement"], [data-setting="advanced-session-style"]')
     const choose = async (setting, label) => {
       document.querySelector('.settings-row[data-setting="' + setting + '"] .drop-btn')?.click()
       await wait()
@@ -2454,16 +2472,30 @@ a^2 + b^2 = c^2
     const toFilesAndSessions = await choose('workspace-view', 'Files and sessions') && get().layoutMode === 'studio'
     const panelsHidden = await choose('session-panels', 'Hidden') && get().dockOpen === false
     const panelsShown = await choose('session-panels', 'Shown') && get().dockOpen === true
-    const movedToTop = await choose('session-placement', 'Across top') && get().tabLayout === 'bare'
-    const footerInFileTree = !!document.querySelector('.wsrail[data-side="left"] > .shell-sidebar-footer')
-    const movedToLeft = await choose('session-placement', 'Left sidebar') && get().tabLayout === 'sidebar'
-    const footerInSessions = !!document.querySelector('.session-sidebar > .shell-sidebar-footer')
+    const chooseNavigation = async (label) => {
+      const option = [...document.querySelectorAll('[data-setting="navigation-layout"] button')].find((node) =>
+        (node.querySelector('strong')?.textContent || '').trim() === label,
+      )
+      option?.click()
+      await wait()
+      return !!option
+    }
+    const movedToTop = await chooseNavigation('Top') && get().tabLayout === 'bare'
+    const controlsAfterTop = !!document.querySelector('.tabstrip > .shell-sidebar-footer[data-topbar]') &&
+      !!document.querySelector('.top-session-row > .stabs') &&
+      !document.querySelector('.project-session-sidebar')
+    const movedToLeft = await chooseNavigation('Left') && get().tabLayout === 'sidebar'
+    const controlsAfterLeft = !!document.querySelector('.project-sidebar-bottom > .shell-sidebar-footer') &&
+      !!document.querySelector('.project-tree-children > .stabs') &&
+      !document.querySelector('.tabstrip, .top-session-row')
     get().setSettingsOpen(false)
     await wait()
     get().openPalette('commands')
     await wait()
     const paletteText = document.querySelector('.palette')?.textContent || ''
-    const rareActionsInPalette = /Place sessions on the left/.test(paletteText) && /Use compact session row/.test(paletteText) && /file tree/.test(paletteText)
+    const rareActionsInPalette = /Place sessions on the left/.test(paletteText) &&
+      /Place sessions across the top/.test(paletteText) &&
+      !/compact session|session runway|flat session/i.test(paletteText) && /file tree/.test(paletteText)
     get().closePalette()
     await wait()
 
@@ -2472,7 +2504,7 @@ a^2 + b^2 = c^2
     if (get().railOpen !== originalRail) get().toggleRail()
     await wait()
     return {
-      permanentTopControls,
+      permanentViewControls,
       fileTreeIconOnly,
       noLocalClose,
       hidden,
@@ -2481,14 +2513,14 @@ a^2 + b^2 = c^2
       noFooterRecovery,
       noStandaloneLayout: !document.querySelector('.shell-layout-trigger'),
       settingsOwned,
-      advancedStylesDisclosed,
+      onlyTwoNavigationLayouts,
       opensRequestedGeneral,
-      footerReopensLast,
+      directReopensLast,
       remembersInterface,
       workspaceReversible: toFilesOnly && toFilesAndSessions,
       panelsReversible: panelsHidden && panelsShown,
-      placementReversible: movedToTop && movedToLeft,
-      footerFollowsNavigation: footerInFileTree && footerInSessions,
+      navigationReversible: movedToTop && movedToLeft,
+      controlsFollowLayout: controlsAfterTop && controlsAfterLeft,
       rareActionsInPalette,
       previewPermanent: !!document.querySelector('.tabstrip-view-controls [aria-label$="file preview"]') &&
         !document.querySelector('.canvas-local-close, .file-preview-toggle'),
@@ -2497,8 +2529,8 @@ a^2 + b^2 = c^2
   console.log('INTUITIVE_LAYOUT_CONTROLS=' + JSON.stringify(intuitiveLayoutControls))
 
   // A DOM element.click() bypasses Chromium's frameless-window hit regions.
-  // Exercise Settings' layout dropdown with real pointer input so its portal
-  // cannot be visible yet covered by a stale drag region.
+  // Exercise both Settings layout cards with real pointer input so the visual
+  // chooser cannot be visible yet covered by a stale drag region.
   const pointerSetup = await win.webContents.executeJavaScript(`(async () => {
     const get = () => window.__kaisola.getState()
     const original = get().tabLayout
@@ -2508,9 +2540,9 @@ a^2 + b^2 = c^2
     await new Promise((r) => setTimeout(r, 70))
     ;[...document.querySelectorAll('.settings-nav-item')].find((node) => /Interface/.test(node.textContent || ''))?.click()
     await new Promise((r) => setTimeout(r, 70))
-    document.querySelector('.settings-row[data-setting="session-placement"] .drop-btn')?.click()
-    await new Promise((r) => setTimeout(r, 70))
-    const action = [...document.querySelectorAll('.drop-menu .drop-item')].find((node) => /Across top/.test(node.textContent || ''))
+    const action = [...document.querySelectorAll('[data-setting="navigation-layout"] button')].find((node) =>
+      (node.querySelector('strong')?.textContent || '').trim() === 'Top',
+    )
     const rect = action?.getBoundingClientRect()
     return { original, rect: rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null }
   })()`)
@@ -2523,18 +2555,18 @@ a^2 + b^2 = c^2
   if (pointerSetup.rect) {
     await pointerClick(pointerSetup.rect)
     const afterFirst = await win.webContents.executeJavaScript(`(async () => {
-      document.querySelector('.settings-row[data-setting="session-placement"] .drop-btn')?.click()
-      await new Promise((r) => setTimeout(r, 70))
-      const action = [...document.querySelectorAll('.drop-menu .drop-item')].find((node) => /Left sidebar/.test(node.textContent || ''))
+      const action = [...document.querySelectorAll('[data-setting="navigation-layout"] button')].find((node) =>
+        (node.querySelector('strong')?.textContent || '').trim() === 'Left',
+      )
       const rect = action?.getBoundingClientRect()
       return {
         worked: window.__kaisola.getState().tabLayout === 'bare',
-        menu: !!document.querySelector('.drop-menu'),
+        interactive: !!document.querySelector('.settings-panel-v2') && !!action,
         rect: rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null,
       }
     })()`)
     realPointerLayout.firstWorked = afterFirst.worked
-    realPointerLayout.stayedInteractive = afterFirst.menu
+    realPointerLayout.stayedInteractive = afterFirst.interactive
     if (afterFirst.rect) {
       await pointerClick(afterFirst.rect)
       realPointerLayout.reverseWorked = await win.webContents.executeJavaScript(`window.__kaisola.getState().tabLayout === 'sidebar'`)
@@ -2546,6 +2578,21 @@ a^2 + b^2 = c^2
     await new Promise((r) => setTimeout(r, 50))
   })()`)
   console.log('REAL_POINTER_LAYOUT=' + JSON.stringify(realPointerLayout))
+
+  // Native macOS menu commands use the same renderer routes as Settings and
+  // the inline toggles. Verify both directions plus Software Updates' pane.
+  win.webContents.send('navigation:layout', 'bare')
+  await new Promise((r) => setTimeout(r, 100))
+  const nativeTopLayout = await win.webContents.executeJavaScript(`window.__kaisola.getState().tabLayout === 'bare' && !!document.querySelector('.top-session-row')`)
+  win.webContents.send('navigation:layout', 'sidebar')
+  await new Promise((r) => setTimeout(r, 100))
+  const nativeLeftLayout = await win.webContents.executeJavaScript(`window.__kaisola.getState().tabLayout === 'sidebar' && !!document.querySelector('.project-session-sidebar')`)
+  win.webContents.send('settings:open', 'general')
+  await new Promise((r) => setTimeout(r, 100))
+  const nativeSettingsRoute = await win.webContents.executeJavaScript(`window.__kaisola.getState().settingsOpen === true && window.__kaisola.getState().settingsPane === 'general' && /Updates/.test(document.querySelector('.settings-pane')?.textContent || '')`)
+  await win.webContents.executeJavaScript(`window.__kaisola.getState().setSettingsOpen(false); window.__kaisola.getState().setTabLayout(${JSON.stringify(pointerSetup.original)})`)
+  const nativeNavigationMenu = { top: nativeTopLayout, left: nativeLeftLayout, updates: nativeSettingsRoute }
+  console.log('NATIVE_NAVIGATION_MENU=' + JSON.stringify(nativeNavigationMenu))
 
   // 14c) a narrow agent card wraps its composer and identity controls instead
   //      of clipping the model picker or send/connection actions.
@@ -2640,9 +2687,7 @@ a^2 + b^2 = c^2
   await injectAuthProfile()
   const settings = await win.webContents.executeJavaScript(`(async () => {
     const expectedPane = window.__kaisola.getState().settingsPane || 'general'
-    document.querySelector('.shell-sidebar-footer .app-account-avatar')?.click()
-    await new Promise((r) => setTimeout(r, 80))
-    const settingsButton = document.querySelector('.app-account-menu .shell-settings-trigger')
+    const settingsButton = document.querySelector('.shell-sidebar-footer .shell-settings-trigger[aria-label="Open settings"]')
     settingsButton?.click()
     await new Promise((r) => setTimeout(r, 150))
     // Zed-style settings: a nav of categories, one pane at a time
@@ -2662,9 +2707,10 @@ a^2 + b^2 = c^2
     const interfaceNav = [...document.querySelectorAll('.settings-nav-item')].find((e) => /Interface/.test(e.textContent || ''))
     interfaceNav?.click()
     await new Promise((r) => setTimeout(r, 50))
-    const hasLayoutSettings = !!document.querySelector('[data-setting="workspace-view"]') && !!document.querySelector('[data-setting="session-panels"]') && !!document.querySelector('[data-setting="session-placement"]')
-    const hasAdvancedStyles = !!document.querySelector('.settings-layout-advanced [data-setting="advanced-session-style"]')
-    const hasTabLayout = /Session placement/.test(document.querySelector('.settings-pane')?.textContent || '')
+    const hasLayoutSettings = !!document.querySelector('[data-setting="workspace-view"]') && !!document.querySelector('[data-setting="session-panels"]') && !!document.querySelector('[data-setting="navigation-layout"]')
+    const noAdvancedStyles = !document.querySelector('[data-setting="session-placement"], .settings-layout-advanced [data-setting="advanced-session-style"]')
+    const hasTabLayout = /Navigation layout/.test(document.querySelector('.settings-pane')?.textContent || '') &&
+      document.querySelectorAll('[data-setting="navigation-layout"] button').length === 2
     const extensionsNav = [...document.querySelectorAll('.settings-nav-item')].find((e) => /Extensions/.test(e.textContent || ''))
     extensionsNav?.click()
     await new Promise((r) => setTimeout(r, 40))
@@ -2672,6 +2718,8 @@ a^2 + b^2 = c^2
     const generalNav = [...document.querySelectorAll('.settings-nav-item')].find((e) => /General/.test(e.textContent || ''))
     generalNav?.click()
     await new Promise((r) => setTimeout(r, 30))
+    const updatesInSettings = /Updates/.test(document.querySelector('.settings-pane')?.textContent || '') &&
+      !![...document.querySelectorAll('.settings-pane button')].find((button) => /Check for updates|Restart to update/.test(button.textContent || ''))
     const hasSidebarControls = /Sidebar/.test(document.querySelector('.settings-panel-v2')?.textContent || '')
     const searchInput = document.querySelector('.settings-search input')
     document.querySelector('.settings-panel-v2')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true, bubbles: true }))
@@ -2682,8 +2730,8 @@ a^2 + b^2 = c^2
     await new Promise((r) => setTimeout(r, 30))
     const permanentFilesControls = document.querySelectorAll('.tabstrip-view-controls > button').length === 2 &&
       !document.querySelector('.canvas-local-close, .file-preview-toggle, .wsrail-head button')
-    const footerOwned = !document.querySelector('.shell-sidebar-footer .shell-settings-trigger') && !document.querySelector('.tabstrip .shell-settings-trigger')
-    return { settingsSeparate: !!settingsButton, footerOwned, reopensRemembered, hasLayoutSettings, hasAdvancedStyles, noStandaloneLayout: !document.querySelector('.shell-layout-trigger'), hasAppearance, hasUsage, hasDiskResidency, hasTabLayout, extensionsInSettings, permanentFilesControls, noSidebarControls: !hasSidebarControls, keyboardSearchFocus, visualChoices }
+    const directSettings = !!document.querySelector('.shell-sidebar-footer .shell-settings-trigger[aria-label="Open settings"]')
+    return { settingsSeparate: !!settingsButton, directSettings, reopensRemembered, hasLayoutSettings, noAdvancedStyles, noStandaloneLayout: !document.querySelector('.shell-layout-trigger'), hasAppearance, hasUsage, hasDiskResidency, hasTabLayout, extensionsInSettings, updatesInSettings, permanentFilesControls, noSidebarControls: !hasSidebarControls, keyboardSearchFocus, visualChoices }
   })()`)
   console.log('SETTINGS=' + JSON.stringify(settings))
 
@@ -3791,7 +3839,8 @@ a^2 + b^2 = c^2
     await window.kaisola.fs.write(paths.settings, '// smoke\\n{ "theme": "dark", "termFontSize": 15, "tabLayout": "runway", }\\n')
     await window.kaisola.fs.write(paths.keymap, '[ { "bindings": { "cmd-9": null, "cmd-shift-y": "dock.toggle" } } ]\\n')
     await window.__kaisolaLib.loadUserConfig()
-    const applied = g().theme === 'dark' && g().termFontSize === 15 && g().tabLayout === 'runway'
+    // Legacy horizontal values migrate to the single supported Top layout.
+    const applied = g().theme === 'dark' && g().termFontSize === 15 && g().tabLayout === 'bare'
     const km = g().keymapOverrides
     const kmOk = km['cmd-9'] === null && km['cmd-shift-y'] === 'dock.toggle'
     // restore
@@ -3951,7 +4000,7 @@ a^2 + b^2 = c^2
     !restartAgent.created || !restartAgent.restarted || !restartAgent.remounted || !restartAgent.resumeKept || !restartAgent.draftKept ||
     !manualCodex.upgraded || !manualCodex.exact || !manualCodex.draftKept || !manualCodex.downgraded ||
     !manualClaude.upgraded || !manualClaude.draftKept || !manualClaude.toolKept || !manualClaude.downgraded ||
-    !rootChildren || !minimalShell.noWorkflowSidebar || !minimalShell.splitSidebarsDefault || !minimalShell.hasSessions || !minimalShell.noBoard || !minimalShell.railFilesOnly || !minimalShell.hasEmptyLauncher || !minimalShell.stageFiles || !minimalShell.studioDefault || !minimalShell.sidebarFooter || !minimalShell.topViewControls || !accountUi.avatar || !accountUi.headshot || !accountUi.menu || !accountUi.usageInMenu || !accountUi.settingsInMenu || !accountUi.usageOpened || !accountUi.avatarOnly || !accountUi.bottomLeft || !accountUi.menuAbove || !accountUi.menuFits || !accountUi.aligned || !claudeOptIn || !nativeWindow.rendererClippedMaterial || !icon.exists || !icon.usable || !icon.square || !icon.large || !glass.appSamplingLayer || !glass.chromeGlass || !glass.activeTintWhite || !glass.railLayerFlattened || !glass.contentGlassy || !glass.sessionGlassy || !glass.termGlassTint || !glass.blurKeepsGlass || !glass.lightsGray || !glass.nativeWindowRounding ||
+    !rootChildren || !minimalShell.noWorkflowSidebar || !minimalShell.splitSidebarsDefault || !minimalShell.hasSessions || !minimalShell.noBoard || !minimalShell.railFilesOnly || !minimalShell.hasEmptyLauncher || !minimalShell.stageFiles || !minimalShell.studioDefault || !minimalShell.controlsFollowLeft || !minimalShell.permanentViewControls || !accountUi.avatar || !accountUi.headshot || !accountUi.menu || !accountUi.usageInMenu || !accountUi.settingsInMenu || !accountUi.usageOpened || !accountUi.avatarOnly || !accountUi.anchoredToLayout || !accountUi.menuAdjacent || !accountUi.menuFits || !accountUi.aligned || !claudeOptIn || !nativeWindow.rendererClippedMaterial || !icon.exists || !icon.usable || !icon.square || !icon.large || !glass.appSamplingLayer || !glass.chromeGlass || !glass.activeTintWhite || !glass.railLayerFlattened || !glass.contentGlassy || !glass.sessionGlassy || !glass.termGlassTint || !glass.blurKeepsGlass || !glass.lightsGray || !glass.nativeWindowRounding ||
     !emptyOk || !demoOk ||
     !review.opened || !review.closed || !review.decided ||
     !term.run || !term.ptyOk || !term.cdWorks || !term.dock || !term.host || !term.lightComposerPalette ||
@@ -4005,15 +4054,16 @@ a^2 + b^2 = c^2
     !projectSwitchPerf.responsive || !projectSwitchPerf.warmFiles || !projectSwitchPerf.restored ||
     !windetach.spawned || !windetach.adopted || !windetach.termsMoved || !windetach.globalsMoved || !windetach.styleApplied || !windetach.draftMoved || !windetach.srcDropped ||
     !windetach.recombined || !windetach.insertedAtDrop || !windetach.termsSame || !windetach.pidsSame || !windetach.sourceClosed || !windetach.targetReused || !windetach.windowCountRestored ||
-    !toggle.hasFig || !toggle.visibleAtRest || !toggle.putAway || !toggle.back || !toggle.hidesAll ||
+    !toggle.hasFig || !toggle.quietAtRest || !toggle.putAway || !toggle.back || !toggle.hidesAll ||
     !autoname.named || !autoname.rowShows || !autoname.sticky || !autoname.manualWins || !autoname.termNamed || !autoname.promptTitle || !autoname.terminalManualWins ||
-    !minimalUi.noSidebar || !minimalUi.noSidebarResize || !minimalUi.noStageNav || !minimalUi.hasSessionSidebar || !minimalUi.hasRail || !minimalUi.filesOnRight || !minimalUi.hasPlus || !minimalUi.hasFiles || !minimalUi.hasUsage || !minimalUi.hasTheme ||
-    !tabLayouts.rendered || !tabLayouts.sidebarOk || !tabLayouts.shelfOk || !tabLayouts.bareOk || !tabLayouts.runwayOk || !tabLayouts.flatOk || !tabLayouts.compactOk || !tabLayouts.reciprocalToggle || !tabLayouts.verticalAddFlow || !tabLayouts.stateKept || !tabLayouts.staticPaint || !tabLayouts.accessible || !tabLayouts.sessionIdentity ||
-    !intuitiveLayoutControls.permanentTopControls || !intuitiveLayoutControls.fileTreeIconOnly || !intuitiveLayoutControls.noLocalClose || !intuitiveLayoutControls.hidden || !intuitiveLayoutControls.topRestore || !intuitiveLayoutControls.restored || !intuitiveLayoutControls.noFooterRecovery || !intuitiveLayoutControls.noStandaloneLayout || !intuitiveLayoutControls.settingsOwned || !intuitiveLayoutControls.advancedStylesDisclosed || !intuitiveLayoutControls.opensRequestedGeneral || !intuitiveLayoutControls.footerReopensLast || !intuitiveLayoutControls.remembersInterface || !intuitiveLayoutControls.workspaceReversible || !intuitiveLayoutControls.panelsReversible || !intuitiveLayoutControls.placementReversible || !intuitiveLayoutControls.footerFollowsNavigation || !intuitiveLayoutControls.rareActionsInPalette || !intuitiveLayoutControls.previewPermanent ||
+    !minimalUi.noSidebar || !minimalUi.noSidebarResize || !minimalUi.noStageNav || !minimalUi.hasSessionSidebar || !minimalUi.hasProjectParents || !minimalUi.sessionsNested || !minimalUi.hasRail || !minimalUi.filesOnRight || !minimalUi.hasPlus || !minimalUi.hasFiles || !minimalUi.hasUsage || !minimalUi.hasTheme ||
+    !tabLayouts.rendered || !tabLayouts.leftOk || !tabLayouts.topOk || !tabLayouts.hierarchy || !tabLayouts.leftUtilities || !tabLayouts.topUtilities || !tabLayouts.projectRoundTrip || !tabLayouts.reciprocalToggle || !tabLayouts.verticalAddFlow || !tabLayouts.stateKept || !tabLayouts.staticPaint || !tabLayouts.accessible || !tabLayouts.sessionIdentity ||
+    !intuitiveLayoutControls.permanentViewControls || !intuitiveLayoutControls.fileTreeIconOnly || !intuitiveLayoutControls.noLocalClose || !intuitiveLayoutControls.hidden || !intuitiveLayoutControls.topRestore || !intuitiveLayoutControls.restored || !intuitiveLayoutControls.noFooterRecovery || !intuitiveLayoutControls.noStandaloneLayout || !intuitiveLayoutControls.settingsOwned || !intuitiveLayoutControls.onlyTwoNavigationLayouts || !intuitiveLayoutControls.opensRequestedGeneral || !intuitiveLayoutControls.directReopensLast || !intuitiveLayoutControls.remembersInterface || !intuitiveLayoutControls.workspaceReversible || !intuitiveLayoutControls.panelsReversible || !intuitiveLayoutControls.navigationReversible || !intuitiveLayoutControls.controlsFollowLayout || !intuitiveLayoutControls.rareActionsInPalette || !intuitiveLayoutControls.previewPermanent ||
     !realPointerLayout.firstWorked || !realPointerLayout.reverseWorked || !realPointerLayout.stayedInteractive ||
+    !nativeNavigationMenu.top || !nativeNavigationMenu.left || !nativeNavigationMenu.updates ||
     !narrowAgentUi.rendered || !narrowAgentUi.narrow || !narrowAgentUi.containerAware || !narrowAgentUi.composerFits || !narrowAgentUi.sendVisible || !narrowAgentUi.footerFits || !narrowAgentUi.wraps || !narrowAgentUi.draftReadable || !narrowAgentUi.draftScrollable || !narrowAgentUi.draftResponsive || !narrowAgentUi.sideAgnostic ||
     !inboxAnchorUi.anchoredAtZero || !inboxAnchorUi.badged || !inboxAnchorUi.staysAfterClear ||
-    !settings.settingsSeparate || !settings.footerOwned || !settings.reopensRemembered || !settings.hasLayoutSettings || !settings.hasAdvancedStyles || !settings.noStandaloneLayout || !settings.hasAppearance || !settings.hasUsage || !settings.hasDiskResidency || !settings.hasTabLayout || !settings.extensionsInSettings || !settings.permanentFilesControls || !settings.noSidebarControls || !settings.keyboardSearchFocus || !settings.visualChoices ||
+    !settings.settingsSeparate || !settings.directSettings || !settings.reopensRemembered || !settings.hasLayoutSettings || !settings.noAdvancedStyles || !settings.noStandaloneLayout || !settings.hasAppearance || !settings.hasUsage || !settings.hasDiskResidency || !settings.hasTabLayout || !settings.extensionsInSettings || !settings.updatesInSettings || !settings.permanentFilesControls || !settings.noSidebarControls || !settings.keyboardSearchFocus || !settings.visualChoices ||
     !extensionsUi.opened || extensionsUi.cards < 8 || !extensionsUi.hasFilters || !extensionsUi.csvInstalled || !extensionsUi.jsonInstalled ||
     !extensionsUi.persisted || !extensionsUi.defaultUninstallPersisted || !extensionsUi.csvPreview || !extensionsUi.jsonPreview || !extensionsUi.boundedJsonPreview || !extensionsUi.closed ||
     !devExtensionHotReload.registered || !devExtensionHotReload.updated || !devExtensionHotReload.visible ||

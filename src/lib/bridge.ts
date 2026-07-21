@@ -948,8 +948,14 @@ export interface KaisolaBridge {
     onReopenTab(cb: () => void): () => void
     /** Native Window-menu tab click → activate this project id. */
     onActivateTab(cb: (id: string) => void): () => void
+    /** Native View-menu navigation choice. */
+    onNavigationLayout(cb: (layout: 'sidebar' | 'bare') => void): () => void
+    /** Native app-menu Settings / Software Updates entries. */
+    onOpenSettings(cb: (pane?: string) => void): () => void
     /** Push the current tab list so main can rebuild the Window menu. */
     tabsChanged(list: Array<{ id: string; title: string; active: boolean }>): void
+    /** Push the current navigation choice so the native View menu can check it. */
+    navigationLayoutChanged(layout: 'sidebar' | 'bare'): void
     /** Set the native window title to the active project (empty → the app name). */
     setTitle(title: string): void
     /** Move a project to the existing window under `at`, else tear off a new one. */
@@ -1479,7 +1485,16 @@ const webMock: KaisolaBridge = {
     onActivateTab() {
       return () => {}
     },
+    onNavigationLayout() {
+      return () => {}
+    },
+    onOpenSettings() {
+      return () => {}
+    },
     tabsChanged() {
+      /* no native menu on web */
+    },
+    navigationLayoutChanged() {
       /* no native menu on web */
     },
     setTitle() {
