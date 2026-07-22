@@ -117,6 +117,10 @@ struct NativeTerminalSurface: NSViewRepresentable {
 final class ReadOnlyTerminalView: TerminalView {
     static let accessibilityTailLimit = 8_000
 
+    // Copy-on-write reference updated per stream apply in O(1); the bounded
+    // tail is materialized only when accessibility actually asks for it.
+    private var accessibilitySource: String = ""
+
     override func send(source: Terminal, data: ArraySlice<UInt8>) {}
 
     override func viewDidMoveToWindow() {
@@ -128,11 +132,12 @@ final class ReadOnlyTerminalView: TerminalView {
     }
 
     func updateAccessibilityValue(from output: String) {
-        setAccessibilityElement(true)
-        setAccessibilityRole(.textArea)
-        setAccessibilityValue(String(output.suffix(Self.accessibilityTailLimit)))
+        accessibilitySource = output
     }
 
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .textArea }
+    override func accessibilityValue() -> Any? {
+        String(accessibilitySource.suffix(Self.accessibilityTailLimit))
+    }
 }
