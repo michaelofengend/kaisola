@@ -1,3 +1,4 @@
+import KaisolaCore
 import SwiftTerm
 import SwiftUI
 import UIKit

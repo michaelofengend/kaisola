@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-enum CompanionCryptoError: Error, Equatable {
+public enum CompanionCryptoError: Error, Equatable {
     case invalidEncoding(String)
     case invalidIdentity(String)
     case invalidKeyRecord
@@ -20,7 +20,7 @@ enum CompanionCryptoError: Error, Equatable {
     case keyConfirmationFailed
 }
 
-extension Data {
+public extension Data {
     init?(base64URLString value: String) {
         guard !value.isEmpty,
               value.range(of: #"^[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil else { return nil }
@@ -51,36 +51,36 @@ extension Data {
     }
 }
 
-enum CompanionCrypto {
-    static let noiseProtocol = "Noise_XX_25519_ChaChaPoly_SHA256"
-    static let protocolVersion = 1
-    static let maximumHandshakeMessageBytes = 64 * 1_024
-    static let maximumSecurePlaintextBytes = 1_024 * 1_024
+public enum CompanionCrypto {
+    public static let noiseProtocol = "Noise_XX_25519_ChaChaPoly_SHA256"
+    public static let protocolVersion = 1
+    public static let maximumHandshakeMessageBytes = 64 * 1_024
+    public static let maximumSecurePlaintextBytes = 1_024 * 1_024
 
-    static let keyRecordDomain = Data("kaisola-companion-key-record-v1\0".utf8)
-    static let handshakeSignatureDomain = Data("kaisola-companion-noise-hash-v1\0".utf8)
-    static let prologueDomain = Data("kaisola-companion-noise-prologue-v1\0".utf8)
+    public static let keyRecordDomain = Data("kaisola-companion-key-record-v1\0".utf8)
+    public static let handshakeSignatureDomain = Data("kaisola-companion-noise-hash-v1\0".utf8)
+    public static let prologueDomain = Data("kaisola-companion-noise-prologue-v1\0".utf8)
 
-    static func sha256(_ parts: Data...) -> Data {
+    public static func sha256(_ parts: Data...) -> Data {
         var hash = SHA256()
         for part in parts { hash.update(data: part) }
         return Data(hash.finalize())
     }
 
-    static func hmac(key: Data, parts: Data...) -> Data {
+    public static func hmac(key: Data, parts: Data...) -> Data {
         var input = Data()
         for part in parts { input.append(part) }
         return Data(HMAC<SHA256>.authenticationCode(for: input, using: SymmetricKey(data: key)))
     }
 
-    static func noiseHKDF(chainingKey: Data, inputKeyMaterial: Data) -> (Data, Data) {
+    public static func noiseHKDF(chainingKey: Data, inputKeyMaterial: Data) -> (Data, Data) {
         let temporaryKey = hmac(key: chainingKey, parts: inputKeyMaterial)
         let output1 = hmac(key: temporaryKey, parts: Data([1]))
         let output2 = hmac(key: temporaryKey, parts: output1, Data([2]))
         return (output1, output2)
     }
 
-    static func hkdf32(input: Data, salt: Data, info: Data) -> Data {
+    public static func hkdf32(input: Data, salt: Data, info: Data) -> Data {
         let key = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: input),
             salt: salt,
@@ -90,14 +90,14 @@ enum CompanionCrypto {
         return key.withUnsafeBytes { Data($0) }
     }
 
-    static func nonce(counter: UInt64) throws -> ChaChaPoly.Nonce {
+    public static func nonce(counter: UInt64) throws -> ChaChaPoly.Nonce {
         var data = Data(repeating: 0, count: 4)
         var littleEndian = counter.littleEndian
         withUnsafeBytes(of: &littleEndian) { data.append(contentsOf: $0) }
         return try ChaChaPoly.Nonce(data: data)
     }
 
-    static func aeadEncrypt(key: Data, counter: UInt64, aad: Data, plaintext: Data) throws -> Data {
+    public static func aeadEncrypt(key: Data, counter: UInt64, aad: Data, plaintext: Data) throws -> Data {
         let box = try ChaChaPoly.seal(
             plaintext,
             using: SymmetricKey(data: key),
@@ -109,7 +109,7 @@ enum CompanionCrypto {
         return output
     }
 
-    static func aeadDecrypt(key: Data, counter: UInt64, aad: Data, combined: Data) throws -> Data {
+    public static func aeadDecrypt(key: Data, counter: UInt64, aad: Data, combined: Data) throws -> Data {
         guard combined.count >= 16 else { throw CompanionCryptoError.authenticationFailed }
         let ciphertext = combined.dropLast(16)
         let tag = combined.suffix(16)
@@ -125,7 +125,7 @@ enum CompanionCrypto {
         }
     }
 
-    static func sharedSecret(
+    public static func sharedSecret(
         privateKey: Curve25519.KeyAgreement.PrivateKey,
         remotePublic: Data
     ) throws -> Data {
@@ -142,7 +142,7 @@ enum CompanionCrypto {
         }
     }
 
-    static func validateIdentifier(_ value: String, label: String) throws -> String {
+    public static func validateIdentifier(_ value: String, label: String) throws -> String {
         guard !value.isEmpty, value.count <= 160,
               value.range(of: #"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$"#, options: .regularExpression) != nil else {
             throw CompanionCryptoError.invalidIdentity(label)
@@ -150,7 +150,7 @@ enum CompanionCrypto {
         return value
     }
 
-    static func decodeBase64URL(_ value: String, bytes: Int? = nil, label: String) throws -> Data {
+    public static func decodeBase64URL(_ value: String, bytes: Int? = nil, label: String) throws -> Data {
         guard let data = Data(base64URLString: value), bytes == nil || data.count == bytes else {
             throw CompanionCryptoError.invalidEncoding(label)
         }

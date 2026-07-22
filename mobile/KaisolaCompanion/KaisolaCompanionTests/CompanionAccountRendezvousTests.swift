@@ -1,3 +1,4 @@
+import KaisolaCore
 import Foundation
 import XCTest
 @testable import KaisolaCompanion

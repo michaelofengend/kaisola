@@ -1,0 +1,563 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0B95CB6DB59DBD720A65A98E /* ObserveOnlyBrokerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0225E687EE0462F0D9C548 /* ObserveOnlyBrokerClient.swift */; };
+		143B9FBEC29D4FD6104DD505 /* BrokerModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D98396E44670C6412BE1415 /* BrokerModels.swift */; };
+		15B7789EF6CCF94F2416E478 /* KaisolaBrokerProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 35E6E0DC943424C3E5094F7F /* KaisolaBrokerProtocol */; };
+		4409329EA3927EEB31069A19 /* KaisolaCore in Frameworks */ = {isa = PBXBuildFile; productRef = E25CBD38778593D118AEFD33 /* KaisolaCore */; };
+		4997F3C7792E645608D19132 /* BrokerInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16F343A1F0C6E1A6F95DB932 /* BrokerInfo.swift */; };
+		5AF29A34E38E013439C5835A /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = BC5B996E0136696A21E890DC /* SwiftTerm */; };
+		6B76FFE3C1F1E11155040E2F /* RootShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBB83EF128840150F6F7103D /* RootShellView.swift */; };
+		6DFF60157687B575AD4176D7 /* UnixBrokerTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1139547AB3E3B3A9C7AAEDA /* UnixBrokerTransport.swift */; };
+		98DAE6676A641D45F023DA05 /* NativePreviewPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E78A73E4BF5DABAB5BF6826 /* NativePreviewPaths.swift */; };
+		A06CBCBD9882375F104D2ACA /* ObserveOnlyBrokerClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96F1989B7416C050648E9CAB /* ObserveOnlyBrokerClientTests.swift */; };
+		AA39C33375202BD9300CE951 /* BrokerModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991FCF32D009E1236EBF19A5 /* BrokerModelsTests.swift */; };
+		ACC0996E20F391DC8E473C42 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45799AC8A5D80828BB3EB235 /* AppModel.swift */; };
+		ADCD5776327E816820F93512 /* BrokerDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5A8717F4788368FDE60F93 /* BrokerDiscoveryTests.swift */; };
+		B2E80671AD073A985161ED40 /* ObserveOnlyBrokerPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DE33FAC2761474B7B6A46A2 /* ObserveOnlyBrokerPolicyTests.swift */; };
+		C5D7FD2E209D40C0C1CB9724 /* NoBoardBoundaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF52791E7FB87F94AF30DBD2 /* NoBoardBoundaryTests.swift */; };
+		C8DC030B09CC7E0BDA1FEF96 /* ObserveOnlyBrokerPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D434A4435BCB68FD69050A4 /* ObserveOnlyBrokerPolicy.swift */; };
+		D03FE4B6FB7FD213CB76997A /* KaisolaMacAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = D624AF2C46BA83B73A21F0B3 /* KaisolaMacAppDelegate.swift */; };
+		D478A5901D0C96CE5D108C4A /* TerminalDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13BFA68C0E2E3E83379B2835 /* TerminalDocument.swift */; };
+		E2A8476205D4F2F478EBCA17 /* NativeTerminalSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = E66C339455BFF598A81C41DE /* NativeTerminalSurface.swift */; };
+		EC396A9F5333AD82AA272705 /* TerminalDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 346DC3875261051CDA13A916 /* TerminalDocumentTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		15966003483DE1067779B208 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6A7B0045E39934C243044438 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FA860ABEDFA602CA7E4ABECD;
+			remoteInfo = KaisolaMacPreview;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		13BFA68C0E2E3E83379B2835 /* TerminalDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalDocument.swift; sourceTree = "<group>"; };
+		16F343A1F0C6E1A6F95DB932 /* BrokerInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerInfo.swift; sourceTree = "<group>"; };
+		2788B54E3ABEA6DC3BB724F1 /* KaisolaCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = KaisolaCore; path = ../KaisolaCore; sourceTree = SOURCE_ROOT; };
+		346DC3875261051CDA13A916 /* TerminalDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalDocumentTests.swift; sourceTree = "<group>"; };
+		422CC0F5A9B0FD425C41BBA7 /* KaisolaMacPreview.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KaisolaMacPreview.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		45799AC8A5D80828BB3EB235 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		5D434A4435BCB68FD69050A4 /* ObserveOnlyBrokerPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObserveOnlyBrokerPolicy.swift; sourceTree = "<group>"; };
+		6E78A73E4BF5DABAB5BF6826 /* NativePreviewPaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePreviewPaths.swift; sourceTree = "<group>"; };
+		7DE33FAC2761474B7B6A46A2 /* ObserveOnlyBrokerPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObserveOnlyBrokerPolicyTests.swift; sourceTree = "<group>"; };
+		8D98396E44670C6412BE1415 /* BrokerModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerModels.swift; sourceTree = "<group>"; };
+		93A5794337909F4D5F4C7A54 /* KaisolaMacPreviewTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KaisolaMacPreviewTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		96F1989B7416C050648E9CAB /* ObserveOnlyBrokerClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObserveOnlyBrokerClientTests.swift; sourceTree = "<group>"; };
+		991FCF32D009E1236EBF19A5 /* BrokerModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerModelsTests.swift; sourceTree = "<group>"; };
+		9F5A8717F4788368FDE60F93 /* BrokerDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerDiscoveryTests.swift; sourceTree = "<group>"; };
+		AF52791E7FB87F94AF30DBD2 /* NoBoardBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoBoardBoundaryTests.swift; sourceTree = "<group>"; };
+		C1139547AB3E3B3A9C7AAEDA /* UnixBrokerTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnixBrokerTransport.swift; sourceTree = "<group>"; };
+		CA0225E687EE0462F0D9C548 /* ObserveOnlyBrokerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObserveOnlyBrokerClient.swift; sourceTree = "<group>"; };
+		CBB83EF128840150F6F7103D /* RootShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootShellView.swift; sourceTree = "<group>"; };
+		D624AF2C46BA83B73A21F0B3 /* KaisolaMacAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KaisolaMacAppDelegate.swift; sourceTree = "<group>"; };
+		E66C339455BFF598A81C41DE /* NativeTerminalSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTerminalSurface.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		D90BFF710305240F2D90367E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4409329EA3927EEB31069A19 /* KaisolaCore in Frameworks */,
+				15B7789EF6CCF94F2416E478 /* KaisolaBrokerProtocol in Frameworks */,
+				5AF29A34E38E013439C5835A /* SwiftTerm in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1333D1BB66358A436881847E = {
+			isa = PBXGroup;
+			children = (
+				2F7163840EA196069E3491D9 /* Kaisola */,
+				C91771205CA39A4F31928CFA /* KaisolaTests */,
+				6E798A0DDEE2A309AAC04C49 /* Packages */,
+				FBFC316CC3A5E308B62D9AF2 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		2F7163840EA196069E3491D9 /* Kaisola */ = {
+			isa = PBXGroup;
+			children = (
+				C131D090B01AB3367C562B7E /* App */,
+				E67FF59E24CA8E30D69906E5 /* Broker */,
+				B2BF6C29213F0CDAC2846C62 /* Features */,
+			);
+			path = Kaisola;
+			sourceTree = "<group>";
+		};
+		6E798A0DDEE2A309AAC04C49 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				2788B54E3ABEA6DC3BB724F1 /* KaisolaCore */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		97504E856A888E6B1EDFE046 /* Sessions */ = {
+			isa = PBXGroup;
+			children = (
+				E66C339455BFF598A81C41DE /* NativeTerminalSurface.swift */,
+				CBB83EF128840150F6F7103D /* RootShellView.swift */,
+				13BFA68C0E2E3E83379B2835 /* TerminalDocument.swift */,
+			);
+			path = Sessions;
+			sourceTree = "<group>";
+		};
+		B2BF6C29213F0CDAC2846C62 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				97504E856A888E6B1EDFE046 /* Sessions */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		C131D090B01AB3367C562B7E /* App */ = {
+			isa = PBXGroup;
+			children = (
+				45799AC8A5D80828BB3EB235 /* AppModel.swift */,
+				D624AF2C46BA83B73A21F0B3 /* KaisolaMacAppDelegate.swift */,
+				6E78A73E4BF5DABAB5BF6826 /* NativePreviewPaths.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		C91771205CA39A4F31928CFA /* KaisolaTests */ = {
+			isa = PBXGroup;
+			children = (
+				9F5A8717F4788368FDE60F93 /* BrokerDiscoveryTests.swift */,
+				991FCF32D009E1236EBF19A5 /* BrokerModelsTests.swift */,
+				AF52791E7FB87F94AF30DBD2 /* NoBoardBoundaryTests.swift */,
+				96F1989B7416C050648E9CAB /* ObserveOnlyBrokerClientTests.swift */,
+				7DE33FAC2761474B7B6A46A2 /* ObserveOnlyBrokerPolicyTests.swift */,
+				346DC3875261051CDA13A916 /* TerminalDocumentTests.swift */,
+			);
+			path = KaisolaTests;
+			sourceTree = "<group>";
+		};
+		E67FF59E24CA8E30D69906E5 /* Broker */ = {
+			isa = PBXGroup;
+			children = (
+				16F343A1F0C6E1A6F95DB932 /* BrokerInfo.swift */,
+				8D98396E44670C6412BE1415 /* BrokerModels.swift */,
+				CA0225E687EE0462F0D9C548 /* ObserveOnlyBrokerClient.swift */,
+				5D434A4435BCB68FD69050A4 /* ObserveOnlyBrokerPolicy.swift */,
+				C1139547AB3E3B3A9C7AAEDA /* UnixBrokerTransport.swift */,
+			);
+			path = Broker;
+			sourceTree = "<group>";
+		};
+		FBFC316CC3A5E308B62D9AF2 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				422CC0F5A9B0FD425C41BBA7 /* KaisolaMacPreview.app */,
+				93A5794337909F4D5F4C7A54 /* KaisolaMacPreviewTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		C82068A1F2D00D05F9F61861 /* KaisolaMacPreviewTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0700AF085A8DD822AD0F7508 /* Build configuration list for PBXNativeTarget "KaisolaMacPreviewTests" */;
+			buildPhases = (
+				906AEF70FEE26DF536F9E081 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BD20C072C9C6CB21DAC9027B /* PBXTargetDependency */,
+			);
+			name = KaisolaMacPreviewTests;
+			packageProductDependencies = (
+			);
+			productName = KaisolaMacPreviewTests;
+			productReference = 93A5794337909F4D5F4C7A54 /* KaisolaMacPreviewTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		FA860ABEDFA602CA7E4ABECD /* KaisolaMacPreview */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 24A52B9D5207E95A8753B2FB /* Build configuration list for PBXNativeTarget "KaisolaMacPreview" */;
+			buildPhases = (
+				018A922A8F40CE114E63C6AE /* Sources */,
+				D90BFF710305240F2D90367E /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = KaisolaMacPreview;
+			packageProductDependencies = (
+				E25CBD38778593D118AEFD33 /* KaisolaCore */,
+				35E6E0DC943424C3E5094F7F /* KaisolaBrokerProtocol */,
+				BC5B996E0136696A21E890DC /* SwiftTerm */,
+			);
+			productName = KaisolaMacPreview;
+			productReference = 422CC0F5A9B0FD425C41BBA7 /* KaisolaMacPreview.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		6A7B0045E39934C243044438 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					C82068A1F2D00D05F9F61861 = {
+						ProvisioningStyle = Automatic;
+					};
+					FA860ABEDFA602CA7E4ABECD = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 3B6FB14653B8143B018BD379 /* Build configuration list for PBXProject "KaisolaMac" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 1333D1BB66358A436881847E;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				D42C2A6487628474527A819B /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+				75F62FA72E60C3476E2781A2 /* XCLocalSwiftPackageReference "../KaisolaCore" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = FBFC316CC3A5E308B62D9AF2 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				FA860ABEDFA602CA7E4ABECD /* KaisolaMacPreview */,
+				C82068A1F2D00D05F9F61861 /* KaisolaMacPreviewTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		018A922A8F40CE114E63C6AE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ACC0996E20F391DC8E473C42 /* AppModel.swift in Sources */,
+				4997F3C7792E645608D19132 /* BrokerInfo.swift in Sources */,
+				143B9FBEC29D4FD6104DD505 /* BrokerModels.swift in Sources */,
+				D03FE4B6FB7FD213CB76997A /* KaisolaMacAppDelegate.swift in Sources */,
+				98DAE6676A641D45F023DA05 /* NativePreviewPaths.swift in Sources */,
+				E2A8476205D4F2F478EBCA17 /* NativeTerminalSurface.swift in Sources */,
+				0B95CB6DB59DBD720A65A98E /* ObserveOnlyBrokerClient.swift in Sources */,
+				C8DC030B09CC7E0BDA1FEF96 /* ObserveOnlyBrokerPolicy.swift in Sources */,
+				6B76FFE3C1F1E11155040E2F /* RootShellView.swift in Sources */,
+				D478A5901D0C96CE5D108C4A /* TerminalDocument.swift in Sources */,
+				6DFF60157687B575AD4176D7 /* UnixBrokerTransport.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		906AEF70FEE26DF536F9E081 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ADCD5776327E816820F93512 /* BrokerDiscoveryTests.swift in Sources */,
+				AA39C33375202BD9300CE951 /* BrokerModelsTests.swift in Sources */,
+				C5D7FD2E209D40C0C1CB9724 /* NoBoardBoundaryTests.swift in Sources */,
+				A06CBCBD9882375F104D2ACA /* ObserveOnlyBrokerClientTests.swift in Sources */,
+				B2E80671AD073A985161ED40 /* ObserveOnlyBrokerPolicyTests.swift in Sources */,
+				EC396A9F5333AD82AA272705 /* TerminalDocumentTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		BD20C072C9C6CB21DAC9027B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FA860ABEDFA602CA7E4ABECD /* KaisolaMacPreview */;
+			targetProxy = 15966003483DE1067779B208 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		216023E10285E2E5AF6203C4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		269C2EDA9EEE08DC6928965C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Kaisola Native Preview";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSHighResolutionCapable = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.kaisola.mac.preview;
+				PRODUCT_MODULE_NAME = KaisolaMacPreview;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		2B50FDA3D8963E7A73DDA080 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Kaisola Native Preview";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSHighResolutionCapable = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.kaisola.mac.preview;
+				PRODUCT_MODULE_NAME = KaisolaMacPreview;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		7455A7324C13B1DAA0FECB04 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		81D4BEC738C2435CC79AD026 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.kaisola.mac.preview.tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/KaisolaMacPreview.app/Contents/MacOS/KaisolaMacPreview";
+			};
+			name = Release;
+		};
+		CC812ED6506E78CAFBD3431D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.kaisola.mac.preview.tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/KaisolaMacPreview.app/Contents/MacOS/KaisolaMacPreview";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0700AF085A8DD822AD0F7508 /* Build configuration list for PBXNativeTarget "KaisolaMacPreviewTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CC812ED6506E78CAFBD3431D /* Debug */,
+				81D4BEC738C2435CC79AD026 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		24A52B9D5207E95A8753B2FB /* Build configuration list for PBXNativeTarget "KaisolaMacPreview" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2B50FDA3D8963E7A73DDA080 /* Debug */,
+				269C2EDA9EEE08DC6928965C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3B6FB14653B8143B018BD379 /* Build configuration list for PBXProject "KaisolaMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7455A7324C13B1DAA0FECB04 /* Debug */,
+				216023E10285E2E5AF6203C4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		75F62FA72E60C3476E2781A2 /* XCLocalSwiftPackageReference "../KaisolaCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../KaisolaCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		D42C2A6487628474527A819B /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.15.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		35E6E0DC943424C3E5094F7F /* KaisolaBrokerProtocol */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = KaisolaBrokerProtocol;
+		};
+		BC5B996E0136696A21E890DC /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D42C2A6487628474527A819B /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+		E25CBD38778593D118AEFD33 /* KaisolaCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = KaisolaCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 6A7B0045E39934C243044438 /* Project object */;
+}

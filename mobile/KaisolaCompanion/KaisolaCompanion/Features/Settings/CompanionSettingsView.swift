@@ -1,3 +1,4 @@
+import KaisolaCore
 import SwiftUI
 
 /// Settings: you, your Mac, one clear exit. Identity up top, the paired Mac

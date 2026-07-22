@@ -12,6 +12,15 @@ const path = require('node:path')
 const PROTOCOL = 2
 const SECURITY_EPOCH = 1
 const TERMINAL_OBSERVE_FEATURE = 'terminal-observe-v1'
+const OBSERVER_ROLE_FEATURE = 'observer-role-v1'
+const OBSERVER_ACCESS = 'observer'
+const OBSERVER_METHODS = Object.freeze([
+  'broker.status',
+  'terminal.list',
+  'terminal.diagnostics',
+  'terminal.subscribe',
+  'terminal.unsubscribe',
+])
 
 // A terminal snapshot may legally carry 8 MiB of retained output in one
 // response frame. JSON escaping of control-dense bytes (ESC, NUL) expands up
@@ -28,4 +37,23 @@ function atomicJson(file, value) {
   try { fs.chmodSync(file, 0o600) } catch { /* best effort */ }
 }
 
-module.exports = { PROTOCOL, SECURITY_EPOCH, TERMINAL_OBSERVE_FEATURE, MAX_FRAME, atomicJson }
+function observerMethodAllowed(method) {
+  return OBSERVER_METHODS.includes(String(method || ''))
+}
+
+function brokerMethodAllowedForAccess(access, method) {
+  return access !== OBSERVER_ACCESS || observerMethodAllowed(method)
+}
+
+module.exports = {
+  PROTOCOL,
+  SECURITY_EPOCH,
+  TERMINAL_OBSERVE_FEATURE,
+  OBSERVER_ROLE_FEATURE,
+  OBSERVER_ACCESS,
+  OBSERVER_METHODS,
+  MAX_FRAME,
+  atomicJson,
+  observerMethodAllowed,
+  brokerMethodAllowedForAccess,
+}

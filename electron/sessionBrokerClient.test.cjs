@@ -4,6 +4,11 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { Duplex } = require('node:stream')
+const {
+  OBSERVER_METHODS,
+  observerMethodAllowed,
+  brokerMethodAllowedForAccess,
+} = require('./ipc/brokerWire.cjs')
 
 const {
   SessionBrokerClient,
@@ -14,6 +19,42 @@ const {
 } = require('./ipc/sessionBrokerClient.cjs')
 
 const TOKEN = 'a'.repeat(64)
+
+test('observer broker policy exposes only the coexistence read surface', () => {
+  assert.deepEqual(OBSERVER_METHODS, [
+    'broker.status',
+    'terminal.list',
+    'terminal.diagnostics',
+    'terminal.subscribe',
+    'terminal.unsubscribe',
+  ])
+  for (const method of OBSERVER_METHODS) assert.equal(observerMethodAllowed(method), true)
+  for (const method of [
+    'broker.shutdown',
+    'terminal.create',
+    'terminal.attach',
+    'terminal.detachRenderer',
+    'terminal.detachOwner',
+    'terminal.write',
+    'terminal.agentTurn',
+    'terminal.resize',
+    'terminal.snapshot',
+    'terminal.output',
+    'terminal.waitForExit',
+    'terminal.signal',
+    'terminal.kill',
+    'terminal.release',
+    'terminal.scheduleRelease',
+    'terminal.cancelRelease',
+    'terminal.setFocused',
+  ]) assert.equal(observerMethodAllowed(method), false, method)
+  for (const method of OBSERVER_METHODS) {
+    assert.equal(brokerMethodAllowedForAccess('observer', method), true, method)
+  }
+  assert.equal(brokerMethodAllowedForAccess('observer', 'terminal.write'), false)
+  assert.equal(brokerMethodAllowedForAccess('controller', 'terminal.write'), true)
+  assert.equal(brokerMethodAllowedForAccess(undefined, 'terminal.write'), true)
+})
 
 function clientFixture(t) {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'kaisola-broker-client-test-'))

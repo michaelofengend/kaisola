@@ -34,3 +34,10 @@ kaisola_icon_concepts/
 # each holds its own nested .git; never track them.
 .pasola-worktrees/
 .firebase/
+
+# SwiftPM/Xcode build state is local and can be hundreds of megabytes.
+**/.build/
+**/.swiftpm/
+**/DerivedData/
+**/xcuserdata/
+*.xcuserstate

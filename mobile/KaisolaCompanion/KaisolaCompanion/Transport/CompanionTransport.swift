@@ -1,3 +1,4 @@
+import KaisolaCore
 @preconcurrency import Network
 import Foundation
 

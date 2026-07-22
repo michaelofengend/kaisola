@@ -1,0 +1,94 @@
+name: swift-contracts
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/swift-contracts.yml'
+      - 'native/**'
+      - 'mobile/KaisolaCompanion/**'
+      - 'electron/companion/fixtures/**'
+  pull_request:
+    paths:
+      - '.github/workflows/swift-contracts.yml'
+      - 'native/**'
+      - 'mobile/KaisolaCompanion/**'
+      - 'electron/companion/fixtures/**'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Record Apple toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+      - name: Test shared Swift contracts
+        run: swift test --package-path native/KaisolaCore
+      - name: Compile optimized iPhone app against KaisolaCore
+        run: >-
+          xcodebuild
+          -project mobile/KaisolaCompanion/KaisolaCompanion.xcodeproj
+          -scheme KaisolaCompanion
+          -configuration Release
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath "$RUNNER_TEMP/kaisola-ios"
+          CODE_SIGNING_ALLOWED=NO
+          build
+      - name: Compile iPhone test bundle against KaisolaCore
+        run: >-
+          xcodebuild
+          -project mobile/KaisolaCompanion/KaisolaCompanion.xcodeproj
+          -scheme KaisolaCompanion
+          -configuration Debug
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath "$RUNNER_TEMP/kaisola-ios-tests"
+          CODE_SIGNING_ALLOWED=NO
+          build-for-testing
+      - name: Run iPhone contract and app tests
+        run: >-
+          xcodebuild
+          -project mobile/KaisolaCompanion/KaisolaCompanion.xcodeproj
+          -scheme KaisolaCompanion
+          -configuration Debug
+          -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest'
+          -derivedDataPath "$RUNNER_TEMP/kaisola-ios-tests"
+          CODE_SIGNING_ALLOWED=NO
+          test-without-building
+      - name: Compile optimized native macOS preview
+        run: >-
+          xcodebuild
+          -project native/KaisolaMac/KaisolaMac.xcodeproj
+          -scheme KaisolaMacPreview
+          -configuration Release
+          -destination 'platform=macOS'
+          -derivedDataPath "$RUNNER_TEMP/kaisola-mac"
+          CODE_SIGNING_ALLOWED=NO
+          build
+      - name: Compile native macOS preview test bundle
+        run: >-
+          xcodebuild
+          -project native/KaisolaMac/KaisolaMac.xcodeproj
+          -scheme KaisolaMacPreview
+          -configuration Debug
+          -destination 'platform=macOS'
+          -derivedDataPath "$RUNNER_TEMP/kaisola-mac-tests"
+          CODE_SIGNING_ALLOWED=NO
+          build-for-testing
+      - name: Run native macOS preview tests
+        run: >-
+          xcodebuild
+          -project native/KaisolaMac/KaisolaMac.xcodeproj
+          -scheme KaisolaMacPreview
+          -configuration Debug
+          -destination 'platform=macOS'
+          -derivedDataPath "$RUNNER_TEMP/kaisola-mac-tests"
+          CODE_SIGNING_ALLOWED=NO
+          test-without-building

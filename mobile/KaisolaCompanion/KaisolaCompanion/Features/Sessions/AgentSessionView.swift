@@ -1,3 +1,4 @@
+import KaisolaCore
 import SwiftUI
 
 struct AgentSessionView: View {
@@ -259,7 +260,7 @@ private struct BubbleShape: Shape {
 #Preview {
     let store = CompanionStore.preview()
     let coordinator = CompanionConnectionCoordinator(store: store)
-    return NavigationStack {
+    NavigationStack {
         if let agent = store.sessions.first(where: { $0.kind == .agent }) {
             AgentSessionView(sessionId: agent.id)
         } else { Text("no agent") }

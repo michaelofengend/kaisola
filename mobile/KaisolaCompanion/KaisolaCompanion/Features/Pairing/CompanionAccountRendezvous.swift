@@ -1,3 +1,4 @@
+import KaisolaCore
 import Foundation
 
 struct CompanionAccountOffer: Identifiable, Hashable, Sendable {

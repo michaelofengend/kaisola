@@ -1,3 +1,4 @@
+import KaisolaCore
 import SwiftUI
 
 /// The home tab is intentionally sparse: exceptions, work happening now, and

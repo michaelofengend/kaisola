@@ -1,3 +1,4 @@
+import KaisolaCore
 import Foundation
 
 /// The signed-in identity, mirroring the desktop `AppIdentity`.

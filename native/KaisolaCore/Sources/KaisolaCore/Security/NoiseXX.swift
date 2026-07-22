@@ -1,10 +1,16 @@
 import CryptoKit
 import Foundation
 
-struct NoiseHandshakeResult: Sendable {
-    let handshakeHash: Data
-    let splitKeys: [Data]
-    let peer: CompanionIdentityPin
+public struct NoiseHandshakeResult: Sendable {
+    public let handshakeHash: Data
+    public let splitKeys: [Data]
+    public let peer: CompanionIdentityPin
+
+    public init(handshakeHash: Data, splitKeys: [Data], peer: CompanionIdentityPin) {
+        self.handshakeHash = handshakeHash
+        self.splitKeys = splitKeys
+        self.peer = peer
+    }
 }
 
 private final class NoiseSymmetricState {
@@ -145,7 +151,7 @@ private enum NoiseIdentityProof {
     }
 }
 
-final class NoiseXXInitiator {
+public final class NoiseXXInitiator {
     private enum State { case writeMessage1, readMessage2, writeMessage3, complete }
 
     private let identity: CompanionIdentity
@@ -157,7 +163,7 @@ final class NoiseXXInitiator {
     private var remoteStatic: Data?
     private var peer: CompanionIdentityPin?
 
-    init(
+    public init(
         identity: CompanionIdentity,
         prologue: Data,
         peerPin: CompanionIdentityPin? = nil,
@@ -170,7 +176,7 @@ final class NoiseXXInitiator {
         symmetric = NoiseSymmetricState(prologue: prologue)
     }
 
-    func writeMessage1() throws -> Data {
+    public func writeMessage1() throws -> Data {
         guard state == .writeMessage1 else { throw CompanionCryptoError.handshakeOrder }
         let message = ephemeral.publicKey.rawRepresentation
         symmetric.mixHash(message)
@@ -179,7 +185,7 @@ final class NoiseXXInitiator {
     }
 
     @discardableResult
-    func readMessage2(_ message: Data) throws -> CompanionIdentityPin {
+    public func readMessage2(_ message: Data) throws -> CompanionIdentityPin {
         guard state == .readMessage2 else { throw CompanionCryptoError.handshakeOrder }
         guard message.count >= 96, message.count <= CompanionCrypto.maximumHandshakeMessageBytes else {
             throw CompanionCryptoError.invalidHandshakeMessage
@@ -206,7 +212,7 @@ final class NoiseXXInitiator {
         return peer
     }
 
-    func writeMessage3() throws -> Data {
+    public func writeMessage3() throws -> Data {
         guard state == .writeMessage3, let remoteEphemeral else { throw CompanionCryptoError.handshakeOrder }
         let encryptedStatic = try symmetric.encryptAndHash(identity.agreementPrivateKey.publicKey.rawRepresentation)
         symmetric.mixKey(try CompanionCrypto.sharedSecret(
@@ -224,7 +230,7 @@ final class NoiseXXInitiator {
         return message
     }
 
-    func result() throws -> NoiseHandshakeResult {
+    public func result() throws -> NoiseHandshakeResult {
         guard state == .complete, let peer else { throw CompanionCryptoError.handshakeOrder }
         return NoiseHandshakeResult(
             handshakeHash: symmetric.handshakeHash,
@@ -234,7 +240,7 @@ final class NoiseXXInitiator {
     }
 }
 
-final class NoiseXXResponder {
+public final class NoiseXXResponder {
     private enum State { case readMessage1, writeMessage2, readMessage3, complete }
 
     private let identity: CompanionIdentity
@@ -245,7 +251,7 @@ final class NoiseXXResponder {
     private var remoteEphemeral: Data?
     private var peer: CompanionIdentityPin?
 
-    init(
+    public init(
         identity: CompanionIdentity,
         prologue: Data,
         peerPin: CompanionIdentityPin? = nil,
@@ -258,7 +264,7 @@ final class NoiseXXResponder {
         symmetric = NoiseSymmetricState(prologue: prologue)
     }
 
-    func readMessage1(_ message: Data) throws {
+    public func readMessage1(_ message: Data) throws {
         guard state == .readMessage1 else { throw CompanionCryptoError.handshakeOrder }
         guard message.count == 32 else { throw CompanionCryptoError.invalidHandshakeMessage }
         remoteEphemeral = message
@@ -266,7 +272,7 @@ final class NoiseXXResponder {
         state = .writeMessage2
     }
 
-    func writeMessage2() throws -> Data {
+    public func writeMessage2() throws -> Data {
         guard state == .writeMessage2, let remoteEphemeral else { throw CompanionCryptoError.handshakeOrder }
         let localEphemeral = ephemeral.publicKey.rawRepresentation
         symmetric.mixHash(localEphemeral)
@@ -289,7 +295,7 @@ final class NoiseXXResponder {
     }
 
     @discardableResult
-    func readMessage3(_ message: Data) throws -> CompanionIdentityPin {
+    public func readMessage3(_ message: Data) throws -> CompanionIdentityPin {
         guard state == .readMessage3 else { throw CompanionCryptoError.handshakeOrder }
         guard message.count >= 64, message.count <= CompanionCrypto.maximumHandshakeMessageBytes else {
             throw CompanionCryptoError.invalidHandshakeMessage
@@ -310,7 +316,7 @@ final class NoiseXXResponder {
         return peer
     }
 
-    func result() throws -> NoiseHandshakeResult {
+    public func result() throws -> NoiseHandshakeResult {
         guard state == .complete, let peer else { throw CompanionCryptoError.handshakeOrder }
         return NoiseHandshakeResult(
             handshakeHash: symmetric.handshakeHash,
@@ -320,7 +326,7 @@ final class NoiseXXResponder {
     }
 }
 
-func createNoisePrologue(_ context: JSONValue) throws -> Data {
+public func createNoisePrologue(_ context: JSONValue) throws -> Data {
     var prologue = CompanionCrypto.prologueDomain
     prologue.append(try CanonicalJSON.data(from: context))
     return prologue

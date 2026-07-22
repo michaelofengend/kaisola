@@ -1,6 +1,6 @@
 import Foundation
 
-enum JSONValue: Codable, Hashable, Sendable {
+public enum JSONValue: Codable, Hashable, Sendable {
     case null
     case bool(Bool)
     case integer(Int64)
@@ -9,7 +9,7 @@ enum JSONValue: Codable, Hashable, Sendable {
     case array([JSONValue])
     case object([String: JSONValue])
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
             self = .null
@@ -28,7 +28,7 @@ enum JSONValue: Codable, Hashable, Sendable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
         case .null: try container.encodeNil()
@@ -41,22 +41,22 @@ enum JSONValue: Codable, Hashable, Sendable {
         }
     }
 
-    var objectValue: [String: JSONValue]? {
+    public var objectValue: [String: JSONValue]? {
         guard case let .object(value) = self else { return nil }
         return value
     }
 
-    var arrayValue: [JSONValue]? {
+    public var arrayValue: [JSONValue]? {
         guard case let .array(value) = self else { return nil }
         return value
     }
 
-    var stringValue: String? {
+    public var stringValue: String? {
         guard case let .string(value) = self else { return nil }
         return value
     }
 
-    var intValue: Int64? {
+    public var intValue: Int64? {
         switch self {
         case let .integer(value): value
         case let .number(value) where value.isFinite && value.rounded() == value: Int64(exactly: value)
@@ -64,29 +64,29 @@ enum JSONValue: Codable, Hashable, Sendable {
         }
     }
 
-    var boolValue: Bool? {
+    public var boolValue: Bool? {
         guard case let .bool(value) = self else { return nil }
         return value
     }
 
-    static func from<T: Encodable>(_ value: T) throws -> JSONValue {
+    public static func from<T: Encodable>(_ value: T) throws -> JSONValue {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.withoutEscapingSlashes]
         return try JSONDecoder().decode(JSONValue.self, from: encoder.encode(value))
     }
 }
 
-enum CanonicalJSON {
-    enum Error: Swift.Error {
+public enum CanonicalJSON {
+    public enum Error: Swift.Error {
         case nonIntegralNumber
         case invalidString
     }
 
-    static func data<T: Encodable>(from value: T) throws -> Data {
+    public static func data<T: Encodable>(from value: T) throws -> Data {
         try data(from: JSONValue.from(value))
     }
 
-    static func data(from value: JSONValue) throws -> Data {
+    public static func data(from value: JSONValue) throws -> Data {
         var output = Data()
         try append(value, to: &output)
         return output

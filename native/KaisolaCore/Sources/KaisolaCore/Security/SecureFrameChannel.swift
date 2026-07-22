@@ -1,23 +1,49 @@
 import Foundation
 
-struct CompanionSecureFrame: Codable, Hashable, Sendable {
-    let v: Int
-    let desktopId: String
-    let deviceId: String
-    let connectionId: String
-    let direction: String
-    let counter: String
-    let ciphertextLength: Int
-    var ciphertext: String
+public struct CompanionSecureFrame: Codable, Hashable, Sendable {
+    public let v: Int
+    public let desktopId: String
+    public let deviceId: String
+    public let connectionId: String
+    public let direction: String
+    public let counter: String
+    public let ciphertextLength: Int
+    public var ciphertext: String
+
+    public init(
+        v: Int,
+        desktopId: String,
+        deviceId: String,
+        connectionId: String,
+        direction: String,
+        counter: String,
+        ciphertextLength: Int,
+        ciphertext: String
+    ) {
+        self.v = v
+        self.desktopId = desktopId
+        self.deviceId = deviceId
+        self.connectionId = connectionId
+        self.direction = direction
+        self.counter = counter
+        self.ciphertextLength = ciphertextLength
+        self.ciphertext = ciphertext
+    }
 }
 
-struct CompanionConnectionContext: Codable, Hashable, Sendable {
-    let desktopId: String
-    let deviceId: String
-    let connectionId: String
+public struct CompanionConnectionContext: Codable, Hashable, Sendable {
+    public let desktopId: String
+    public let deviceId: String
+    public let connectionId: String
+
+    public init(desktopId: String, deviceId: String, connectionId: String) {
+        self.desktopId = desktopId
+        self.deviceId = deviceId
+        self.connectionId = connectionId
+    }
 }
 
-final class SecureFrameChannel: @unchecked Sendable {
+public final class SecureFrameChannel: @unchecked Sendable {
     private let sendKey: Data
     private let receiveKey: Data
     private let context: CompanionConnectionContext
@@ -27,7 +53,7 @@ final class SecureFrameChannel: @unchecked Sendable {
     private var sendCounter: UInt64 = 0
     private var receiveCounter: UInt64 = 0
 
-    init(
+    public init(
         sendKey: Data,
         receiveKey: Data,
         context: CompanionConnectionContext,
@@ -47,7 +73,7 @@ final class SecureFrameChannel: @unchecked Sendable {
         self.receiveDirection = receiveDirection
     }
 
-    convenience init(result: NoiseHandshakeResult, context: CompanionConnectionContext, role: CompanionPeerRole) throws {
+    public convenience init(result: NoiseHandshakeResult, context: CompanionConnectionContext, role: CompanionPeerRole) throws {
         guard result.splitKeys.count == 2 else { throw CompanionCryptoError.invalidSecureFrame }
         let deviceToDesktop = CompanionCrypto.hkdf32(
             input: result.splitKeys[0],
@@ -78,15 +104,15 @@ final class SecureFrameChannel: @unchecked Sendable {
         }
     }
 
-    func encrypt(_ value: JSONValue) throws -> CompanionSecureFrame {
+    public func encrypt(_ value: JSONValue) throws -> CompanionSecureFrame {
         try encrypt(try CanonicalJSON.data(from: value))
     }
 
-    func encrypt<T: Encodable>(_ value: T) throws -> CompanionSecureFrame {
+    public func encrypt<T: Encodable>(_ value: T) throws -> CompanionSecureFrame {
         try encrypt(JSONValue.from(value))
     }
 
-    func encrypt(_ plaintext: Data) throws -> CompanionSecureFrame {
+    public func encrypt(_ plaintext: Data) throws -> CompanionSecureFrame {
         lock.lock()
         defer { lock.unlock() }
         guard plaintext.count <= CompanionCrypto.maximumSecurePlaintextBytes else {
@@ -120,7 +146,7 @@ final class SecureFrameChannel: @unchecked Sendable {
         )
     }
 
-    func decrypt(_ frame: CompanionSecureFrame) throws -> Data {
+    public func decrypt(_ frame: CompanionSecureFrame) throws -> Data {
         lock.lock()
         defer { lock.unlock() }
         guard frame.v == CompanionCrypto.protocolVersion,
@@ -154,13 +180,13 @@ final class SecureFrameChannel: @unchecked Sendable {
         return plaintext
     }
 
-    func decryptJSON(_ frame: CompanionSecureFrame) throws -> JSONValue {
+    public func decryptJSON(_ frame: CompanionSecureFrame) throws -> JSONValue {
         do { return try JSONDecoder().decode(JSONValue.self, from: decrypt(frame)) }
         catch let error as CompanionCryptoError { throw error }
         catch { throw CompanionCryptoError.invalidSecurePayload }
     }
 
-    var counters: (send: UInt64, receive: UInt64) {
+    public var counters: (send: UInt64, receive: UInt64) {
         lock.lock()
         defer { lock.unlock() }
         return (sendCounter, receiveCounter)
@@ -199,13 +225,13 @@ final class SecureFrameChannel: @unchecked Sendable {
     }
 }
 
-struct CompanionSAS: Codable, Hashable, Sendable {
-    let phrase: String
-    let words: [String]
-    let entropyBits: Int
-    let bytes: String
+public struct CompanionSAS: Codable, Hashable, Sendable {
+    public let phrase: String
+    public let words: [String]
+    public let entropyBits: Int
+    public let bytes: String
 
-    static func derive(handshakeHash: Data) -> CompanionSAS {
+    public static func derive(handshakeHash: Data) -> CompanionSAS {
         let adjectives = [
             "amber", "brisk", "calm", "clear", "coral", "dawn", "ember", "fair",
             "gentle", "green", "lunar", "merry", "quiet", "rapid", "silver", "warm",
@@ -232,8 +258,8 @@ struct CompanionSAS: Codable, Hashable, Sendable {
     }
 }
 
-enum CompanionKeyConfirmation {
-    static func payload(role: CompanionPeerRole, handshakeHash: Data) -> JSONValue {
+public enum CompanionKeyConfirmation {
+    public static func payload(role: CompanionPeerRole, handshakeHash: Data) -> JSONValue {
         .object([
             "type": .string("key-confirm"),
             "role": .string(role.rawValue),
@@ -241,7 +267,7 @@ enum CompanionKeyConfirmation {
         ])
     }
 
-    static func make(
+    public static func make(
         channel: SecureFrameChannel,
         role: CompanionPeerRole,
         handshakeHash: Data
@@ -249,7 +275,7 @@ enum CompanionKeyConfirmation {
         try channel.encrypt(payload(role: role, handshakeHash: handshakeHash))
     }
 
-    static func verify(
+    public static func verify(
         channel: SecureFrameChannel,
         frame: CompanionSecureFrame,
         expectedRole: CompanionPeerRole,

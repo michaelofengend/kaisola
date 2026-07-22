@@ -1,3 +1,4 @@
+import KaisolaCore
 import SwiftUI
 
 /// The calm entry gate — one promise, one action. Mirrors the ChatGPT/Codex

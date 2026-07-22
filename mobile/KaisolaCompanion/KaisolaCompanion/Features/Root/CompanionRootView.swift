@@ -1,3 +1,4 @@
+import KaisolaCore
 import SwiftUI
 
 /// The app shell: gate on auth, then a three-tab structure (Home / Sessions /

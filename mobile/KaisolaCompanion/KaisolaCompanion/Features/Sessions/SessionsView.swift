@@ -1,3 +1,4 @@
+import KaisolaCore
 import SwiftUI
 
 struct SessionsView: View {

@@ -1,0 +1,70 @@
+name: KaisolaMac
+
+options:
+  bundleIdPrefix: com.kaisola
+  deploymentTarget:
+    macOS: "14.0"
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+
+packages:
+  KaisolaCore:
+    path: ../KaisolaCore
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm.git
+    exactVersion: 1.15.0
+
+targets:
+  KaisolaMacPreview:
+    type: application
+    platform: macOS
+    sources:
+      - path: Kaisola
+    dependencies:
+      - package: KaisolaCore
+        product: KaisolaCore
+      - package: KaisolaCore
+        product: KaisolaBrokerProtocol
+      - package: SwiftTerm
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kaisola.mac.preview
+        PRODUCT_MODULE_NAME: KaisolaMacPreview
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Kaisola Native Preview
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_NSHighResolutionCapable: YES
+        ENABLE_APP_SANDBOX: NO
+        CODE_SIGN_STYLE: Automatic
+
+  KaisolaMacPreviewTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: KaisolaTests
+    dependencies:
+      - target: KaisolaMacPreview
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kaisola.mac.preview.tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+
+schemes:
+  KaisolaMacPreview:
+    build:
+      targets:
+        KaisolaMacPreview: all
+        KaisolaMacPreviewTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - KaisolaMacPreviewTests

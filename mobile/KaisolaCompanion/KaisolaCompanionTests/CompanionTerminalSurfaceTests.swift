@@ -1,3 +1,4 @@
+import KaisolaCore
 import SwiftTerm
 import UIKit
 import XCTest

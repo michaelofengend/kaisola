@@ -1,3 +1,4 @@
+import KaisolaCore
 import CryptoKit
 import XCTest
 @testable import KaisolaCompanion

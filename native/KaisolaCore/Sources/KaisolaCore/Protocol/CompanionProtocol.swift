@@ -1,6 +1,6 @@
 import Foundation
 
-enum CompanionProtocolError: Error, Equatable {
+public enum CompanionProtocolError: Error, Equatable {
     case frameTooLarge
     case protocolMismatch(Int)
     case unknownKind(String)
@@ -11,7 +11,7 @@ enum CompanionProtocolError: Error, Equatable {
     case unknownField(String)
 }
 
-enum CompanionEnvelopeKind: String, Codable, CaseIterable, Sendable {
+public enum CompanionEnvelopeKind: String, Codable, CaseIterable, Sendable {
     case hello
     case event
     case command
@@ -21,30 +21,30 @@ enum CompanionEnvelopeKind: String, Codable, CaseIterable, Sendable {
     case error
 }
 
-enum CompanionCapability: String, Codable, CaseIterable, Hashable, Sendable {
+public enum CompanionCapability: String, Codable, CaseIterable, Hashable, Sendable {
     case observe
     case agentControl = "agent-control"
     case terminalControl = "terminal-control"
 }
 
-struct CompanionBody: Codable, Hashable, Sendable {
-    let fields: [String: JSONValue]
+public struct CompanionBody: Codable, Hashable, Sendable {
+    public let fields: [String: JSONValue]
 
-    init(fields: [String: JSONValue]) throws {
+    public init(fields: [String: JSONValue]) throws {
         guard fields["type"]?.stringValue != nil else {
             throw CompanionProtocolError.invalidBody("body.type")
         }
         self.fields = fields
     }
 
-    init<T: Encodable>(_ value: T) throws {
+    public init<T: Encodable>(_ value: T) throws {
         guard case let .object(fields) = try JSONValue.from(value) else {
             throw CompanionProtocolError.invalidBody("body")
         }
         try self.init(fields: fields)
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let value = try JSONValue(from: decoder)
         guard case let .object(fields) = value else {
             throw CompanionProtocolError.invalidBody("body")
@@ -52,34 +52,34 @@ struct CompanionBody: Codable, Hashable, Sendable {
         try self.init(fields: fields)
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         try JSONValue.object(fields).encode(to: encoder)
     }
 
-    var type: String { fields["type"]?.stringValue ?? "" }
+    public var type: String { fields["type"]?.stringValue ?? "" }
 
-    func decode<T: Decodable>(_ type: T.Type) throws -> T {
+    public func decode<T: Decodable>(_ type: T.Type) throws -> T {
         try JSONDecoder().decode(type, from: CanonicalJSON.data(from: .object(fields)))
     }
 }
 
-struct CompanionEnvelope: Codable, Hashable, Sendable {
-    static let protocolVersion = 1
-    static let protocolMinor = 0
-    static let maximumBytes = 1_024 * 1_024
+public struct CompanionEnvelope: Codable, Hashable, Sendable {
+    public static let protocolVersion = 1
+    public static let protocolMinor = 0
+    public static let maximumBytes = 1_024 * 1_024
 
-    let v: Int
-    let kind: CompanionEnvelopeKind
-    let desktopId: String
-    let deviceId: String
-    let connectionId: String
-    let epoch: String
-    let seq: Int64
-    let id: String
-    let sentAt: Int64
-    let body: CompanionBody
+    public let v: Int
+    public let kind: CompanionEnvelopeKind
+    public let desktopId: String
+    public let deviceId: String
+    public let connectionId: String
+    public let epoch: String
+    public let seq: Int64
+    public let id: String
+    public let sentAt: Int64
+    public let body: CompanionBody
 
-    init(
+    public init(
         v: Int = protocolVersion,
         kind: CompanionEnvelopeKind,
         desktopId: String,
@@ -115,7 +115,7 @@ struct CompanionEnvelope: Codable, Hashable, Sendable {
         init?(intValue: Int) { return nil }
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let dynamic = try decoder.container(keyedBy: AnyCodingKey.self)
         let allowed = Set(CodingKeys.allCases.map(\.rawValue))
         if let unknown = dynamic.allKeys.first(where: { !allowed.contains($0.stringValue) }) {
@@ -235,13 +235,13 @@ struct CompanionEnvelope: Codable, Hashable, Sendable {
         }
     }
 
-    static let eventTypes: Set<String> = [
+    public static let eventTypes: Set<String> = [
         "desktop.status", "project.updated", "session.updated", "attention.raised", "attention.cleared",
         "agent.turn.delta", "agent.turn.completed", "agent.permission.requested", "agent.permission.resolved",
         "terminal.snapshot", "terminal.output", "terminal.exit", "ledger.task.updated",
     ]
 
-    static let commandCapabilities: [String: CompanionCapability] = [
+    public static let commandCapabilities: [String: CompanionCapability] = [
         "attention.ack": .observe,
         "stream.subscribe": .observe,
         "stream.unsubscribe": .observe,
@@ -258,15 +258,15 @@ struct CompanionEnvelope: Codable, Hashable, Sendable {
     ]
 }
 
-enum CompanionProtocolCodec {
-    static func decode(_ data: Data) throws -> CompanionEnvelope {
+public enum CompanionProtocolCodec {
+    public static func decode(_ data: Data) throws -> CompanionEnvelope {
         guard !data.isEmpty, data.count <= CompanionEnvelope.maximumBytes else {
             throw CompanionProtocolError.frameTooLarge
         }
         return try JSONDecoder().decode(CompanionEnvelope.self, from: data)
     }
 
-    static func encode(_ envelope: CompanionEnvelope) throws -> Data {
+    public static func encode(_ envelope: CompanionEnvelope) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let data = try encoder.encode(envelope)
@@ -275,20 +275,20 @@ enum CompanionProtocolCodec {
     }
 }
 
-enum CompanionPeerRole: String, Codable, Sendable {
+public enum CompanionPeerRole: String, Codable, Sendable {
     case desktop
     case device
 }
 
-struct CompanionHelloBody: Codable, Hashable, Sendable {
-    let type: String
-    let role: CompanionPeerRole
-    let protocolMinor: Int?
-    let capabilities: [CompanionCapability]
-    let lastAck: Int64?
-    let transportHint: CompanionPairingTransportHint?
+public struct CompanionHelloBody: Codable, Hashable, Sendable {
+    public let type: String
+    public let role: CompanionPeerRole
+    public let protocolMinor: Int?
+    public let capabilities: [CompanionCapability]
+    public let lastAck: Int64?
+    public let transportHint: CompanionPairingTransportHint?
 
-    init(
+    public init(
         role: CompanionPeerRole,
         capabilities: [CompanionCapability],
         lastAck: Int64? = nil,
@@ -303,104 +303,230 @@ struct CompanionHelloBody: Codable, Hashable, Sendable {
     }
 }
 
-struct CompanionAckBody: Codable, Hashable, Sendable {
-    let type: String
-    let ackSeq: Int64
+public struct CompanionAckBody: Codable, Hashable, Sendable {
+    public let type: String
+    public let ackSeq: Int64
 
-    init(ackSeq: Int64) {
+    public init(ackSeq: Int64) {
         type = "ack"
         self.ackSeq = ackSeq
     }
 }
 
-enum CompanionReceiptStatus: String, Codable, CaseIterable, Sendable {
+public enum CompanionReceiptStatus: String, Codable, CaseIterable, Sendable {
     case accepted, applied, rejected, stale, unavailable
     case timedOut = "timed_out"
 }
 
-struct CompanionReceiptBody: Codable, Hashable, Sendable {
-    let type: String
-    let commandId: String
-    let status: CompanionReceiptStatus
-    let message: String?
-    let payload: [String: JSONValue]?
+public struct CompanionReceiptBody: Codable, Hashable, Sendable {
+    public let type: String
+    public let commandId: String
+    public let status: CompanionReceiptStatus
+    public let message: String?
+    public let payload: [String: JSONValue]?
+
+    public init(
+        type: String,
+        commandId: String,
+        status: CompanionReceiptStatus,
+        message: String?,
+        payload: [String: JSONValue]?
+    ) {
+        self.type = type
+        self.commandId = commandId
+        self.status = status
+        self.message = message
+        self.payload = payload
+    }
 }
 
-struct CompanionErrorBody: Codable, Hashable, Sendable {
-    let type: String
-    let code: String
-    let message: String
+public struct CompanionErrorBody: Codable, Hashable, Sendable {
+    public let type: String
+    public let code: String
+    public let message: String
+
+    public init(type: String, code: String, message: String) {
+        self.type = type
+        self.code = code
+        self.message = message
+    }
 }
 
-struct CompanionCommandBody: Codable, Hashable, Sendable {
-    let type: String
-    let commandId: String
-    let projectId: String
-    let targetId: String
-    let capability: CompanionCapability
-    let expectedRevision: Int64?
-    let payload: [String: JSONValue]?
+public struct CompanionCommandBody: Codable, Hashable, Sendable {
+    public let type: String
+    public let commandId: String
+    public let projectId: String
+    public let targetId: String
+    public let capability: CompanionCapability
+    public let expectedRevision: Int64?
+    public let payload: [String: JSONValue]?
+
+    public init(
+        type: String,
+        commandId: String,
+        projectId: String,
+        targetId: String,
+        capability: CompanionCapability,
+        expectedRevision: Int64?,
+        payload: [String: JSONValue]?
+    ) {
+        self.type = type
+        self.commandId = commandId
+        self.projectId = projectId
+        self.targetId = targetId
+        self.capability = capability
+        self.expectedRevision = expectedRevision
+        self.payload = payload
+    }
 }
 
-struct CompanionAgentTurnDeltaBody: Codable, Hashable, Sendable {
-    let type: String
-    let projectId: String
-    let targetId: String?
-    let sessionId: String?
-    let turnId: String
-    let delta: JSONValue
+public struct CompanionAgentTurnDeltaBody: Codable, Hashable, Sendable {
+    public let type: String
+    public let projectId: String
+    public let targetId: String?
+    public let sessionId: String?
+    public let turnId: String
+    public let delta: JSONValue
+
+    public init(
+        type: String,
+        projectId: String,
+        targetId: String?,
+        sessionId: String?,
+        turnId: String,
+        delta: JSONValue
+    ) {
+        self.type = type
+        self.projectId = projectId
+        self.targetId = targetId
+        self.sessionId = sessionId
+        self.turnId = turnId
+        self.delta = delta
+    }
 }
 
-struct CompanionPermissionRequestedBody: Codable, Hashable, Sendable {
-    let type: String
-    let projectId: String
-    let targetId: String?
-    let sessionId: String?
-    let permId: String
-    let revision: Int64?
-    let completeness: String?
-    let agent: String
-    let title: String
-    let kind: String?
-    let requestedAt: Int64?
-    let options: [CompanionPermissionOption]
-    let diffs: [CompanionPermissionDiff]
+public struct CompanionPermissionRequestedBody: Codable, Hashable, Sendable {
+    public let type: String
+    public let projectId: String
+    public let targetId: String?
+    public let sessionId: String?
+    public let permId: String
+    public let revision: Int64?
+    public let completeness: String?
+    public let agent: String
+    public let title: String
+    public let kind: String?
+    public let requestedAt: Int64?
+    public let options: [CompanionPermissionOption]
+    public let diffs: [CompanionPermissionDiff]
+
+    public init(
+        type: String,
+        projectId: String,
+        targetId: String?,
+        sessionId: String?,
+        permId: String,
+        revision: Int64?,
+        completeness: String?,
+        agent: String,
+        title: String,
+        kind: String?,
+        requestedAt: Int64?,
+        options: [CompanionPermissionOption],
+        diffs: [CompanionPermissionDiff]
+    ) {
+        self.type = type
+        self.projectId = projectId
+        self.targetId = targetId
+        self.sessionId = sessionId
+        self.permId = permId
+        self.revision = revision
+        self.completeness = completeness
+        self.agent = agent
+        self.title = title
+        self.kind = kind
+        self.requestedAt = requestedAt
+        self.options = options
+        self.diffs = diffs
+    }
 }
 
-struct CompanionTerminalOutputBody: Codable, Hashable, Sendable {
-    let type: String
-    let projectId: String
-    let terminalId: String
-    let streamEpoch: String
-    let startOffset: Int64
-    let endOffset: Int64
-    let data: String
+public struct CompanionTerminalOutputBody: Codable, Hashable, Sendable {
+    public let type: String
+    public let projectId: String
+    public let terminalId: String
+    public let streamEpoch: String
+    public let startOffset: Int64
+    public let endOffset: Int64
+    public let data: String
+
+    public init(
+        type: String,
+        projectId: String,
+        terminalId: String,
+        streamEpoch: String,
+        startOffset: Int64,
+        endOffset: Int64,
+        data: String
+    ) {
+        self.type = type
+        self.projectId = projectId
+        self.terminalId = terminalId
+        self.streamEpoch = streamEpoch
+        self.startOffset = startOffset
+        self.endOffset = endOffset
+        self.data = data
+    }
 }
 
-struct CompanionTerminalCursorFixture: Codable, Hashable, Sendable {
-    struct Chunk: Codable, Hashable, Sendable {
-        let data: String
-        let startOffset: Int64
-        let endOffset: Int64
+public struct CompanionTerminalCursorFixture: Codable, Hashable, Sendable {
+    public struct Chunk: Codable, Hashable, Sendable {
+        public let data: String
+        public let startOffset: Int64
+        public let endOffset: Int64
+
+        public init(data: String, startOffset: Int64, endOffset: Int64) {
+            self.data = data
+            self.startOffset = startOffset
+            self.endOffset = endOffset
+        }
     }
 
-    struct Snapshot: Codable, Hashable, Sendable {
-        let output: String
-        let startOffset: Int64
-        let endOffset: Int64
-        let truncated: Bool
+    public struct Snapshot: Codable, Hashable, Sendable {
+        public let output: String
+        public let startOffset: Int64
+        public let endOffset: Int64
+        public let truncated: Bool
+
+        public init(output: String, startOffset: Int64, endOffset: Int64, truncated: Bool) {
+            self.output = output
+            self.startOffset = startOffset
+            self.endOffset = endOffset
+            self.truncated = truncated
+        }
     }
 
-    let streamEpoch: String
-    let chunks: [Chunk]
-    let snapshot: Snapshot
+    public let streamEpoch: String
+    public let chunks: [Chunk]
+    public let snapshot: Snapshot
+
+    public init(streamEpoch: String, chunks: [Chunk], snapshot: Snapshot) {
+        self.streamEpoch = streamEpoch
+        self.chunks = chunks
+        self.snapshot = snapshot
+    }
 }
 
-struct CompanionAckCursor: Codable, Hashable, Sendable {
-    var epoch: String
-    var seq: Int64
+public struct CompanionAckCursor: Codable, Hashable, Sendable {
+    public var epoch: String
+    public var seq: Int64
 
-    mutating func accept(_ envelope: CompanionEnvelope) -> Bool {
+    public init(epoch: String, seq: Int64) {
+        self.epoch = epoch
+        self.seq = seq
+    }
+
+    public mutating func accept(_ envelope: CompanionEnvelope) -> Bool {
         guard envelope.kind == .snapshot || envelope.kind == .event else { return false }
         if envelope.kind == .snapshot {
             epoch = envelope.epoch

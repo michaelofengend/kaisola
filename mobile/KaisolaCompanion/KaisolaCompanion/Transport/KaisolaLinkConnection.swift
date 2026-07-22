@@ -1,3 +1,4 @@
+import KaisolaCore
 import Foundation
 
 enum KaisolaLinkError: LocalizedError, Equatable {

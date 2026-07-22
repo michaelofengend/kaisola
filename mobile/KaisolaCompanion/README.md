@@ -8,6 +8,11 @@ It chooses Bonjour/LAN first, an optional Tailscale or Headscale private route
 second, and automatic Kaisola Link third. No router port or public Mac listener
 is required.
 
+The app now consumes the local `native/KaisolaCore` Swift package for its
+domain, protocol, crypto, pairing, and framing contracts. The native macOS
+migration uses the same compiled definitions and the same checked-in Node wire
+fixtures rather than maintaining a second Swift copy.
+
 Newly paired phones request viewing, agent control, and terminal control in one
 confirmed pairing, while desktop Settings → Companion can independently narrow
 either control grant for that exact device at any time. Agent control can send

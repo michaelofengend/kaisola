@@ -1,28 +1,28 @@
 import Foundation
 
-enum CompanionWireError: Error, Equatable {
+public enum CompanionWireError: Error, Equatable {
     case frameTooLarge
     case invalidFrame
     case connectionUnavailable
 }
 
-struct CompanionLengthFrameDecoder: Sendable {
+public struct CompanionLengthFrameDecoder: Sendable {
     // Largest length-framed secure frame, derived from the same secure-plaintext
     // cap the desktop uses (electron/companion/bonjourTransport.cjs:
     // ceil((plaintext + 16) * 4/3) + 2048). Derived rather than hard-coded so
     // raising the plaintext cap for larger terminal snapshots can never leave
     // the two ends disagreeing on the maximum accepted frame.
-    static let defaultMaximumFrameBytes =
+    public static let defaultMaximumFrameBytes =
         Int((Double(CompanionCrypto.maximumSecurePlaintextBytes + 16) * 4 / 3).rounded(.up)) + 2048
 
-    private(set) var buffer = Data()
-    let maximumFrameBytes: Int
+    public private(set) var buffer = Data()
+    public let maximumFrameBytes: Int
 
-    init(maximumFrameBytes: Int = CompanionLengthFrameDecoder.defaultMaximumFrameBytes) {
+    public init(maximumFrameBytes: Int = CompanionLengthFrameDecoder.defaultMaximumFrameBytes) {
         self.maximumFrameBytes = maximumFrameBytes
     }
 
-    mutating func push(_ chunk: Data) throws -> [Data] {
+    public mutating func push(_ chunk: Data) throws -> [Data] {
         buffer.append(chunk)
         var frames: [Data] = []
         while buffer.count >= 4 {
@@ -36,7 +36,10 @@ struct CompanionLengthFrameDecoder: Sendable {
         return frames
     }
 
-    static func encode(_ payload: Data, maximumFrameBytes: Int = CompanionLengthFrameDecoder.defaultMaximumFrameBytes) throws -> Data {
+    public static func encode(
+        _ payload: Data,
+        maximumFrameBytes: Int = CompanionLengthFrameDecoder.defaultMaximumFrameBytes
+    ) throws -> Data {
         guard !payload.isEmpty, payload.count <= maximumFrameBytes, payload.count <= Int(UInt32.max) else {
             throw CompanionWireError.frameTooLarge
         }

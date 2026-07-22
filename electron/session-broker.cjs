@@ -14,9 +14,18 @@ const path = require('node:path')
 const { StringDecoder } = require('node:string_decoder')
 const mgr = require('./ipc/terminalManager.cjs')
 const { terminalOwnerAllowed, terminalOwnerParts } = require('./ipc/securityPolicy.cjs')
-const { PROTOCOL, SECURITY_EPOCH, TERMINAL_OBSERVE_FEATURE, MAX_FRAME, atomicJson } = require('./ipc/brokerWire.cjs')
+const {
+  PROTOCOL,
+  SECURITY_EPOCH,
+  TERMINAL_OBSERVE_FEATURE,
+  OBSERVER_ROLE_FEATURE,
+  OBSERVER_ACCESS,
+  MAX_FRAME,
+  atomicJson,
+  brokerMethodAllowedForAccess,
+} = require('./ipc/brokerWire.cjs')
 
-const FEATURES = Object.freeze([TERMINAL_OBSERVE_FEATURE])
+const FEATURES = Object.freeze([TERMINAL_OBSERVE_FEATURE, OBSERVER_ROLE_FEATURE])
 const NO_CLIENT_EXIT_MS = 30_000
 // macOS may reap old entries from its per-user temporary directory even while
 // a process still has the AF_UNIX listener open. The broker and every PTY stay
@@ -140,6 +149,9 @@ mgr.setEventSink((owner, channel, payload, options) => {
 })
 
 async function dispatch(client, method, params = {}) {
+  if (!brokerMethodAllowedForAccess(client.access, method)) {
+    throw new Error('observer access cannot invoke broker mutations')
+  }
   const admin = String(params.ownerId ?? '0') === '0'
   const requestProject = projectScope(params.projectId)
   const owner = ownerKey(client.instanceId, params.ownerId, requestProject)
@@ -330,12 +342,18 @@ function handleLine(client, line) {
     }
     const prior = clients.get(instanceId)
     if (prior && prior.socket !== client.socket) prior.socket.destroy()
+    const access = frame.access == null ? 'controller' : String(frame.access)
+    if (access !== 'controller' && access !== OBSERVER_ACCESS) {
+      client.socket.destroy()
+      return
+    }
     client.instanceId = instanceId
+    client.access = access
     client.authenticated = true
     everConnected = true
     clients.set(instanceId, client)
     clearNoClientTimer()
-    send(client.socket, { type: 'hello', ok: true, protocol: PROTOCOL, securityEpoch: SECURITY_EPOCH, features: FEATURES, pid: process.pid, startedAt: config.startedAt, version: config.version })
+    send(client.socket, { type: 'hello', ok: true, protocol: PROTOCOL, securityEpoch: SECURITY_EPOCH, features: FEATURES, access, pid: process.pid, startedAt: config.startedAt, version: config.version })
     return
   }
   if (frame?.type !== 'request' || typeof frame.id !== 'string' || typeof frame.method !== 'string') return
@@ -350,7 +368,7 @@ function handleLine(client, line) {
 
 function acceptClient(socket) {
   socket.setNoDelay(true)
-  const client = { socket, authenticated: false, instanceId: null, buffer: '', decoder: new StringDecoder('utf8') }
+  const client = { socket, authenticated: false, instanceId: null, access: 'controller', buffer: '', decoder: new StringDecoder('utf8') }
   socket.on('data', (chunk) => {
     client.buffer += client.decoder.write(chunk)
     if (Buffer.byteLength(client.buffer) > MAX_FRAME) {

@@ -8,18 +8,18 @@ private struct PairingCodingKey: CodingKey {
     init?(intValue: Int) { return nil }
 }
 
-struct CompanionPairingTransportHint: Codable, Hashable, Sendable {
-    let service: String
-    let `protocol`: String
-    let host: String?
-    let port: Int?
-    let tailscaleHost: String?
+public struct CompanionPairingTransportHint: Codable, Hashable, Sendable {
+    public let service: String
+    public let `protocol`: String
+    public let host: String?
+    public let port: Int?
+    public let tailscaleHost: String?
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case service, `protocol`, host, port, tailscaleHost
     }
 
-    init(
+    public init(
         service: String,
         protocol: String,
         host: String? = nil,
@@ -33,7 +33,7 @@ struct CompanionPairingTransportHint: Codable, Hashable, Sendable {
         self.tailscaleHost = tailscaleHost
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let dynamic = try decoder.container(keyedBy: PairingCodingKey.self)
         let allowed = Set(CodingKeys.allCases.map(\.rawValue))
         guard !dynamic.allKeys.contains(where: { !allowed.contains($0.stringValue) }) else {
@@ -47,7 +47,7 @@ struct CompanionPairingTransportHint: Codable, Hashable, Sendable {
         tailscaleHost = try container.decodeIfPresent(String.self, forKey: .tailscaleHost)
     }
 
-    func validate() throws {
+    public func validate() throws {
         let validHost: (String?) -> Bool = { value in
             value.map {
                 !$0.isEmpty && $0.count <= 253 && !$0.contains(where: { "\0\r\n".contains($0) })
@@ -63,24 +63,45 @@ struct CompanionPairingTransportHint: Codable, Hashable, Sendable {
     }
 }
 
-struct CompanionPairingPayload: Codable, Hashable, Sendable {
-    let type: String
-    let protocolVersion: Int
-    let noiseProtocol: String
-    let desktopId: String
-    let identityPublic: String
-    let keyRecord: CompanionSignedKeyRecord
-    let pairingNonce: String
-    let requestedCapabilities: [CompanionCapability]
-    let transportHint: CompanionPairingTransportHint
-    let expiresAt: Int64
+public struct CompanionPairingPayload: Codable, Hashable, Sendable {
+    public let type: String
+    public let protocolVersion: Int
+    public let noiseProtocol: String
+    public let desktopId: String
+    public let identityPublic: String
+    public let keyRecord: CompanionSignedKeyRecord
+    public let pairingNonce: String
+    public let requestedCapabilities: [CompanionCapability]
+    public let transportHint: CompanionPairingTransportHint
+    public let expiresAt: Int64
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case type, protocolVersion, noiseProtocol, desktopId, identityPublic, keyRecord
         case pairingNonce, requestedCapabilities, transportHint, expiresAt
     }
 
-    init(from decoder: Decoder) throws {
+    public init(
+        desktopId: String,
+        identityPublic: String,
+        keyRecord: CompanionSignedKeyRecord,
+        pairingNonce: String,
+        requestedCapabilities: [CompanionCapability],
+        transportHint: CompanionPairingTransportHint,
+        expiresAt: Int64
+    ) {
+        type = "kaisola-companion-pairing"
+        protocolVersion = CompanionCrypto.protocolVersion
+        noiseProtocol = CompanionCrypto.noiseProtocol
+        self.desktopId = desktopId
+        self.identityPublic = identityPublic
+        self.keyRecord = keyRecord
+        self.pairingNonce = pairingNonce
+        self.requestedCapabilities = requestedCapabilities
+        self.transportHint = transportHint
+        self.expiresAt = expiresAt
+    }
+
+    public init(from decoder: Decoder) throws {
         let dynamic = try decoder.container(keyedBy: PairingCodingKey.self)
         let allowed = Set(CodingKeys.allCases.map(\.rawValue))
         guard !dynamic.allKeys.contains(where: { !allowed.contains($0.stringValue) }) else {
@@ -109,7 +130,7 @@ struct CompanionPairingPayload: Codable, Hashable, Sendable {
         expiresAt = try container.decode(Int64.self, forKey: .expiresAt)
     }
 
-    func validate(now: Date = .now, clockSkewMilliseconds: Int64 = 30_000) throws {
+    public func validate(now: Date = .now, clockSkewMilliseconds: Int64 = 30_000) throws {
         guard type == "kaisola-companion-pairing",
               protocolVersion == CompanionCrypto.protocolVersion,
               noiseProtocol == CompanionCrypto.noiseProtocol else {
@@ -138,7 +159,7 @@ struct CompanionPairingPayload: Codable, Hashable, Sendable {
         }
     }
 
-    var desktopPin: CompanionIdentityPin {
+    public var desktopPin: CompanionIdentityPin {
         CompanionIdentityPin(
             id: desktopId,
             identityPublic: identityPublic,
@@ -146,7 +167,7 @@ struct CompanionPairingPayload: Codable, Hashable, Sendable {
         )
     }
 
-    func handshakeContext(connectionId: String) throws -> JSONValue {
+    public func handshakeContext(connectionId: String) throws -> JSONValue {
         _ = try CompanionCrypto.validateIdentifier(connectionId, label: "connectionId")
         let hash = CompanionCrypto.sha256(try CanonicalJSON.data(from: self)).base64URLEncodedString()
         return .object([
@@ -160,14 +181,28 @@ struct CompanionPairingPayload: Codable, Hashable, Sendable {
     }
 }
 
-struct CompanionPairedDesktop: Codable, Hashable, Sendable {
-    let desktopId: String
-    let identityPublic: String
-    let x25519StaticPublic: String
-    let capabilities: [CompanionCapability]
-    let transportHint: CompanionPairingTransportHint?
+public struct CompanionPairedDesktop: Codable, Hashable, Sendable {
+    public let desktopId: String
+    public let identityPublic: String
+    public let x25519StaticPublic: String
+    public let capabilities: [CompanionCapability]
+    public let transportHint: CompanionPairingTransportHint?
 
-    var pin: CompanionIdentityPin {
+    public init(
+        desktopId: String,
+        identityPublic: String,
+        x25519StaticPublic: String,
+        capabilities: [CompanionCapability],
+        transportHint: CompanionPairingTransportHint?
+    ) {
+        self.desktopId = desktopId
+        self.identityPublic = identityPublic
+        self.x25519StaticPublic = x25519StaticPublic
+        self.capabilities = capabilities
+        self.transportHint = transportHint
+    }
+
+    public var pin: CompanionIdentityPin {
         CompanionIdentityPin(
             id: desktopId,
             identityPublic: identityPublic,
@@ -175,7 +210,7 @@ struct CompanionPairedDesktop: Codable, Hashable, Sendable {
         )
     }
 
-    func resumeHandshakeContext(deviceId: String, connectionId: String) throws -> JSONValue {
+    public func resumeHandshakeContext(deviceId: String, connectionId: String) throws -> JSONValue {
         _ = try CompanionCrypto.validateIdentifier(desktopId, label: "desktopId")
         _ = try CompanionCrypto.validateIdentifier(deviceId, label: "deviceId")
         _ = try CompanionCrypto.validateIdentifier(connectionId, label: "connectionId")

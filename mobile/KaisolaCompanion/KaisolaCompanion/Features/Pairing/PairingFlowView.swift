@@ -1,3 +1,4 @@
+import KaisolaCore
 import SwiftUI
 
 /// The pairing sheet: scan (or paste) the code from your Mac's Settings →
