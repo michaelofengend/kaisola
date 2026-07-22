@@ -39,6 +39,16 @@ observable sessions, and did not try to replace the broker. That is useful
 coexistence evidence, but it cannot substantiate selection, search, live-output
 accessibility, or sustained-rendering rows; those remain open above.
 
+A second local packaged inspection (2026-07-21) ran the same sealed artifact
+against a live 0.1.86 broker under the development profile: the preview
+connected, listed the live session row with its PID, subscribed as a
+server-enforced observer, rendered the reattached scrollback, and streamed
+live PTY output end to end while a non-owner `terminal.kill` was denied. The
+paired idle-workload footprint capture from the same session is recorded in
+the Phase 0/1 plan (native 62.1 MiB median versus Electron 197.6 MiB median,
+candidate fraction 0.314). Selection, search, VoiceOver, appearance, and
+multiple-window rows still require the packaged GUI judgments listed above.
+
 The matrix is not a Phase 1 completion declaration. All `MANUAL OPEN` rows and
 the real-update continuity row must be recorded against the exact distribution
 artifact before the native preview ships.

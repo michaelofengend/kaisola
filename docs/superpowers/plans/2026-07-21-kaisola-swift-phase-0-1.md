@@ -279,6 +279,24 @@ detached helpers explicitly, records median/p95, and refuses mismatched metric
 families or workloads. Versioned workloads and an evidence-scoped interaction
 matrix live under `native/KaisolaMac/ResourceGates`.
 
+**Paired idle-workload capture recorded 2026-07-21:** both apps were measured
+sequentially against the same live 0.1.86 broker under the isolated
+`Kaisola Dev` profile in the `one-window-idle-terminal-existing-broker`
+workload (7 samples, 1 s apart, one `/usr/bin/footprint` metric family, broker
+PID counted on both sides). Electron — the repository binary loading the
+production `dist/` bundle from a local HTTP preview server — measured
+197.6 MiB median / 197.7 MiB p95 across app, renderer, GPU, utility helper,
+and broker. The sealed universal `LocalRelease` native preview observing the
+same live PTY measured 62.1 MiB median / 62.1 MiB p95 (app + broker): a
+candidate fraction of 0.314 against the 0.5 release threshold, a 68.6 %
+reduction. The same session verified live streaming end to end — a controller
+wrote a marker command, the stream offset advanced past it, and the packaged
+observer held its subscription while a non-owner `terminal.kill` was denied.
+Still open: an installed-app Electron baseline (the installed daily driver
+still runs a pre-observation 0.1.60 broker with live sessions and was
+deliberately not disturbed), the streaming/three-window/fresh-broker
+workloads, and re-measurement from the Developer ID artifact.
+
 Automated tests cover the 56 MiB frame envelope, >56 MiB streaming batches,
 sync backpressure, an 8 MiB retained-output boundary, split UTF-8, ANSI modes,
 8,192-line capped SwiftTerm scrollback, Unicode terminal widths, and resize/
