@@ -297,6 +297,15 @@ still runs a pre-observation 0.1.60 broker with live sessions and was
 deliberately not disturbed), the streaming/three-window/fresh-broker
 workloads, and re-measurement from the Developer ID artifact.
 
+**Remaining workloads captured 2026-07-22** (same isolated profile, metric,
+and 7-sample discipline): streaming — Electron 307.5 MiB median / 320.0 p95
+versus native 91.9 / 91.9 (fraction 0.299, 70.1 % reduction, gate pass);
+fresh-broker idle — Electron 202.1 median / 203.0 p95; three restored
+Electron windows — 1119.0 median / 1119.3 p95, ≈460 MiB per additional
+window, which is the strongest quantitative motivation recorded for the
+migration. The native preview is deliberately single-window in Phase 1, so
+the three-window workload stands as Electron-only baseline evidence.
+
 Automated tests cover the 56 MiB frame envelope, >56 MiB streaming batches,
 sync backpressure, an 8 MiB retained-output boundary, split UTF-8, ANSI modes,
 8,192-line capped SwiftTerm scrollback, Unicode terminal widths, and resize/
