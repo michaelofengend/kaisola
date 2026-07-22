@@ -263,6 +263,28 @@ The actual signed Sparkle update with real Claude and Codex processes remains a
 distribution gate and is not satisfied by the synthetic client-replacement
 probe.
 
+**Packaged-swap continuity gate recorded 2026-07-22:** two Developer ID-signed,
+hardened-runtime Release builds (CFBundleVersion 100 and 101, Sparkle feed and
+EdDSA public key baked in, both passing release preflight with
+`updatesConfigured` true) were swapped atomically in `~/Applications` five
+times in both directions while one continuously streaming shell, a looping
+real Claude CLI (25 sequential `claude -p` invocations), and a looping real
+Codex CLI (20 sequential `codex exec` invocations) ran on one live broker. An
+independent read-only witness asserted on every leg that the broker PID, every
+terminal PID, every stream epoch, and offset monotonicity held; plain-stream
+retained content matched exactly across legs, and both provider ladders
+arrived complete and in order (`CLAUDE_SEQ_1..25`, `CODEX_SEQ_1..20`, zero
+failures). Gatekeeper posture of the local artifact was recorded honestly:
+`codesign --verify --deep --strict` valid, `spctl` rejected as
+"Unnotarized Developer ID" — notarization is CI's step. The gate also caught
+and fixed two latent release bugs: custom `INFOPLIST_KEY_SU*` settings were
+silently dropped by Xcode (updater shipped unconfigured; now merged from a
+partial Info.plist), and non-archive Developer ID builds carried
+`get-task-allow` (now suppressed). The Sparkle-transport leg — the appcast
+download and installer run end to end from the published feed — remains open
+pending the next published release, together with notarized
+Gatekeeper/translocation/clean-user evidence.
+
 Integrate Sparkle for the native preview channel. Run a packaged update while a
 real Claude CLI and a real Codex CLI emit uniquely numbered output. Confirm the
 same PIDs survive and the post-update view contains a continuous retained
