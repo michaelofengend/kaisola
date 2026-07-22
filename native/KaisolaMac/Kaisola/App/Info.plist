@@ -6,6 +6,8 @@
 	     injected via INFOPLIST_KEY_* (Xcode only honors an allowlist), so they
 	     live here with build-setting expansion. Empty values keep the updater
 	     fail-closed via NativeUpdateConfiguration. -->
+	<key>CFBundleIconFile</key>
+	<string>kaisola-icon</string>
 	<key>SUFeedURL</key>
 	<string>$(KAISOLA_SPARKLE_FEED_URL)</string>
 	<key>SUPublicEDKey</key>

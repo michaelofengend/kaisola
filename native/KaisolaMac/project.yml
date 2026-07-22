@@ -58,6 +58,10 @@ targets:
     sources:
       - path: Kaisola
       - path: Shared
+      # The preview reuses the Kaisola app icon so it reads as family in the
+      # Dock; CFBundleIconFile in the partial Info.plist points at it.
+      - path: ../../electron/assets/kaisola-icon.icns
+        buildPhase: resources
     dependencies:
       - target: KaisolaBrokerBootstrap
         embed: false

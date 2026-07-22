@@ -35,6 +35,7 @@
 		98DAE6676A641D45F023DA05 /* NativePreviewPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E78A73E4BF5DABAB5BF6826 /* NativePreviewPaths.swift */; };
 		A06CBCBD9882375F104D2ACA /* ObserveOnlyBrokerClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96F1989B7416C050648E9CAB /* ObserveOnlyBrokerClientTests.swift */; };
 		A5F88CF039D35506FC38BDC3 /* BrokerReconnectBackoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A451FC25E152BC8B61FB5702 /* BrokerReconnectBackoffTests.swift */; };
+		A82CB8948F8FA7EA57823866 /* kaisola-icon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 90A94C83E7A4D1EB77644187 /* kaisola-icon.icns */; };
 		AA39C33375202BD9300CE951 /* BrokerModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991FCF32D009E1236EBF19A5 /* BrokerModelsTests.swift */; };
 		ACC0996E20F391DC8E473C42 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45799AC8A5D80828BB3EB235 /* AppModel.swift */; };
 		ADCD5776327E816820F93512 /* BrokerDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5A8717F4788368FDE60F93 /* BrokerDiscoveryTests.swift */; };
@@ -99,6 +100,7 @@
 		8D98396E44670C6412BE1415 /* BrokerModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerModels.swift; sourceTree = "<group>"; };
 		8F9EDBEF947F0725DF51BDA4 /* BrokerLaunchConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerLaunchConfigurationTests.swift; sourceTree = "<group>"; };
 		8FD5419F311EE385C8A43CD8 /* BrokerBootstrapService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerBootstrapService.swift; sourceTree = "<group>"; };
+		90A94C83E7A4D1EB77644187 /* kaisola-icon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = "kaisola-icon.icns"; sourceTree = "<group>"; };
 		93A5794337909F4D5F4C7A54 /* KaisolaMacPreviewTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KaisolaMacPreviewTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		96E5D09B49E862C088D584E8 /* TerminalCursorStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalCursorStoreTests.swift; sourceTree = "<group>"; };
 		96F1989B7416C050648E9CAB /* ObserveOnlyBrokerClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObserveOnlyBrokerClientTests.swift; sourceTree = "<group>"; };
@@ -153,6 +155,7 @@
 		1333D1BB66358A436881847E = {
 			isa = PBXGroup;
 			children = (
+				49CBF8AD1021A176C61C012C /* assets */,
 				BF422C3353CBE837F84DF2A3 /* BrokerBootstrap */,
 				2F7163840EA196069E3491D9 /* Kaisola */,
 				C91771205CA39A4F31928CFA /* KaisolaTests */,
@@ -181,6 +184,15 @@
 				58663742F2D4497A3D234BF7 /* BrokerLaunchConfiguration.swift */,
 			);
 			path = Shared;
+			sourceTree = "<group>";
+		};
+		49CBF8AD1021A176C61C012C /* assets */ = {
+			isa = PBXGroup;
+			children = (
+				90A94C83E7A4D1EB77644187 /* kaisola-icon.icns */,
+			);
+			name = assets;
+			path = ../../electron/assets;
 			sourceTree = "<group>";
 		};
 		503C81FECD70EE66D684E00B /* Updates */ = {
@@ -334,6 +346,7 @@
 			buildConfigurationList = 24A52B9D5207E95A8753B2FB /* Build configuration list for PBXNativeTarget "KaisolaMacPreview" */;
 			buildPhases = (
 				018A922A8F40CE114E63C6AE /* Sources */,
+				7EFA6CAEE18DE55F6E500331 /* Resources */,
 				D90BFF710305240F2D90367E /* Frameworks */,
 				157E3D49FB6DE2876095DED4 /* Package standalone broker helper */,
 			);
@@ -398,6 +411,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		7EFA6CAEE18DE55F6E500331 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A82CB8948F8FA7EA57823866 /* kaisola-icon.icns in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		157E3D49FB6DE2876095DED4 /* Package standalone broker helper */ = {

@@ -1,3 +1,4 @@
+import Combine
 import Darwin
 import KaisolaBrokerProtocol
 import KaisolaCore
@@ -27,6 +28,28 @@ final class AppModelReconnectTests: XCTestCase {
         XCTAssertEqual(attempts, 3)
         XCTAssertEqual(cursors, [nil, TerminalCursor(streamEpoch: "epoch", offset: 5)])
         XCTAssertEqual(fixture.model.terminalDocument.output, "hello")
+        await fixture.model.disconnect()
+    }
+
+    func testSettledOfflineStateDoesNotStrobeWhileRetrying() async throws {
+        let fixture = try Fixture(failingConnectAttempts: Set(1...500))
+        defer { fixture.cleanUp() }
+        var transitions: [String] = []
+        let watcher = fixture.model.$connectionState.sink { transitions.append($0.title) }
+        defer { watcher.cancel() }
+
+        await fixture.model.reload()
+        await waitUntil {
+            await fixture.client.connectionAttempts() >= 6
+        }
+
+        // A broker that keeps refusing settles into one visible offline state;
+        // the silent retries behind it must not strobe the UI through
+        // "Reconnecting" or repeated offline flips on every backoff cycle.
+        let attempts = await fixture.client.connectionAttempts()
+        XCTAssertGreaterThanOrEqual(attempts, 6)
+        XCTAssertEqual(transitions.filter { $0 == "Reconnecting" }.count, 0, "state churned: \(transitions)")
+        XCTAssertEqual(transitions.filter { $0 == "Offline" }.count, 1, "state churned: \(transitions)")
         await fixture.model.disconnect()
     }
 

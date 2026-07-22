@@ -193,7 +193,19 @@ final class AppModel: ObservableObject {
 
     private func connect(generation: Int, reconnectAttempt: Int?) async -> Bool {
         guard generation == connectionGeneration, shouldReconnect else { return false }
-        connectionState = reconnectAttempt.map { .reconnecting(attempt: $0 + 1) } ?? .connecting
+        // Retrying from a settled offline state stays silent: flipping to
+        // "Reconnecting" every backoff cycle strobes the UI forever against a
+        // broker that will keep refusing (for example one that predates
+        // terminal observation). The state only moves when the outcome does.
+        let silentRetry: Bool
+        if case .unavailable = connectionState, reconnectAttempt != nil {
+            silentRetry = true
+        } else {
+            silentRetry = false
+        }
+        if !silentRetry {
+            connectionState = reconnectAttempt.map { .reconnecting(attempt: $0 + 1) } ?? .connecting
+        }
 
         do {
             let info = try await brokerPreparer.prepare()
@@ -228,7 +240,12 @@ final class AppModel: ObservableObject {
             return true
         } catch {
             guard generation == connectionGeneration, shouldReconnect else { return false }
-            connectionState = .unavailable(error.kaisolaSafeDescription)
+            let description = error.kaisolaSafeDescription
+            if case let .unavailable(existing) = connectionState, existing == description {
+                // identical settled state — no churn for observers
+            } else {
+                connectionState = .unavailable(description)
+            }
             return false
         }
     }
