@@ -36,6 +36,7 @@ struct NativeTerminalSurface: NSViewRepresentable {
 
         @MainActor
         func apply(output: String, epoch: String?, endOffset: Int64?, to view: ReadOnlyTerminalView) {
+            defer { view.updateAccessibilityValue(from: output) }
             let outputBytes = Int64(output.utf8.count)
             let startOffset = endOffset.map { $0 - outputBytes }
 
@@ -109,8 +110,29 @@ struct NativeTerminalSurface: NSViewRepresentable {
 }
 
 /// Drops both physical-key input and terminal-generated query replies. SwiftTerm
-/// still provides native selection, copy, accessibility, and Command-F search,
-/// but no byte can flow from this view back to a PTY.
+/// still provides native selection, copy, and Command-F search, but no byte can
+/// flow from this view back to a PTY. The view claims keyboard focus when it
+/// joins a window so Copy/Select All/Find reach it without a mouse, and exposes
+/// the retained tail of the buffer as a read-only accessibility value.
 final class ReadOnlyTerminalView: TerminalView {
+    static let accessibilityTailLimit = 8_000
+
     override func send(source: Terminal, data: ArraySlice<UInt8>) {}
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        if window.firstResponder is NSWindow || window.firstResponder === window.contentView {
+            window.makeFirstResponder(self)
+        }
+    }
+
+    func updateAccessibilityValue(from output: String) {
+        setAccessibilityElement(true)
+        setAccessibilityRole(.textArea)
+        setAccessibilityValue(String(output.suffix(Self.accessibilityTailLimit)))
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .textArea }
 }

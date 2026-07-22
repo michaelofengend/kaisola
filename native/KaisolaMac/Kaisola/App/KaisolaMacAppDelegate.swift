@@ -90,6 +90,23 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
     }
 
     private func installMainMenu() {
+        NSApp.mainMenu = Self.makeMainMenu(
+            updateTarget: self,
+            updateAction: #selector(checkForUpdates(_:)),
+            updateEnabled: updateController.availability.canCheck,
+            updateDetail: updateController.availability.detail
+        )
+    }
+
+    /// Pure menu construction so tests can assert the exact edit/find wiring.
+    /// SwiftTerm's `performFindPanelAction(_:)` requires NSMenuItem senders
+    /// whose tags carry NSFindPanelAction raw values; anything else is ignored.
+    static func makeMainMenu(
+        updateTarget: AnyObject?,
+        updateAction: Selector?,
+        updateEnabled: Bool,
+        updateDetail: String?
+    ) -> NSMenu {
         let mainMenu = NSMenu()
         let applicationItem = NSMenuItem()
         mainMenu.addItem(applicationItem)
@@ -102,12 +119,12 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         )
         let updateItem = applicationMenu.addItem(
             withTitle: "Check for Updates…",
-            action: #selector(checkForUpdates(_:)),
+            action: updateAction,
             keyEquivalent: ""
         )
-        updateItem.target = self
-        updateItem.isEnabled = updateController.availability.canCheck
-        updateItem.toolTip = updateController.availability.detail
+        updateItem.target = updateTarget
+        updateItem.isEnabled = updateEnabled
+        updateItem.toolTip = updateDetail
         applicationMenu.addItem(.separator())
         applicationMenu.addItem(
             withTitle: "Hide Kaisola Native Preview",
@@ -126,8 +143,21 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         let editMenu = NSMenu(title: "Edit")
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+
+        let findAction = #selector(NSTextView.performFindPanelAction(_:))
+        let find = editMenu.addItem(withTitle: "Find…", action: findAction, keyEquivalent: "f")
+        find.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
+        let findNext = editMenu.addItem(withTitle: "Find Next", action: findAction, keyEquivalent: "g")
+        findNext.tag = Int(NSFindPanelAction.next.rawValue)
+        let findPrevious = editMenu.addItem(withTitle: "Find Previous", action: findAction, keyEquivalent: "G")
+        findPrevious.keyEquivalentModifierMask = [.command, .shift]
+        findPrevious.tag = Int(NSFindPanelAction.previous.rawValue)
+        let useSelection = editMenu.addItem(withTitle: "Use Selection for Find", action: findAction, keyEquivalent: "e")
+        useSelection.tag = Int(NSFindPanelAction.setFindString.rawValue)
+
         editItem.submenu = editMenu
         mainMenu.addItem(editItem)
-        NSApp.mainMenu = mainMenu
+        return mainMenu
     }
 }
