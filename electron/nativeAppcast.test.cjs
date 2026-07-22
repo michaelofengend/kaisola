@@ -185,3 +185,32 @@ test('native appcast rejects an unparseable existing appcast', (t) => {
   assert.match(result.stderr, /could not parse existing appcast: mismatched closing tag/)
   assert.equal(fs.existsSync(paths.output), false)
 })
+
+test('native appcast refuses an output path that aliases the zip', (t) => {
+  const paths = fixture(t)
+  const result = run([
+    '--zip', paths.zip,
+    '--version', '1.2.3',
+    '--build', '42',
+    '--url', 'https://example.com/Kaisola.zip',
+    '--sign-update', signUpdate,
+    '--output', paths.zip,
+  ])
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /--output must not overwrite the --zip input/)
+  assert.notEqual(fs.readFileSync(paths.zip, 'utf8').length, 0)
+})
+
+test('native appcast rejects an existing feed carrying duplicate builds', (t) => {
+  const paths = fixture(t)
+  const existing = path.join(paths.root, 'existing.xml')
+  fs.writeFileSync(existing, existingAppcast([
+    existingItem({ build: '7' }),
+    existingItem({ build: '7' }),
+  ]))
+
+  const result = run(args(paths, { existing }))
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /already contains build 7 more than once/)
+  assert.equal(fs.existsSync(paths.output), false)
+})

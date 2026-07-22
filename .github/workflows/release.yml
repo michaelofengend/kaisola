@@ -101,6 +101,11 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          # Run attempts share GITHUB_RUN_NUMBER, so a rerun must still mint a
+          # strictly newer Sparkle bundle version and a distinct artifact name;
+          # otherwise a rerun would re-sign different bytes at the same URL.
+          native_build="$((1000 + GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT))"
+          echo "NATIVE_BUILD_VERSION=$native_build" >> "$GITHUB_ENV"
           xcodebuild \
             -project native/KaisolaMac/KaisolaMac.xcodeproj \
             -scheme KaisolaMacPreview \
@@ -115,14 +120,15 @@ jobs:
             CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
             OTHER_CODE_SIGN_FLAGS=--timestamp \
             MARKETING_VERSION="${GITHUB_REF_NAME#v}" \
-            CURRENT_PROJECT_VERSION="$((1000 + GITHUB_RUN_NUMBER))" \
+            CURRENT_PROJECT_VERSION="$native_build" \
             KAISOLA_SPARKLE_FEED_URL='https://github.com/michaelofengenden/kaisola/releases/download/native-preview/appcast.xml' \
             KAISOLA_SPARKLE_PUBLIC_ED_KEY='FAk/3R33fKfyvsHiUKiNctprqxw/Y/guajgQXGb8r60=' \
             build
       - name: Verify native preview release package
         run: |
           npm run native:preflight -- \
-            --app "$RUNNER_TEMP/kaisola-native/Build/Products/Release/KaisolaMacPreview.app"
+            --app "$RUNNER_TEMP/kaisola-native/Build/Products/Release/KaisolaMacPreview.app" \
+            --require-updates --require-developer-id
       - name: Notarize, staple, and package native preview
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -133,7 +139,10 @@ jobs:
           app="$RUNNER_TEMP/kaisola-native/Build/Products/Release/KaisolaMacPreview.app"
           version="${GITHUB_REF_NAME#v}"
           artifact_directory="$GITHUB_WORKSPACE/release/native"
-          artifact_name="KaisolaMacPreview-${version}.zip"
+          # The bundle version in the name keeps every published archive URL
+          # immutable across workflow reruns; the appcast references exactly
+          # one of them.
+          artifact_name="KaisolaMacPreview-${version}-b${NATIVE_BUILD_VERSION}.zip"
           artifact="$artifact_directory/$artifact_name"
           mkdir -p "$artifact_directory"
           ditto -c -k --keepParent "$app" "$artifact"
@@ -146,6 +155,16 @@ jobs:
           rm -f "$artifact"
           ditto -c -k --keepParent "$app" "$artifact"
           spctl --assess --type execute --verbose "$app"
+          # Verify the bytes actually being published, not the build tree:
+          # unpack the final archive and hold it to the notarized standard.
+          unpack_directory="$RUNNER_TEMP/kaisola-native-unpack"
+          rm -rf "$unpack_directory"
+          ditto -x -k "$artifact" "$unpack_directory"
+          npm run native:preflight -- \
+            --app "$unpack_directory/KaisolaMacPreview.app" \
+            --require-updates --require-notarized
+          packaged_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$unpack_directory/KaisolaMacPreview.app/Contents/Info.plist")"
+          test "$packaged_build" = "$NATIVE_BUILD_VERSION" || { echo "bundle version $packaged_build != $NATIVE_BUILD_VERSION" >&2; exit 1; }
           (
             cd "$artifact_directory"
             shasum -a 256 "$artifact_name" > "$artifact_name.sha256"

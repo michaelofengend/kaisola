@@ -347,7 +347,12 @@ function renderItem(options, signed, publicationDate) {
 }
 
 function mergeItems(existingItems, current) {
+  const seen = new Set()
   for (const item of existingItems) {
+    if (seen.has(item.build)) {
+      fail(`existing appcast already contains build ${item.build} more than once`)
+    }
+    seen.add(item.build)
     if (item.build === current.build && item.signature !== current.signature) {
       fail(`refusing to replace build ${current.build} with a different Sparkle signature`)
     }
@@ -388,8 +393,31 @@ function writeFileAtomic(destination, contents) {
   }
 }
 
+function canonicalPath(candidate) {
+  try {
+    return fs.realpathSync(candidate)
+  } catch {
+    return path.resolve(candidate)
+  }
+}
+
+function rejectOutputAliases(options) {
+  const output = canonicalPath(options.output)
+  const protectedInputs = [
+    ['--zip', options.zip],
+    ['--sign-update', options.signUpdate],
+    ['--ed-key-file', options.edKeyFile],
+  ]
+  for (const [flag, value] of protectedInputs) {
+    if (value && canonicalPath(value) === output) {
+      fail(`--output must not overwrite the ${flag} input`)
+    }
+  }
+}
+
 function generateAppcast(options, publicationDate = new Date()) {
   validateEnclosureURL(options.url)
+  rejectOutputAliases(options)
   if (!(publicationDate instanceof Date) || Number.isNaN(publicationDate.valueOf())) fail('publication date is invalid')
   let zipStat
   try {
