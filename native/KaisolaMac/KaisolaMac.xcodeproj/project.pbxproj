@@ -116,6 +116,7 @@
 		D7BF0B4BEB31139A942C49DC /* BrokerHelperPackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerHelperPackageTests.swift; sourceTree = "<group>"; };
 		E66C339455BFF598A81C41DE /* NativeTerminalSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTerminalSurface.swift; sourceTree = "<group>"; };
 		FA616801D125F0ACE1E5A177 /* NativeUpdateConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeUpdateConfigurationTests.swift; sourceTree = "<group>"; };
+		FBDFA0DF725244691C0496A5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -231,6 +232,7 @@
 			isa = PBXGroup;
 			children = (
 				45799AC8A5D80828BB3EB235 /* AppModel.swift */,
+				FBDFA0DF725244691C0496A5 /* Info.plist */,
 				D624AF2C46BA83B73A21F0B3 /* KaisolaMacAppDelegate.swift */,
 				6E78A73E4BF5DABAB5BF6826 /* NativePreviewPaths.swift */,
 			);
@@ -584,13 +586,10 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Kaisola/App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Kaisola Native Preview";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHighResolutionCapable = YES;
-				INFOPLIST_KEY_SUAutomaticallyUpdate = NO;
-				INFOPLIST_KEY_SUEnableAutomaticChecks = NO;
-				INFOPLIST_KEY_SUFeedURL = "$(KAISOLA_SPARKLE_FEED_URL)";
-				INFOPLIST_KEY_SUPublicEDKey = "$(KAISOLA_SPARKLE_PUBLIC_ED_KEY)";
 				KAISOLA_SPARKLE_FEED_URL = "";
 				KAISOLA_SPARKLE_PUBLIC_ED_KEY = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -611,13 +610,10 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_APP_SANDBOX = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Kaisola/App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Kaisola Native Preview";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHighResolutionCapable = YES;
-				INFOPLIST_KEY_SUAutomaticallyUpdate = NO;
-				INFOPLIST_KEY_SUEnableAutomaticChecks = NO;
-				INFOPLIST_KEY_SUFeedURL = "$(KAISOLA_SPARKLE_FEED_URL)";
-				INFOPLIST_KEY_SUPublicEDKey = "$(KAISOLA_SPARKLE_PUBLIC_ED_KEY)";
 				KAISOLA_SPARKLE_FEED_URL = "";
 				KAISOLA_SPARKLE_PUBLIC_ED_KEY = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -781,13 +777,10 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Kaisola/App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Kaisola Native Preview";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHighResolutionCapable = YES;
-				INFOPLIST_KEY_SUAutomaticallyUpdate = NO;
-				INFOPLIST_KEY_SUEnableAutomaticChecks = NO;
-				INFOPLIST_KEY_SUFeedURL = "$(KAISOLA_SPARKLE_FEED_URL)";
-				INFOPLIST_KEY_SUPublicEDKey = "$(KAISOLA_SPARKLE_PUBLIC_ED_KEY)";
 				KAISOLA_SPARKLE_FEED_URL = "";
 				KAISOLA_SPARKLE_PUBLIC_ED_KEY = "";
 				LD_RUNPATH_SEARCH_PATHS = (

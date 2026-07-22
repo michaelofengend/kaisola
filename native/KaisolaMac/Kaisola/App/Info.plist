@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Merged with the generated Info.plist. Custom Sparkle keys cannot be
+	     injected via INFOPLIST_KEY_* (Xcode only honors an allowlist), so they
+	     live here with build-setting expansion. Empty values keep the updater
+	     fail-closed via NativeUpdateConfiguration. -->
+	<key>SUFeedURL</key>
+	<string>$(KAISOLA_SPARKLE_FEED_URL)</string>
+	<key>SUPublicEDKey</key>
+	<string>$(KAISOLA_SPARKLE_PUBLIC_ED_KEY)</string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+</dict>
+</plist>

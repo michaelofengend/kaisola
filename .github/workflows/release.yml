@@ -116,7 +116,7 @@ jobs:
             MARKETING_VERSION="${GITHUB_REF_NAME#v}" \
             CURRENT_PROJECT_VERSION="$(git rev-list --count HEAD)" \
             KAISOLA_SPARKLE_FEED_URL='https://github.com/michaelofengenden/kaisola/releases/download/native-preview/appcast.xml' \
-            KAISOLA_SPARKLE_PUBLIC_ED_KEY='BQgU8WTQzeYBaYnbWrYBgoP7JPYyCXVrNgHCMBvmYrk=' \
+            KAISOLA_SPARKLE_PUBLIC_ED_KEY='FAk/3R33fKfyvsHiUKiNctprqxw/Y/guajgQXGb8r60=' \
             build
       - name: Verify native preview release package
         run: |
