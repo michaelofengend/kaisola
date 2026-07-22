@@ -56,6 +56,7 @@ function parseCodeSignature(output) {
     developerID: authorities.some((authority) => authority.startsWith('Developer ID Application:')),
     teamIdentifier,
     hardenedRuntime: flags.includes('runtime'),
+    secureTimestamp: /^Timestamp=/m.test(String(output)),
   }
 }
 
@@ -148,6 +149,49 @@ function validateDistributionCode({ app, appSignature, helperRoot, manifest, nod
     if (!signature.hardenedRuntime) fail(`helper code does not enable the hardened runtime: ${entry.path}`)
   }
   validateNodeEntitlements(codeEntitlements(node))
+  validateEmbeddedFrameworks(app, appSignature)
+}
+
+/** Notarization rejects any nested executable without a Developer ID chain,
+ *  hardened runtime, and secure timestamp. SPM-embedded frameworks ship with
+ *  the vendor's ad-hoc signatures on their nested helpers (Sparkle's
+ *  Autoupdate/Updater/XPC services), and Xcode re-signs only the framework
+ *  bundle itself — so walk every Mach-O under Frameworks and hold it to the
+ *  distribution standard before wasting a notarization round trip. */
+function validateEmbeddedFrameworks(app, appSignature) {
+  const frameworksRoot = path.join(app, 'Contents', 'Frameworks')
+  if (!fs.existsSync(frameworksRoot)) return
+  const pending = [frameworksRoot]
+  while (pending.length) {
+    const directory = pending.pop()
+    for (const name of fs.readdirSync(directory)) {
+      const absolute = path.join(directory, name)
+      const stat = fs.lstatSync(absolute)
+      if (stat.isSymbolicLink()) continue
+      if (stat.isDirectory()) {
+        pending.push(absolute)
+        continue
+      }
+      if (!stat.isFile()) continue
+      const header = Buffer.alloc(4)
+      const fd = fs.openSync(absolute, 'r')
+      try {
+        fs.readSync(fd, header, 0, 4, 0)
+      } finally {
+        fs.closeSync(fd)
+      }
+      const magic = header.readUInt32BE(0)
+      const machO = [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca].includes(magic)
+      if (!machO) continue
+      const relative = path.relative(app, absolute)
+      const signature = codeSignature(absolute)
+      if (!signature.developerID || signature.teamIdentifier !== appSignature.teamIdentifier) {
+        fail(`embedded framework code is not signed by the app Developer ID team: ${relative}`)
+      }
+      if (!signature.hardenedRuntime) fail(`embedded framework code does not enable the hardened runtime: ${relative}`)
+      if (!signature.secureTimestamp) fail(`embedded framework code has no secure timestamp: ${relative}`)
+    }
+  }
 }
 
 function parseArguments(argv) {

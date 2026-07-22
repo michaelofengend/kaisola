@@ -1,15 +1,23 @@
 # Build + publish a macOS release whenever a v* tag is pushed.
 #   git tag v0.2.0 && git push origin v0.2.0
+# workflow_dispatch dry-runs the native preview build/notarization without a
+# tag: nothing is published and the Electron job is skipped.
 name: release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 permissions:
   contents: write
 jobs:
   swift-contracts:
     uses: ./.github/workflows/swift-contracts.yml
+    with:
+      # The iPhone build/tests gate pushes and PRs; a release run only ships
+      # desktop artifacts and should not serialize behind the simulator.
+      skip-ios: true
   mac:
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
     needs: swift-contracts
     runs-on: macos-14 # Apple Silicon
     steps:
@@ -80,11 +88,12 @@ jobs:
             release/*.sha256
           generate_release_notes: true
           fail_on_unmatched_files: true
-  # The native preview needs macos-15 Xcode and Apple notarization; it runs
-  # AFTER the Electron release publishes so a preview-only failure can never
-  # block the daily-driver channel, and appends its assets to the same release.
+  # The native preview needs macos-15 Xcode and Apple notarization. It runs in
+  # PARALLEL with the Electron job (the release publish step below waits for
+  # the release to exist), so a preview-only failure can never block the
+  # daily-driver channel and neither job serializes behind the other.
   native:
-    needs: [swift-contracts, mac]
+    needs: swift-contracts
     runs-on: macos-15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -145,6 +154,12 @@ jobs:
           # otherwise a rerun would re-sign different bytes at the same URL.
           native_build="$((1000 + GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT))"
           echo "NATIVE_BUILD_VERSION=$native_build" >> "$GITHUB_ENV"
+          marketing_version="${GITHUB_REF_NAME#v}"
+          case "$GITHUB_REF" in
+            refs/tags/*) ;;
+            *) marketing_version="0.0.0" ;; # workflow_dispatch dry-run
+          esac
+          echo "NATIVE_MARKETING_VERSION=$marketing_version" >> "$GITHUB_ENV"
           xcodebuild \
             -project native/KaisolaMac/KaisolaMac.xcodeproj \
             -scheme KaisolaMacPreview \
@@ -158,11 +173,31 @@ jobs:
             DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
             CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
             OTHER_CODE_SIGN_FLAGS=--timestamp \
-            MARKETING_VERSION="${GITHUB_REF_NAME#v}" \
+            MARKETING_VERSION="$marketing_version" \
             CURRENT_PROJECT_VERSION="$native_build" \
             KAISOLA_SPARKLE_FEED_URL='https://github.com/michaelofengenden/kaisola/releases/download/native-preview/appcast.xml' \
             KAISOLA_SPARKLE_PUBLIC_ED_KEY='FAk/3R33fKfyvsHiUKiNctprqxw/Y/guajgQXGb8r60=' \
             build
+      - name: Re-sign Sparkle nested components for notarization
+        run: |
+          set -euo pipefail
+          # SPM embeds Sparkle with the vendor's ad-hoc signatures on its
+          # nested helpers; Xcode re-signs only the framework bundle, and
+          # notarization rejects ad-hoc nested code. Deepest-first, then the
+          # framework, then re-seal the whole app.
+          app="$RUNNER_TEMP/kaisola-native/Build/Products/Release/KaisolaMacPreview.app"
+          sparkle="$app/Contents/Frameworks/Sparkle.framework/Versions/B"
+          identity="Developer ID Application"
+          for nested in \
+            "$sparkle/XPCServices/Installer.xpc" \
+            "$sparkle/XPCServices/Downloader.xpc" \
+            "$sparkle/Autoupdate" \
+            "$sparkle/Updater.app" \
+            "$app/Contents/Frameworks/Sparkle.framework"; do
+            codesign --force --options runtime --timestamp --sign "$identity" "$nested"
+          done
+          codesign --force --options runtime --timestamp --sign "$identity" "$app"
+          codesign --verify --deep --strict "$app"
       - name: Verify native preview release package
         run: |
           npm run native:preflight -- \
@@ -176,7 +211,7 @@ jobs:
         run: |
           set -euo pipefail
           app="$RUNNER_TEMP/kaisola-native/Build/Products/Release/KaisolaMacPreview.app"
-          version="${GITHUB_REF_NAME#v}"
+          version="$NATIVE_MARKETING_VERSION"
           artifact_directory="$GITHUB_WORKSPACE/release/native"
           # The bundle version in the name keeps every published archive URL
           # immutable across workflow reruns; the appcast references exactly
@@ -216,10 +251,18 @@ jobs:
           certificate_path="$RUNNER_TEMP/kaisola-native-signing.p12"
           security delete-keychain "$keychain_path" || true
           rm -f "$certificate_path"
-      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          files: |
-            release/native/*.zip
-            release/native/*.zip.sha256
-          generate_release_notes: false
-          fail_on_unmatched_files: true
+      - name: Publish native preview assets
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The Electron job creates the release; wait for it rather than
+          # serializing the whole native build behind that job. Asset names
+          # are immutable per run attempt, so no overwrite is possible.
+          for attempt in $(seq 1 60); do
+            gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && break
+            sleep 20
+          done
+          gh release view "$GITHUB_REF_NAME" >/dev/null
+          gh release upload "$GITHUB_REF_NAME" release/native/*.zip release/native/*.zip.sha256
