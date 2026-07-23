@@ -90,8 +90,6 @@ optional pending a scope decision.
 | Adapter/MCP version currency + continuous update | DONE | P1 | `agent-adapter-versions/update.cjs`; npx @latest |
 | Permission mode / autonomy dial (plan/default/acceptEdits/bypass) | NEW | P0 | |
 | Steering + queued follow-ups | NEW | P1 | |
-| Agent plan (todo list) | NEW | P1 | ACP `plan` |
-| Real context-window usage | NEW | P1 | ACP `usage_update` |
 | Optimistic dispatch + rollback | NEW | P1 | |
 | Turn checkpoints / restore (pre-turn git snapshot) | NEW | P1 | |
 | Slash commands / available commands | NEW | P1 | |
