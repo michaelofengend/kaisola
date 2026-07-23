@@ -37,7 +37,9 @@ KAISOLA_NATIVE_BROKER_PROFILE=development npm run native:dev
 `--launch-only` skips the incremental build. Every run removes raw Xcode build
 products from Launch Services and re-registers only the canonical app.
 `--clean-legacy` additionally moves old installed copies and reproducible raw
-build/test products to Trash; it never touches Electron's
+build/test products to Trash, then purges stale Launch Services records left by
+old `/tmp` builds, translocated downloads, and already-trashed copies. It never
+deletes those arbitrary build directories and never touches Electron's
 `/Applications/Kaisola.app` or broker-owned PTYs.
 
 Finder and Spotlight launches use that same native-only route for Debug builds,

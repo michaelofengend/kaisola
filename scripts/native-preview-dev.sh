@@ -46,7 +46,7 @@ esac
 usage() {
   /bin/echo "Usage: $0 [--launch-only] [--clean-legacy]"
   /bin/echo "  --launch-only   Open the installed canonical preview without rebuilding"
-  /bin/echo "  --clean-legacy  Move old native app copies and raw build/test products to Trash"
+  /bin/echo "  --clean-legacy  Trash known copies and purge stale Launch Services registrations"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -140,6 +140,53 @@ unregister_noncanonical_products() {
   shopt -u nullglob
 }
 
+# Old release gates, translocated downloads, deleted /tmp builds, and items
+# already moved to Trash can outlive their files in Launch Services. They are
+# invisible to filesystem-only cleanup but still appear as duplicate Spotlight
+# applications. On the explicit --clean-legacy path, enumerate registrations
+# for this exact bundle identifier and unregister every path except the one
+# canonical install. This changes only Launch Services metadata; arbitrary
+# build directories and Electron's distinct app/bundle id remain untouched.
+registered_preview_paths() {
+  "$LSREGISTER" -dump | /usr/bin/awk '
+    function flush() {
+      if (identifier == "com.kaisola.mac.preview" && app_path != "") print app_path
+    }
+    /^--------------------------------------------------------------------------------$/ {
+      flush()
+      app_path = ""
+      identifier = ""
+      next
+    }
+    /^path:[[:space:]]+/ {
+      app_path = $0
+      sub(/^path:[[:space:]]+/, "", app_path)
+      sub(/[[:space:]]+\(0x[[:xdigit:]]+\)$/, "", app_path)
+      next
+    }
+    /^identifier:[[:space:]]+/ {
+      identifier = $0
+      sub(/^identifier:[[:space:]]+/, "", identifier)
+      next
+    }
+    END { flush() }
+  ' | /usr/bin/sort -u
+}
+
+purge_stale_preview_registrations() {
+  local registered_path purged_count=0
+  while IFS= read -r registered_path; do
+    [[ -n "$registered_path" ]] || continue
+    [[ "$registered_path" == "$APP" ]] && continue
+    if "$LSREGISTER" -u "$registered_path" >/dev/null 2>&1; then
+      purged_count=$((purged_count + 1))
+    fi
+  done < <(registered_preview_paths)
+  if [[ "$purged_count" -gt 0 ]]; then
+    /bin/echo "Purged $purged_count stale Kaisola Preview registrations."
+  fi
+}
+
 move_to_trash() {
   local target="$1"
   [[ -e "$target" ]] || return 0
@@ -228,6 +275,7 @@ fi
 
 if [[ "$CLEAN_LEGACY" -eq 1 ]]; then
   clean_legacy_copies
+  purge_stale_preview_registrations
 fi
 
 unregister_noncanonical_products
