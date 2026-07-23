@@ -98,8 +98,17 @@ struct AcpSessionInfo: Equatable, Sendable {
     let sessionID: String
     let models: [Model]
     let currentModelID: String?
+    /// ACP session permission modes (plan/default/acceptEdits/bypassPermissions,
+    /// or an adapter's own set), and the one currently selected.
+    var modes: [Mode] = []
+    var currentModeID: String?
 
     struct Model: Equatable, Sendable, Identifiable {
+        let id: String
+        let name: String
+    }
+
+    struct Mode: Equatable, Sendable, Identifiable {
         let id: String
         let name: String
     }

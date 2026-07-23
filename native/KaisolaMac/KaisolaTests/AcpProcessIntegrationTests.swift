@@ -29,6 +29,11 @@ final class AcpProcessIntegrationTests: XCTestCase {
             throw XCTSkip("could not spawn the mock agent: \(error.localizedDescription)")
         }
         XCTAssertFalse(info.sessionID.isEmpty)
+        // The real mock nests models/modes under SessionModeState-style objects;
+        // this asserts the client parses that shape end-to-end (not just the
+        // scripted flat fallback).
+        XCTAssertFalse(info.models.isEmpty, "expected models from the mock's nested shape")
+        XCTAssertFalse(info.modes.isEmpty, "expected modes from the mock's nested shape")
 
         // Answer the permission request the mock issues mid-turn.
         collector.onPermission = { request in

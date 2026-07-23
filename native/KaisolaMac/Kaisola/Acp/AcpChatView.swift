@@ -37,6 +37,19 @@ struct AcpChatView: View {
                 Text("Working…").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            if !conversation.modes.isEmpty {
+                Picker("Mode", selection: Binding(
+                    get: { conversation.currentModeID ?? conversation.modes.first?.id ?? "" },
+                    set: { conversation.selectMode($0) }
+                )) {
+                    ForEach(conversation.modes) { mode in
+                        Text(mode.name).tag(mode.id)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 150)
+                .help("Permission mode — how the agent asks before acting")
+            }
             if !conversation.models.isEmpty {
                 Picker("Model", selection: Binding(
                     get: { conversation.currentModelID ?? conversation.models.first?.id ?? "" },

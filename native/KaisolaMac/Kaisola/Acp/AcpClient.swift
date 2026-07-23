@@ -11,6 +11,7 @@ enum AcpEvent: Sendable {
     case toolCallUpdate(id: String, status: AcpToolCall.Status?, content: [AcpToolContent]?, title: String?)
     case usage(AcpUsage)
     case modelChanged(id: String)
+    case modeChanged(id: String)
     case permission(AcpPermissionRequest)
     case turnEnded
     case error(String)
@@ -74,15 +75,29 @@ actor AcpClient {
             throw AcpClientError.malformedResponse
         }
         self.sessionID = sessionID
-        let models = (object["models"]?.arrayValue ?? []).compactMap { value -> AcpSessionInfo.Model? in
+        // Adapters vary: some return a flat `models: [...]` + top-level
+        // `currentModelId`; the standard (and our mock) nests them under
+        // `models: { availableModels, currentModelId }`. Handle both.
+        let modelsNode = object["models"]?.objectValue
+        let modelArray = modelsNode?["availableModels"]?.arrayValue ?? object["models"]?.arrayValue ?? []
+        let models = modelArray.compactMap { value -> AcpSessionInfo.Model? in
             guard let m = value.objectValue,
                   let id = (m["modelId"] ?? m["id"])?.stringValue else { return nil }
             return AcpSessionInfo.Model(id: id, name: m["name"]?.stringValue ?? id)
         }
+        let modesNode = object["modes"]?.objectValue
+        let modeArray = modesNode?["availableModes"]?.arrayValue ?? object["modes"]?.arrayValue ?? []
+        let modes = modeArray.compactMap { value -> AcpSessionInfo.Mode? in
+            guard let m = value.objectValue,
+                  let id = (m["id"] ?? m["modeId"])?.stringValue else { return nil }
+            return AcpSessionInfo.Mode(id: id, name: m["name"]?.stringValue ?? id)
+        }
         return AcpSessionInfo(
             sessionID: sessionID,
             models: models,
-            currentModelID: object["currentModelId"]?.stringValue
+            currentModelID: modelsNode?["currentModelId"]?.stringValue ?? object["currentModelId"]?.stringValue,
+            modes: modes,
+            currentModeID: modesNode?["currentModeId"]?.stringValue ?? object["currentModeId"]?.stringValue
         )
     }
 
@@ -107,6 +122,14 @@ actor AcpClient {
         notify("session/set_model", params: .object([
             "sessionId": .string(sessionID),
             "modelId": .string(modelID),
+        ]))
+    }
+
+    func setMode(_ modeID: String) async {
+        guard let sessionID else { return }
+        notify("session/set_mode", params: .object([
+            "sessionId": .string(sessionID),
+            "modeId": .string(modeID),
         ]))
     }
 
@@ -291,6 +314,10 @@ actor AcpClient {
         case "current_model_update":
             if let id = object["currentModelId"]?.stringValue {
                 eventHandler?(.modelChanged(id: id))
+            }
+        case "current_mode_update":
+            if let id = (object["currentModeId"] ?? object["modeId"])?.stringValue {
+                eventHandler?(.modeChanged(id: id))
             }
         default:
             break

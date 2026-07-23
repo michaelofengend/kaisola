@@ -32,6 +32,8 @@ final class AcpConversation: ObservableObject {
     @Published private(set) var usage: AcpUsage?
     @Published private(set) var models: [AcpSessionInfo.Model] = []
     @Published private(set) var currentModelID: String?
+    @Published private(set) var modes: [AcpSessionInfo.Mode] = []
+    @Published private(set) var currentModeID: String?
     @Published var pendingPermission: AcpPermissionRequest?
     @Published private(set) var statusMessage: String?
 
@@ -82,6 +84,8 @@ final class AcpConversation: ObservableObject {
             )
             models = info.models
             currentModelID = info.currentModelID
+            modes = info.modes
+            currentModeID = info.currentModeID
             isConnected = true
             statusMessage = nil
         } catch {
@@ -112,6 +116,11 @@ final class AcpConversation: ObservableObject {
     func selectModel(_ id: String) {
         currentModelID = id
         Task { await client.setModel(id) }
+    }
+
+    func selectMode(_ id: String) {
+        currentModeID = id
+        Task { await client.setMode(id) }
     }
 
     func answerPermission(_ optionID: String) {
@@ -192,6 +201,8 @@ final class AcpConversation: ObservableObject {
             self.usage = usage
         case let .modelChanged(id):
             currentModelID = id
+        case let .modeChanged(id):
+            currentModeID = id
         case let .permission(request):
             handlePermission(request)
         case .turnEnded:

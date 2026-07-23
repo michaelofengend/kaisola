@@ -19,6 +19,9 @@ final class AcpClientTests: XCTestCase {
         )
         XCTAssertEqual(info.sessionID, "sess-1")
         XCTAssertEqual(info.models.map(\.id), ["opus", "sonnet"])
+        // Nested SessionModeState parses; current mode carried through.
+        XCTAssertEqual(info.modes.map(\.id), ["default", "plan"])
+        XCTAssertEqual(info.currentModeID, "default")
 
         // The scripted transport streams a thought, a plan, two message chunks,
         // a tool call + completion, and a usage update when it sees the prompt.
@@ -94,9 +97,18 @@ private actor ScriptedAcpTransport: AcpByteTransport {
         case "session/new":
             reply(id: id, result: .object([
                 "sessionId": .string("sess-1"),
+                // Flat models shape (exercises the fallback parse path).
                 "models": .array([
                     .object(["modelId": .string("opus"), "name": .string("Opus")]),
                     .object(["modelId": .string("sonnet"), "name": .string("Sonnet")]),
+                ]),
+                // Nested modes shape (the ACP standard SessionModeState).
+                "modes": .object([
+                    "currentModeId": .string("default"),
+                    "availableModes": .array([
+                        .object(["id": .string("default"), "name": .string("Default")]),
+                        .object(["id": .string("plan"), "name": .string("Plan")]),
+                    ]),
                 ]),
             ]))
         case "session/prompt":
