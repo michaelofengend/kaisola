@@ -43,7 +43,9 @@ final class MeshSession: ObservableObject, Identifiable {
             (try? service.status()) != nil
         }.value
         for agent in agents {
-            guard let adapter = AcpAdapter.forAgent(agent.id) else { continue }
+            // Resolve adapters from the SAME environment the columns run with,
+            // so a dev/test adapter override actually governs the spawn.
+            guard let adapter = AcpAdapter.forAgent(agent.id, environment: environment) else { continue }
             var worktree: String?
             var branch: String?
             if baseIsRepo {
