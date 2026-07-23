@@ -43,6 +43,10 @@ final class AcpConversation: ObservableObject {
     /// Follow-up messages typed while a turn was running; each dispatches when
     /// the preceding turn ends.
     @Published private(set) var queued: [QueuedMessage] = []
+    /// Files/images staged in the composer, shown as chips, sent as real ACP
+    /// content blocks with the next immediate send and cleared then. Queued
+    /// follow-ups never carry attachments (see `send`).
+    @Published private(set) var pendingAttachments: [PendingAttachment] = []
     /// Pre-turn working-tree snapshots (git stash create), restorable from the
     /// header. Present only when the workspace is a git repo with changes.
     @Published private(set) var checkpoints: [TurnCheckpoint] = []
@@ -55,6 +59,16 @@ final class AcpConversation: ObservableObject {
     struct QueuedMessage: Identifiable, Equatable, Sendable {
         let id: String
         let text: String
+    }
+
+    /// One attachment staged in the composer, rendered as a chip until sent.
+    struct PendingAttachment: Identifiable, Equatable, Sendable {
+        let id: String
+        let name: String
+        /// SF Symbol for the chip's kind glyph (`photo` / `doc.text`).
+        let iconName: String
+        let byteSize: Int
+        let attachment: AcpAttachment
     }
 
     struct TurnCheckpoint: Identifiable, Equatable, Sendable {
@@ -82,6 +96,7 @@ final class AcpConversation: ObservableObject {
     private let sensitiveGlobs: [String]
     private var turnCounter = 0
     private var queueCounter = 0
+    private var attachmentCounter = 0
 
     /// Default transcript render window: only the last 120 rows paint until the
     /// user asks for more. Each "Show earlier" click reveals `expandStep` more.
@@ -143,15 +158,24 @@ final class AcpConversation: ObservableObject {
 
     /// Send a message, or — if a turn is already running — queue it as a
     /// follow-up that dispatches automatically when the current turn ends.
+    /// Any staged attachments ride the immediate send and are cleared; a send
+    /// with attachments alone (no text) is allowed when idle.
     func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard isConnected, !trimmed.isEmpty else { return }
+        let attachments = pendingAttachments.map(\.attachment)
+        guard isConnected, !trimmed.isEmpty || !attachments.isEmpty else { return }
         if isRunning {
+            // A running turn queues this as a TEXT-ONLY follow-up. Queued
+            // follow-ups deliberately never carry attachments (the flush path
+            // dispatches with none), so the staged chips stay put and ride the
+            // next immediate send. An attachments-only send can't be queued.
+            guard !trimmed.isEmpty else { return }
             queueCounter += 1
             queued.append(QueuedMessage(id: "q\(queueCounter)", text: trimmed))
             return
         }
-        dispatch(trimmed)
+        pendingAttachments.removeAll()
+        dispatch(trimmed, attachments: attachments)
     }
 
     /// Drop a still-pending queued follow-up before it dispatches.
@@ -187,7 +211,62 @@ final class AcpConversation: ObservableObject {
         }
     }
 
-    private func dispatch(_ trimmed: String) {
+    // MARK: - Attachments
+
+    /// Classify a dropped/opened file and, when accepted, stage it as a pending
+    /// chip; rejects (wrong kind, too large, non-UTF-8 text) surface a toast.
+    func addAttachment(fileURL: URL) {
+        switch AcpAttachmentClassifier.classify(fileURL: fileURL) {
+        case let .accepted(attachment): appendPending(attachment)
+        case let .rejected(reason): ToastCenter.shared.show(reason, style: .error)
+        }
+    }
+
+    /// Stage raw image bytes from the pasteboard (already normalized to PNG),
+    /// enforcing the same 5 MB image cap as file attachments.
+    func addImageData(_ data: Data, name: String) {
+        guard data.count <= AcpAttachmentClassifier.maxImageBytes else {
+            ToastCenter.shared.show("\(name) is too large — images must be ≤ 5 MB.", style: .error)
+            return
+        }
+        appendPending(.image(data: data, mimeType: "image/png", name: name))
+    }
+
+    /// Drop a staged attachment chip before it is sent.
+    func removeAttachment(_ id: String) {
+        pendingAttachments.removeAll { $0.id == id }
+    }
+
+    /// Append a classified attachment as a pending chip, deduping an identical
+    /// payload so the same file added twice shows once.
+    private func appendPending(_ attachment: AcpAttachment) {
+        guard !pendingAttachments.contains(where: { $0.attachment == attachment }) else { return }
+        attachmentCounter += 1
+        let icon: String
+        let size: Int
+        switch attachment {
+        case let .image(data, _, _): icon = "photo"; size = data.count
+        case let .textFile(_, contents, _): icon = "doc.text"; size = contents.utf8.count
+        }
+        pendingAttachments.append(PendingAttachment(
+            id: "att\(attachmentCounter)", name: attachment.name,
+            iconName: icon, byteSize: size, attachment: attachment
+        ))
+    }
+
+    /// Compose the user-visible (and prompt) text: the typed text plus a
+    /// trailing "📎 name1, name2" line naming any attachments. The
+    /// AcpTranscriptRow shape is unchanged — the names live inside the existing
+    /// `.user` text so the tests that pin the row cases keep passing. `nonisolated`
+    /// because it is pure (no actor state) and is exercised off the main actor.
+    nonisolated static func userText(_ text: String, attachments: [AcpAttachment]) -> String {
+        guard !attachments.isEmpty else { return text }
+        let label = attachments.map(\.name).joined(separator: ", ")
+        if text.isEmpty { return "📎 " + label }
+        return text + "\n📎 " + label
+    }
+
+    private func dispatch(_ trimmed: String, attachments: [AcpAttachment] = []) {
         turnCounter += 1
         // A new turn snaps the transcript back to its tail window — unless the
         // user deliberately expanded earlier history during the turn just ended,
@@ -196,19 +275,20 @@ final class AcpConversation: ObservableObject {
         didExpandDuringTurn = false
         let rowID = "\(turnCounter)"
         let turn = turnCounter
-        rows.append(.user(id: rowID, text: trimmed, failed: false))
+        let displayText = Self.userText(trimmed, attachments: attachments)
+        rows.append(.user(id: rowID, text: displayText, failed: false))
         isRunning = true
         Task {
             // The snapshot must complete BEFORE the agent starts, or it could
             // capture partial agent edits instead of the pre-turn tree.
             await recordCheckpoint(turn: turn)
-            do { try await client.prompt(trimmed) }
+            do { try await client.prompt(displayText, attachments: attachments) }
             catch {
                 statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 isRunning = false
                 // Roll back optimism: mark the row failed so the user can retry.
                 if let index = rows.firstIndex(where: { $0.id == "user-\(rowID)" }) {
-                    rows[index] = .user(id: rowID, text: trimmed, failed: true)
+                    rows[index] = .user(id: rowID, text: displayText, failed: true)
                 }
             }
         }
@@ -493,5 +573,83 @@ final class AcpConversation: ObservableObject {
             }
         }
         rows.append(isThought ? .thought(id: rowID, text: text) : .message(id: rowID, text: text))
+    }
+}
+
+/// Pure classification of a dropped/opened file into an `AcpAttachment`,
+/// applying the image (≤ 5 MB) and UTF-8 text (≤ 256 KB) size limits. No actor
+/// isolation, so it can run off the main thread and be unit-tested directly.
+enum AcpAttachmentClassifier {
+    /// Images ride as base64 pixels; cap the payload at 5 MB (no downscaling).
+    static let maxImageBytes = 5 * 1024 * 1024
+    /// Text files ride inline as an embedded resource block; cap at 256 KB.
+    static let maxTextFileBytes = 256 * 1024
+    static let imageExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "bmp", "tiff", "tif",
+    ]
+
+    enum Outcome: Equatable {
+        case accepted(AcpAttachment)
+        case rejected(reason: String)
+    }
+
+    static func classify(fileURL: URL) -> Outcome {
+        let name = fileURL.lastPathComponent
+        let ext = fileURL.pathExtension.lowercased()
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: fileURL.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            return .rejected(reason: "\(name): not a readable file.")
+        }
+        // Pre-check the on-disk size so an oversized file is rejected without
+        // being fully loaded into memory.
+        let declaredSize = (try? fm.attributesOfItem(atPath: fileURL.path))?[.size] as? Int
+
+        if imageExtensions.contains(ext) {
+            if let declaredSize, declaredSize > maxImageBytes {
+                return .rejected(reason: oversize(name, kind: "images", limit: maxImageBytes))
+            }
+            guard let data = try? Data(contentsOf: fileURL) else {
+                return .rejected(reason: "\(name): could not be read.")
+            }
+            guard data.count <= maxImageBytes else {
+                return .rejected(reason: oversize(name, kind: "images", limit: maxImageBytes))
+            }
+            return .accepted(.image(data: data, mimeType: mimeType(forExtension: ext), name: name))
+        }
+
+        // Non-image: accept only UTF-8 text within the text-file limit.
+        if let declaredSize, declaredSize > maxTextFileBytes {
+            return .rejected(reason: oversize(name, kind: "text files", limit: maxTextFileBytes))
+        }
+        guard let data = try? Data(contentsOf: fileURL) else {
+            return .rejected(reason: "\(name): could not be read.")
+        }
+        guard data.count <= maxTextFileBytes else {
+            return .rejected(reason: oversize(name, kind: "text files", limit: maxTextFileBytes))
+        }
+        guard let contents = String(data: data, encoding: .utf8) else {
+            return .rejected(reason: "\(name): only UTF-8 text and image files can be attached.")
+        }
+        return .accepted(.textFile(path: fileURL.path, contents: contents, name: name))
+    }
+
+    static func mimeType(forExtension ext: String) -> String {
+        switch ext {
+        case "png": "image/png"
+        case "jpg", "jpeg": "image/jpeg"
+        case "gif": "image/gif"
+        case "webp": "image/webp"
+        case "heic", "heif": "image/heic"
+        case "bmp": "image/bmp"
+        case "tiff", "tif": "image/tiff"
+        default: "application/octet-stream"
+        }
+    }
+
+    private static func oversize(_ name: String, kind: String, limit: Int) -> String {
+        let cap = ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .file)
+        return "\(name) is too large — \(kind) must be ≤ \(cap)."
     }
 }

@@ -1,0 +1,623 @@
+import AppKit
+import Foundation
+import SwiftUI
+import WebKit
+
+// Standalone preview surfaces for structured files (CSV/TSV, JSON, HTML). These
+// are pure, self-contained views the workspace's `FilePreviewView` wires in by
+// file extension. Parsing/tree-building is factored into `CsvTable` / `JsonTree`
+// so it is testable without touching SwiftUI or WebKit.
+
+// MARK: - CSV
+
+/// RFC-4180-ish CSV/TSV parsing. Pure so tests can drive it directly.
+enum CsvTable {
+    /// Rendering caps: excess rows/columns are dropped and flagged so a
+    /// pathological file can never realize an unbounded grid.
+    static let maxRows = 2_000
+    static let maxCols = 64
+
+    /// Parse `text` into rows of fields. Handles quoted fields, `""`-escaped
+    /// quotes, embedded newlines inside quotes, and CRLF/CR/LF record endings.
+    /// Returns the (capped) rows plus a `truncated` flag set when any row or
+    /// column past the cap was dropped.
+    ///
+    /// Pure — `nonisolated` keeps CI's strict-concurrency inference from pinning
+    /// it to the main actor just because the file also defines SwiftUI views.
+    nonisolated static func parse(_ text: String, delimiter: Character = ",") -> (rows: [[String]], truncated: Bool) {
+        let chars = Array(text)
+        let count = chars.count
+        var rows: [[String]] = []
+        var record: [String] = []
+        var field = ""
+        var inQuotes = false
+        var truncated = false
+        var index = 0
+
+        func endField() {
+            if record.count < maxCols {
+                record.append(field)
+            } else {
+                truncated = true
+            }
+            field = ""
+        }
+        func endRecord() {
+            endField()
+            if rows.count < maxRows {
+                rows.append(record)
+            } else {
+                truncated = true
+            }
+            record = []
+        }
+
+        while index < count {
+            let character = chars[index]
+            if inQuotes {
+                if character == "\"" {
+                    // A doubled quote inside a quoted field is a literal quote;
+                    // a lone quote closes the field.
+                    if index + 1 < count, chars[index + 1] == "\"" {
+                        field.append("\"")
+                        index += 2
+                    } else {
+                        inQuotes = false
+                        index += 1
+                    }
+                } else {
+                    field.append(character)
+                    index += 1
+                }
+                continue
+            }
+
+            switch character {
+            case "\"":
+                inQuotes = true
+                index += 1
+            case delimiter:
+                endField()
+                index += 1
+            case "\r\n", "\r", "\n":
+                // Swift segments a CRLF pair into ONE grapheme Character, so the
+                // "\r\n" literal matches that combined form; lone CR / LF cover
+                // the classic-Mac and Unix endings.
+                endRecord()
+                index += 1
+            default:
+                field.append(character)
+                index += 1
+            }
+        }
+
+        // Flush a trailing record only when real data is pending, so a file that
+        // ends on a newline does not yield a spurious empty final row.
+        if !field.isEmpty || !record.isEmpty {
+            endRecord()
+        }
+        return (rows, truncated)
+    }
+
+    /// Guess the delimiter from the first non-empty line by counting comma,
+    /// semicolon, and tab occurrences outside quotes. Comma wins ties and is the
+    /// fallback when no delimiter is present.
+    nonisolated static func detectDelimiter(_ text: String) -> Character {
+        let candidates: [Character] = [",", ";", "\t"]
+        let firstLine = text.split(
+            omittingEmptySubsequences: true,
+            whereSeparator: { $0.isNewline }
+        ).first ?? ""
+
+        var counts: [Character: Int] = [:]
+        var inQuotes = false
+        for character in firstLine {
+            if character == "\"" {
+                inQuotes.toggle()
+            } else if !inQuotes, candidates.contains(character) {
+                counts[character, default: 0] += 1
+            }
+        }
+
+        var best: Character = ","
+        var bestCount = 0
+        for candidate in candidates where (counts[candidate] ?? 0) > bestCount {
+            best = candidate
+            bestCount = counts[candidate] ?? 0
+        }
+        return best
+    }
+}
+
+/// A scrollable table for CSV/TSV text. The first row is styled as a header;
+/// cells are monospaced 12pt with fixed per-column widths so columns align
+/// across a vertically lazy list. Delimiter is auto-detected.
+struct CsvPreview: View {
+    let text: String
+
+    private let rows: [[String]]
+    private let truncated: Bool
+    private let columnWidths: [CGFloat]
+
+    private static let cellFont = Font.system(size: 12, design: .monospaced)
+    private static let charWidth: CGFloat = 7.3   // ~advance of SF Mono 12pt
+    private static let minColumnWidth: CGFloat = 46
+    private static let maxColumnWidth: CGFloat = 340
+    private static let cellPaddingH: CGFloat = 10
+
+    init(text: String) {
+        self.text = text
+        let delimiter = CsvTable.detectDelimiter(text)
+        let parsed = CsvTable.parse(text, delimiter: delimiter)
+        self.rows = parsed.rows
+        self.truncated = parsed.truncated
+
+        let columnCount = parsed.rows.map(\.count).max() ?? 0
+        var widths = [CGFloat](repeating: Self.minColumnWidth, count: columnCount)
+        for row in parsed.rows {
+            for (column, value) in row.enumerated() where column < columnCount {
+                let fitted = min(
+                    Self.maxColumnWidth,
+                    max(Self.minColumnWidth, CGFloat(value.count) * Self.charWidth + Self.cellPaddingH * 2)
+                )
+                if fitted > widths[column] { widths[column] = fitted }
+            }
+        }
+        self.columnWidths = widths
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if truncated { truncationNotice }
+            if rows.isEmpty {
+                ContentUnavailableView(
+                    "Empty file",
+                    systemImage: "tablecells",
+                    description: Text("No rows to display.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView([.horizontal, .vertical]) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                            rowView(row, isHeader: index == 0)
+                            Divider()
+                        }
+                    }
+                    .padding(.bottom, 8)
+                }
+            }
+        }
+    }
+
+    private func rowView(_ row: [String], isHeader: Bool) -> some View {
+        HStack(spacing: 0) {
+            ForEach(Array(columnWidths.enumerated()), id: \.offset) { column, width in
+                cell(column < row.count ? row[column] : "", width: width, isHeader: isHeader)
+            }
+        }
+        .background(isHeader ? Color.secondary.opacity(0.15) : Color.clear)
+    }
+
+    private func cell(_ value: String, width: CGFloat, isHeader: Bool) -> some View {
+        Text(value)
+            .font(Self.cellFont)
+            .fontWeight(isHeader ? .semibold : .regular)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .textSelection(.enabled)
+            .padding(.horizontal, Self.cellPaddingH)
+            .padding(.vertical, 5)
+            .frame(width: width, alignment: .leading)
+            // A trailing hairline as a column separator; an overlay matches the
+            // cell's height exactly, avoiding the ambiguity a bare Divider has
+            // inside an HStack.
+            .overlay(alignment: .trailing) {
+                Rectangle().fill(Color.primary.opacity(0.08)).frame(width: 1)
+            }
+    }
+
+    private var truncationNotice: some View {
+        Label(
+            "Showing the first \(rows.count) rows (preview caps at \(CsvTable.maxRows) rows × \(CsvTable.maxCols) columns).",
+            systemImage: "exclamationmark.triangle.fill"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.yellow.opacity(0.14))
+    }
+}
+
+// MARK: - JSON
+
+/// Pure builder that turns a `JSONSerialization` value into a display tree,
+/// bounded by depth and total-node caps. Factored out of the view so tests can
+/// assert node counts, caps, and labels without SwiftUI.
+enum JsonTree {
+    static let maxDepth = 12
+    static let maxNodes = 2_000
+
+    /// One node in the rendered JSON tree. A reference type so SwiftUI can hold
+    /// stable identities across expand/collapse.
+    final class Node: Identifiable {
+        enum Kind: Equatable { case object, array, string, number, bool, null, truncated }
+
+        let id = UUID()
+        /// Object key or `[index]` label; `nil` for the root value.
+        let key: String?
+        /// Scalar text, or a `{n}` / `[n]` container summary.
+        let display: String
+        let kind: Kind
+        let children: [Node]
+        let isTruncationMarker: Bool
+
+        init(key: String?, display: String, kind: Kind, children: [Node] = [], isTruncationMarker: Bool = false) {
+            self.key = key
+            self.display = display
+            self.kind = kind
+            self.children = children
+            self.isTruncationMarker = isTruncationMarker
+        }
+
+        /// Total nodes in this subtree, inclusive of the receiver.
+        var totalNodes: Int { 1 + children.reduce(0) { $0 + $1.totalNodes } }
+
+        /// Whether any node in this subtree marks a dropped-for-cap boundary.
+        var containsTruncation: Bool {
+            isTruncationMarker || children.contains { $0.containsTruncation }
+        }
+    }
+
+    /// Build a display tree from a `JSONSerialization` value (NSDictionary /
+    /// NSArray / NSNumber / NSString / NSNull, or their Swift bridges). Beyond
+    /// `maxDepth` levels or `maxNodes` total nodes, growth stops and a single
+    /// truncation-marker node is inserted so the UI can flag it.
+    nonisolated static func build(_ data: Any, key: String? = nil) -> Node {
+        var count = 0
+        return build(data, key: key, depth: 0, count: &count)
+    }
+
+    nonisolated private static func build(_ data: Any, key: String?, depth: Int, count: inout Int) -> Node {
+        count += 1
+        if depth > maxDepth {
+            return Node(key: key, display: "…", kind: .truncated, isTruncationMarker: true)
+        }
+
+        switch data {
+        case let dictionary as [String: Any]:
+            var children: [Node] = []
+            for childKey in dictionary.keys.sorted() {
+                if count >= maxNodes {
+                    let remaining = dictionary.count - children.count
+                    children.append(Node(key: nil, display: "… \(remaining) more", kind: .truncated, isTruncationMarker: true))
+                    break
+                }
+                children.append(build(dictionary[childKey] as Any, key: childKey, depth: depth + 1, count: &count))
+            }
+            return Node(key: key, display: "{\(dictionary.count)}", kind: .object, children: children)
+
+        case let array as [Any]:
+            var children: [Node] = []
+            for (index, element) in array.enumerated() {
+                if count >= maxNodes {
+                    children.append(Node(key: nil, display: "… \(array.count - index) more", kind: .truncated, isTruncationMarker: true))
+                    break
+                }
+                children.append(build(element, key: "[\(index)]", depth: depth + 1, count: &count))
+            }
+            return Node(key: key, display: "[\(array.count)]", kind: .array, children: children)
+
+        case is NSNull:
+            return Node(key: key, display: "null", kind: .null)
+
+        case let number as NSNumber:
+            // JSON true/false arrive as CFBoolean-backed NSNumbers; distinguish
+            // them from numeric NSNumbers by CoreFoundation type id.
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                return Node(key: key, display: number.boolValue ? "true" : "false", kind: .bool)
+            }
+            return Node(key: key, display: number.stringValue, kind: .number)
+
+        case let string as String:
+            return Node(key: key, display: string, kind: .string)
+
+        default:
+            return Node(key: key, display: String(describing: data), kind: .string)
+        }
+    }
+}
+
+/// A collapsible JSON tree. Valid JSON renders as indented `key: value` rows
+/// with DisclosureGroups for objects/arrays; invalid JSON shows the parse error
+/// above the raw text so the preview is never blank.
+struct JsonPreview: View {
+    let text: String
+
+    private enum Outcome {
+        case tree(root: JsonTree.Node, truncated: Bool)
+        case invalid(message: String)
+    }
+
+    var body: some View {
+        switch Self.parse(text) {
+        case let .tree(root, truncated):
+            VStack(alignment: .leading, spacing: 0) {
+                if truncated { truncationNotice }
+                ScrollView([.horizontal, .vertical]) {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        JsonNodeRow(node: root, depth: 0)
+                    }
+                    .padding(12)
+                }
+            }
+        case let .invalid(message):
+            invalidView(message)
+        }
+    }
+
+    private static func parse(_ text: String) -> Outcome {
+        guard let data = text.data(using: .utf8) else {
+            return .invalid(message: "File is not valid UTF-8 text.")
+        }
+        do {
+            let object = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+            let root = JsonTree.build(object)
+            return .tree(root: root, truncated: root.containsTruncation)
+        } catch {
+            return .invalid(message: error.localizedDescription)
+        }
+    }
+
+    private var truncationNotice: some View {
+        Label(
+            "Tree truncated at \(JsonTree.maxDepth) levels / \(JsonTree.maxNodes) nodes.",
+            systemImage: "exclamationmark.triangle.fill"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.yellow.opacity(0.14))
+    }
+
+    private func invalidView(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Label("Invalid JSON — \(message)", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.12))
+            Divider()
+            ScrollView([.horizontal, .vertical]) {
+                Text(text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            }
+        }
+    }
+}
+
+/// One row in the JSON tree; recurses through its own type for children (a
+/// nominal `View`, so the recursion type-checks without erasure).
+private struct JsonNodeRow: View {
+    let node: JsonTree.Node
+    let depth: Int
+    @State private var isExpanded: Bool
+
+    init(node: JsonTree.Node, depth: Int) {
+        self.node = node
+        self.depth = depth
+        // Shallow levels open by default; deeper ones collapse to stay scannable.
+        _isExpanded = State(initialValue: depth < 2)
+    }
+
+    var body: some View {
+        if node.children.isEmpty {
+            leafRow
+        } else {
+            DisclosureGroup(isExpanded: $isExpanded) {
+                ForEach(node.children) { child in
+                    JsonNodeRow(node: child, depth: depth + 1)
+                        .padding(.leading, 12)
+                }
+            } label: {
+                containerLabel
+            }
+            .font(.system(size: 12, design: .monospaced))
+        }
+    }
+
+    private var leafRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            if let key = node.key {
+                Text(key).foregroundStyle(.secondary)
+                Text(":").foregroundStyle(.tertiary)
+            }
+            Text(scalarText)
+                .foregroundStyle(scalarColor)
+                .textSelection(.enabled)
+        }
+        .font(.system(size: 12, design: .monospaced))
+    }
+
+    private var containerLabel: some View {
+        HStack(spacing: 4) {
+            if let key = node.key {
+                Text(key).foregroundStyle(.secondary)
+                Text(":").foregroundStyle(.tertiary)
+            }
+            Text(node.display).foregroundStyle(.tertiary)
+        }
+    }
+
+    private var scalarText: String {
+        switch node.kind {
+        case .string: "\"\(node.display)\""
+        default: node.display
+        }
+    }
+
+    private var scalarColor: Color {
+        switch node.kind {
+        case .string: .green
+        case .number: .blue
+        case .bool: .purple
+        case .null: .secondary
+        case .truncated: .secondary
+        case .object, .array: .primary
+        }
+    }
+}
+
+// MARK: - HTML
+
+/// Renders a local `.html`/`.htm` file in a JavaScript-disabled WKWebView whose
+/// navigation is confined to `file://` URLs inside the file's own directory —
+/// anything else is handed to the system browser. Mirrors `BrowserCardView`'s
+/// confinement pattern; meant to sit inside `FilePreviewView`, which supplies
+/// the outer file chrome, so this adds only a compact status header.
+struct HtmlFilePreview: View {
+    let fileURL: URL
+
+    @State private var reloadToken = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            ConfinedFileWebView(fileURL: fileURL, reloadToken: reloadToken)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                .foregroundStyle(.secondary)
+            Text("Rendered HTML · JS off")
+                .font(.subheadline.weight(.medium))
+            Text(fileURL.lastPathComponent)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 12)
+            Button {
+                reloadToken &+= 1
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.borderless)
+            .help("Reload this page")
+            Button("Open in Browser") {
+                NSWorkspace.shared.open(fileURL)
+            }
+            .help("Open this file in your default browser")
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 42)
+    }
+}
+
+/// A WKWebView that renders a local HTML file read-only: JavaScript is disabled,
+/// the data store is non-persistent, read access is granted only to the file's
+/// directory, and link navigation is confined to `file://` targets inside that
+/// directory. Off-scope top-level navigations open in the system browser;
+/// off-scope subframes are dropped.
+private struct ConfinedFileWebView: NSViewRepresentable {
+    let fileURL: URL
+    let reloadToken: Int
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        // Ephemeral: rendering a local file must not touch on-disk cookies/cache.
+        configuration.websiteDataStore = .nonPersistent()
+        // JS off: the preview is display-only; no page scripts execute.
+        let pagePreferences = WKWebpagePreferences()
+        pagePreferences.allowsContentJavaScript = false
+        configuration.defaultWebpagePreferences = pagePreferences
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = context.coordinator
+        webView.setValue(false, forKey: "drawsBackground")
+
+        let directory = fileURL.deletingLastPathComponent()
+        let coordinator = context.coordinator
+        coordinator.directory = directory
+        coordinator.loadedURL = fileURL
+        coordinator.reloadToken = reloadToken
+        webView.loadFileURL(fileURL, allowingReadAccessTo: directory)
+        return webView
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        let coordinator = context.coordinator
+        // Retargeted at a different file (the pane was reused for another doc).
+        if coordinator.loadedURL != fileURL {
+            let directory = fileURL.deletingLastPathComponent()
+            coordinator.directory = directory
+            coordinator.loadedURL = fileURL
+            webView.loadFileURL(fileURL, allowingReadAccessTo: directory)
+        }
+        // Header reload button was pressed.
+        if coordinator.reloadToken != reloadToken {
+            coordinator.reloadToken = reloadToken
+            webView.reload()
+        }
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        var directory: URL?
+        var loadedURL: URL?
+        var reloadToken = 0
+
+        // The closure attributes must match the optional requirement exactly
+        // (`@MainActor @Sendable`); otherwise Swift treats this as an unrelated
+        // method and WebKit never calls it — silently defeating confinement.
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
+        ) {
+            guard let target = navigationAction.request.url else {
+                decisionHandler(.cancel)
+                return
+            }
+            // Confine to file:// URLs inside the document's own directory (this
+            // also admits the initial load of the file itself).
+            if target.isFileURL, let directory, Self.isContained(target, in: directory) {
+                decisionHandler(.allow)
+                return
+            }
+            // Off-scope (an http link, or a file:// escaping the directory): hand
+            // top-level / new-window navigations to the real browser and drop
+            // off-scope subframes so the pane can never wander.
+            let isTopLevel = navigationAction.targetFrame?.isMainFrame ?? true
+            if isTopLevel {
+                NSWorkspace.shared.open(target)
+            }
+            decisionHandler(.cancel)
+        }
+
+        /// True when `url` resolves to a path inside `directory`. Symlinks are
+        /// resolved on both sides before the prefix check so a `../` walk or a
+        /// symlinked entry cannot escape the folder.
+        static func isContained(_ url: URL, in directory: URL) -> Bool {
+            let base = directory.standardizedFileURL.resolvingSymlinksInPath().path
+            let candidate = url.standardizedFileURL.resolvingSymlinksInPath().path
+            return candidate == base || candidate.hasPrefix(base + "/")
+        }
+    }
+}

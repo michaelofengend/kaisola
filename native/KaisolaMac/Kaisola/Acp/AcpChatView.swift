@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The ACP conversation surface: streaming messages, thinking blocks,
 /// tool-call cards, a plan, a live permission prompt, model picker, usage, and
@@ -7,6 +9,8 @@ struct AcpChatView: View {
     @State private var restoreTarget: AcpConversation.TurnCheckpoint?
     @ObservedObject var conversation: AcpConversation
     @State private var draft = ""
+    /// Highlights the composer while an OS file drag hovers it.
+    @State private var isDropTargeted = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -204,7 +208,16 @@ struct AcpChatView: View {
             if !conversation.queued.isEmpty {
                 queuedStrip
             }
+            if !conversation.pendingAttachments.isEmpty {
+                attachmentStrip
+            }
             HStack(alignment: .bottom, spacing: 8) {
+                Button(action: openAttachmentPanel) {
+                    Image(systemName: "paperclip")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!conversation.isConnected)
+                .help("Attach files or images")
                 TextField(conversation.isRunning ? "Queue a follow-up…" : "Message the agent…", text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...6)
@@ -222,12 +235,94 @@ struct AcpChatView: View {
                     Image(systemName: conversation.isRunning ? "text.badge.plus" : "arrow.up.circle.fill")
                 }
                 .buttonStyle(.borderless)
-                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !conversation.isConnected)
+                .disabled(sendDisabled)
                 .help(conversation.isRunning ? "Queue this as a follow-up" : "Send")
             }
         }
         .padding(12)
         .background(.bar)
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6]))
+                    .padding(4)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
+        .onPasteCommand(of: [.png, .tiff], perform: handlePaste)
+    }
+
+    /// Send is enabled when there's something to deliver. While a turn runs the
+    /// send becomes a queued follow-up (which can't carry attachments), so text
+    /// is required; idle, either text or a staged attachment is enough.
+    private var sendDisabled: Bool {
+        guard conversation.isConnected else { return true }
+        let empty = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return conversation.isRunning ? empty : (empty && conversation.pendingAttachments.isEmpty)
+    }
+
+    private var attachmentStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(conversation.pendingAttachments) { attachment in
+                    HStack(spacing: 6) {
+                        Image(systemName: attachment.iconName)
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Text(attachment.name).font(.caption).lineLimit(1)
+                        Text(byteLabel(attachment.byteSize))
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Button {
+                            conversation.removeAttachment(attachment.id)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill").font(.caption2)
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        .help("Remove this attachment")
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func byteLabel(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+
+    /// Open a file picker (multiple selection) and stage each chosen file.
+    private func openAttachmentPanel() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls { conversation.addAttachment(fileURL: url) }
+    }
+
+    /// Stage files dropped onto the composer.
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        var handled = false
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            handled = true
+            _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { [conversation] data, _ in
+                guard let data, let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                Task { @MainActor in conversation.addAttachment(fileURL: url) }
+            }
+        }
+        return handled
+    }
+
+    /// Stage a pasted image, read from the general pasteboard and normalized to
+    /// PNG. Fires only for image content types, so pasting text into the field
+    /// is untouched.
+    private func handlePaste(_ providers: [NSItemProvider]) {
+        guard let image = NSImage(pasteboard: .general), let png = image.pngRepresentation() else { return }
+        conversation.addImageData(png, name: "Pasted image.png")
     }
 
     private var queuedStrip: some View {
@@ -443,42 +538,135 @@ struct TerminalContentView: View {
     }
 }
 
-/// A compact unified diff for a tool-call file edit: removed lines tinted red,
-/// added lines tinted green, mirroring the Electron chat's inline diff card.
+/// A compact diff for a tool-call file edit: removed lines tinted red, added
+/// lines green, with word-level highlights on changed line pairs and a
+/// unified ↔ side-by-side toggle — mirroring the Electron chat's diff card.
 struct DiffView: View {
     let path: String
     let oldText: String?
     let newText: String
 
+    @State private var sideBySide = false
+
+    private var rows: [AcpDiff.Row] {
+        AcpDiff.rows(old: oldText ?? "", new: newText)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text((path as NSString).lastPathComponent)
-                .font(.caption.weight(.semibold))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(.quaternary.opacity(0.6))
-            ScrollView(.horizontal, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(AcpDiff.lines(old: oldText ?? "", new: newText).enumerated()), id: \.offset) { _, line in
-                        Text(line.kind.prefix + line.text)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 8).padding(.vertical, 1)
-                            .background(tint(for: line.kind))
-                    }
+            HStack(spacing: 6) {
+                Text((path as NSString).lastPathComponent)
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Button {
+                    sideBySide.toggle()
+                } label: {
+                    Image(systemName: sideBySide ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
                 }
+                .buttonStyle(.plain)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .help(sideBySide ? "Unified view" : "Side-by-side view")
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(.quaternary.opacity(0.6))
+            if sideBySide {
+                splitBody
+            } else {
+                unifiedBody
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary))
     }
 
-    private func tint(for kind: AcpDiff.LineKind) -> Color {
-        switch kind {
+    private var unifiedBody: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    if isContext(row), let old = row.old {
+                        line(prefix: "  ", segments: old, side: .context)
+                    } else {
+                        if let old = row.old {
+                            line(prefix: "- ", segments: old, side: .removed)
+                        }
+                        if let new = row.new {
+                            line(prefix: "+ ", segments: new, side: .added)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var splitBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack(alignment: .top, spacing: 0) {
+                    cell(row.old, side: isContext(row) ? .context : .removed)
+                    Divider()
+                    cell(row.new, side: isContext(row) ? .context : .added)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private enum Side { case context, removed, added }
+
+    private func isContext(_ row: AcpDiff.Row) -> Bool {
+        row.old != nil && row.old == row.new
+    }
+
+    private func line(prefix: String, segments: [AcpDiff.Segment], side: Side) -> some View {
+        Text(attributed(prefix: prefix, segments: segments, side: side))
+            .font(.system(.caption, design: .monospaced))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8).padding(.vertical, 1)
+            .background(lineTint(side))
+    }
+
+    @ViewBuilder
+    private func cell(_ segments: [AcpDiff.Segment]?, side: Side) -> some View {
+        Group {
+            if let segments {
+                Text(attributed(prefix: "", segments: segments, side: side))
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8).padding(.vertical, 1)
+                    .background(lineTint(side))
+            } else {
+                Color.clear
+                    .frame(maxWidth: .infinity, minHeight: 16)
+                    .background(.quaternary.opacity(0.15))
+            }
+        }
+    }
+
+    /// Changed words get a deeper tint layered over the line background.
+    private func attributed(prefix: String, segments: [AcpDiff.Segment], side: Side) -> AttributedString {
+        var result = AttributedString(prefix)
+        for segment in segments {
+            var piece = AttributedString(segment.text)
+            if segment.changed, side != .context {
+                piece.backgroundColor = side == .removed
+                    ? Color.red.opacity(0.32)
+                    : Color.green.opacity(0.32)
+            }
+            result += piece
+        }
+        return result
+    }
+
+    private func lineTint(_ side: Side) -> Color {
+        switch side {
         case .context: .clear
-        case .removed: .red.opacity(0.18)
-        case .added: .green.opacity(0.18)
+        case .removed: .red.opacity(0.14)
+        case .added: .green.opacity(0.14)
         }
     }
 }
@@ -535,5 +723,14 @@ private struct PermissionBar: View {
         }
         .padding(12)
         .background(.regularMaterial)
+    }
+}
+
+private extension NSImage {
+    /// PNG-encode this image, used to normalize a pasteboard image before it
+    /// rides as an ACP image block.
+    func pngRepresentation() -> Data? {
+        guard let tiff = tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.representation(using: .png, properties: [:])
     }
 }

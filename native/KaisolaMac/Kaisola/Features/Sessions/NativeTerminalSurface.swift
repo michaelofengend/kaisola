@@ -320,4 +320,34 @@ final class OwnedTerminalView: ReadOnlyTerminalView {
     override func send(source: Terminal, data: ArraySlice<UInt8>) {
         terminalDelegate?.send(source: self, data: data)
     }
+
+    /// Shift+Enter types a newline instead of submitting — ESC CR, the mapping
+    /// Claude/Codex CLIs (and the Electron terminal) treat as "insert line
+    /// break". SwiftTerm's `keyDown` isn't `open`, so the intercept rides a
+    /// local monitor that only claims the event while this view is focused;
+    /// it uninstalls when the view leaves its window (weak self keeps a
+    /// stragglling monitor harmless).
+    private var shiftEnterMonitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            if let shiftEnterMonitor {
+                NSEvent.removeMonitor(shiftEnterMonitor)
+                self.shiftEnterMonitor = nil
+            }
+        } else if shiftEnterMonitor == nil {
+            shiftEnterMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard event.keyCode == 36, event.modifierFlags.contains(.shift) else { return event }
+                // Local monitors fire on the main thread; NSEvent itself must
+                // stay outside the isolation hop (it isn't Sendable).
+                let handled = MainActor.assumeIsolated { () -> Bool in
+                    guard let self, self.window?.firstResponder === self else { return false }
+                    self.terminalDelegate?.send(source: self, data: ArraySlice([0x1B, 0x0D]))
+                    return true
+                }
+                return handled ? nil : event
+            }
+        }
+    }
 }

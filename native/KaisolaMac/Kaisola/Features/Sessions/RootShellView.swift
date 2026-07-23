@@ -128,6 +128,13 @@ struct RootShellView: View {
                 Button(action: { showOmniBar.toggle() }) { EmptyView() }
                     .keyboardShortcut("l", modifiers: .command)
                     .accessibilityLabel("Message Current Agent")
+                Button(action: {
+                    if let target = model.previewedFileURL ?? model.currentProjectDirectory {
+                        settings.openInExternalEditor(target)
+                    }
+                }) { EmptyView() }
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
+                    .accessibilityLabel("Open in External Editor")
             }
         )
         .overlay {
@@ -246,6 +253,13 @@ struct RootShellView: View {
                 reorder: { model.moveProject(id: $0, toIndex: $1) }
             )
             Divider()
+            if let active = model.projects.first(where: { $0.name == activeProjectName }),
+               let activeDir = active.directory {
+                QuickActionsBar(projectID: active.id, projectName: active.name) { action in
+                    Task { await model.runQuickAction(action, inProject: activeDir) }
+                }
+                Divider()
+            }
             SessionStrip(
                 model: model,
                 projectName: activeProjectName,

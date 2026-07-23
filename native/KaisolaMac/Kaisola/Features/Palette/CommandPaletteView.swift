@@ -160,6 +160,11 @@ struct CommandPaletteView: View {
         items.append(PaletteItem(id: "action.toggleRail", title: "Toggle Workspace Rail", subtitle: "View · ⌘B", systemImage: "sidebar.left") {
             settings.workspaceRailVisible.toggle()
         })
+        if let editorTarget = model.previewedFileURL ?? model.currentProjectDirectory {
+            items.append(PaletteItem(id: "action.openExternalEditor", title: "Open in External Editor", subtitle: "Action · ⇧⌘O", systemImage: "arrow.up.forward.app") {
+                settings.openInExternalEditor(editorTarget)
+            })
+        }
         for layout in NavigationLayout.allCases {
             items.append(PaletteItem(id: "layout.\(layout.rawValue)", title: "Layout: \(layout.title)", subtitle: "View", systemImage: "sidebar.squares.left") {
                 settings.navigationLayout = layout
@@ -169,6 +174,21 @@ struct CommandPaletteView: View {
             items.append(PaletteItem(id: "appearance.\(mode.rawValue)", title: "Appearance: \(mode.title)", subtitle: "View", systemImage: "circle.lefthalf.filled") {
                 settings.appearance = mode
             })
+        }
+
+        // Quick Actions for the active project run straight from the palette.
+        if let active = model.projects.first(where: { $0.name == (model.selectedProjectName ?? model.projects.first?.name) }),
+           let activeDir = active.directory {
+            for action in QuickActionStore().actions(forProject: active.id) {
+                items.append(PaletteItem(
+                    id: "quickAction.\(active.id).\(action.id)",
+                    title: "Run: \(action.title.isEmpty ? action.command : action.title)",
+                    subtitle: "Quick Action · \(active.name)",
+                    systemImage: "play.fill"
+                ) {
+                    Task { await model.runQuickAction(action, inProject: activeDir) }
+                })
+            }
         }
 
         for project in model.projects {

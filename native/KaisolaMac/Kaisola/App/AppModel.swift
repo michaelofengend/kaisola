@@ -269,7 +269,12 @@ final class AppModel: ObservableObject {
             command: adapter.command,
             arguments: adapter.arguments,
             environment: ProcessInfo.processInfo.environment.merging(
-                NativePreviewSettings.shared.agentEnvironmentOverlay
+                ProjectAccountStore.mergedOverlay(
+                    app: NativePreviewSettings.shared.agentEnvironmentOverlay,
+                    project: ProjectAccountStore().override(
+                        forProject: NativeSessionStore.projectID(forDirectory: directory.path)
+                    )
+                )
             ) { _, custom in custom },
             cwd: directory.path,
             mcpServers: McpConfigStore.jsonValues(mcp),
@@ -344,7 +349,12 @@ final class AppModel: ObservableObject {
         selectedChatID = nil
         selectedSessionID = nil
         let environment = ProcessInfo.processInfo.environment.merging(
-            NativePreviewSettings.shared.agentEnvironmentOverlay
+            ProjectAccountStore.mergedOverlay(
+                app: NativePreviewSettings.shared.agentEnvironmentOverlay,
+                project: ProjectAccountStore().override(
+                    forProject: NativeSessionStore.projectID(forDirectory: directory.path)
+                )
+            )
         ) { _, custom in custom }
         Task { await mesh.start(agents: agents, environment: environment) }
     }
@@ -522,17 +532,26 @@ final class AppModel: ObservableObject {
         let projectID = NativeSessionStore.projectID(forDirectory: cwd)
         let terminalID = NativeSessionStore.terminalID(projectID: projectID)
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        // Account isolation (custom CLAUDE_CONFIG_DIR / CODEX_HOME) rides in
+        // as exported variables ahead of the CLI. Per-project overrides win
+        // over the app-wide setting, key by key.
+        let overlay = ProjectAccountStore.mergedOverlay(
+            app: NativePreviewSettings.shared.agentEnvironmentOverlay,
+            project: ProjectAccountStore().override(forProject: projectID)
+        )
+        let exports = overlay
+            .map { "export \($0.key)=\(Self.shellQuote($0.value)); " }
+            .sorted()
+            .joined()
         let arguments: [String]
         if let agent, !agent.launchCommand.isEmpty {
             // -ilc runs the agent as the login shell's command so it inherits
             // the interactive environment, then hands control to the user.
-            // Account isolation (custom CLAUDE_CONFIG_DIR / CODEX_HOME) rides
-            // in as exported variables ahead of the CLI.
-            let overlay = NativePreviewSettings.shared.agentEnvironmentOverlay
-                .map { "export \($0.key)=\(Self.shellQuote($0.value)); " }
-                .sorted()
-                .joined()
-            arguments = ["-ilc", "\(overlay)\(agent.launchCommand); exec \(shell) -il"]
+            arguments = ["-ilc", "\(exports)\(agent.launchCommand); exec \(shell) -il"]
+        } else if !exports.isEmpty {
+            // Plain shells get the account env too, so a hand-typed `claude`
+            // or `codex` (and the Sign-in card's login) uses the right dir.
+            arguments = ["-ilc", "\(exports)exec \(shell) -il"]
         } else {
             arguments = ["-il"]
         }

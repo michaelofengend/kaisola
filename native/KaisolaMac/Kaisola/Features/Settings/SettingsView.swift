@@ -46,6 +46,9 @@ struct SettingsView: View {
             ))
             Text("When Kaisola is in the background, needs-you moments post a system notification. Click it to jump back.")
                 .font(.caption).foregroundStyle(.secondary)
+            TextField("External editor", text: $settings.externalEditorApp, prompt: Text("System default"))
+            Text("App name for ⇧⌘O — e.g. Visual Studio Code, Cursor, Zed. Blank opens with the file's default app.")
+                .font(.caption).foregroundStyle(.secondary)
             LabeledContent("Updates") {
                 VStack(alignment: .trailing, spacing: 4) {
                     Button("Check for Updates…") { checkForUpdates?() }
@@ -103,6 +106,21 @@ struct SettingsView: View {
                 Text("Applied to new agent terminals and chats; leave blank to use each CLI's own login.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            ProjectAccountsSection(
+                projectID: workspace.map { NativeSessionStore.projectID(forDirectory: $0.path) },
+                projectName: workspace.map { ($0.path as NSString).lastPathComponent }
+            )
+            Section {
+                SignInCardView { command in
+                    NotificationCenter.default.post(
+                        name: .kaisolaRunInTerminal,
+                        object: nil,
+                        userInfo: [SignInCardView.commandUserInfoKey: command]
+                    )
+                }
+                .listRowInsets(EdgeInsets())
+            }
+            CustomAgentsSection()
             Section("ACP adapters") {
                 ForEach(AgentRegistry.all) { agent in
                     if let adapter = AcpAdapter.forAgent(agent.id) {

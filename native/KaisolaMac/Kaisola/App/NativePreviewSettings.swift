@@ -101,6 +101,26 @@ final class NativePreviewSettings: ObservableObject {
         didSet { defaults.set(codexHome, forKey: Keys.codexHome) }
     }
 
+    /// Application name for "Open in External Editor" (⇧⌘O), e.g.
+    /// "Visual Studio Code" / "Cursor" / "Zed". Empty = the system default
+    /// app for the file's type.
+    @Published var externalEditorApp: String {
+        didSet { defaults.set(externalEditorApp, forKey: Keys.externalEditorApp) }
+    }
+
+    /// Open a file (or directory) in the chosen external editor.
+    func openInExternalEditor(_ url: URL) {
+        let app = externalEditorApp.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !app.isEmpty else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-a", app, url.path]
+        try? process.run()
+    }
+
     /// Environment overlay for agent processes from the account settings.
     var agentEnvironmentOverlay: [String: String] {
         // API keys join first; the explicit account vars below always win.
@@ -124,6 +144,7 @@ final class NativePreviewSettings: ObservableObject {
         static let sensitiveGlobs = "sensitiveGlobs"
         static let claudeConfigDir = "claudeConfigDir"
         static let codexHome = "codexHome"
+        static let externalEditorApp = "externalEditorApp"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -140,6 +161,7 @@ final class NativePreviewSettings: ObservableObject {
         sensitiveGlobs = defaults.stringArray(forKey: Keys.sensitiveGlobs) ?? AcpPermissionRules.defaultSensitiveGlobs
         claudeConfigDir = defaults.string(forKey: Keys.claudeConfigDir) ?? ""
         codexHome = defaults.string(forKey: Keys.codexHome) ?? ""
+        externalEditorApp = defaults.string(forKey: Keys.externalEditorApp) ?? ""
     }
 
     /// Push the chosen appearance to the running application.

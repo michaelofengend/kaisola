@@ -32,6 +32,8 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
     private var windowModels: [ObjectIdentifier: AppModel] = [:]
     private var windowCounter = 0
     private var wakeObserver: NSObjectProtocol?
+    private var agentsObserver: NSObjectProtocol?
+    private var runInTerminalObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Preview-owned state stays separate from every historical Electron
@@ -40,6 +42,25 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         settings.applyAppearance()
         NotificationBridge.shared.requestAuthorizationIfNeeded()
         installMainMenu()
+        // Custom agents added/removed in Settings rebuild the static AppKit
+        // menus (SwiftUI surfaces re-read the registry on their own).
+        agentsObserver = NotificationCenter.default.addObserver(
+            forName: .kaisolaAgentsChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.installMainMenu() }
+        }
+        // The Settings sign-in card asks for a terminal via notification (it
+        // has no AppModel). Handled here — not per-window — so exactly one
+        // shell window spawns the terminal.
+        runInTerminalObserver = NotificationCenter.default.addObserver(
+            forName: .kaisolaRunInTerminal, object: nil, queue: .main
+        ) { [weak self] note in
+            let command = note.userInfo?[SignInCardView.commandUserInfoKey] as? String
+            Task { @MainActor in
+                guard let command, let model = self?.keyModel() else { return }
+                await model.runCommandInNewTerminal(command)
+            }
+        }
         _ = makeWindow()
         NSApp.activate(ignoringOtherApps: true)
 

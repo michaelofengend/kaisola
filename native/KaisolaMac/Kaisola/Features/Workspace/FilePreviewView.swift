@@ -6,6 +6,9 @@ import UniformTypeIdentifiers
 enum FilePreviewContent: Equatable {
     case text(String)
     case markdown(String)
+    case csv(String)
+    case json(String)
+    case html
     case image
     case tooLarge(Int)
     case binary
@@ -20,9 +23,13 @@ enum FilePreviewContent: Equatable {
               let size = attributes[.size] as? Int else { return .unreadable }
         let ext = url.pathExtension.lowercased()
         if imageExtensions.contains(ext) { return .image }
+        // HTML renders from disk in a WKWebView, so it skips the text cap.
+        if ext == "html" || ext == "htm" { return .html }
         guard size <= maxTextBytes else { return .tooLarge(size) }
         guard let data = FileManager.default.contents(atPath: path) else { return .unreadable }
         guard let text = String(data: data, encoding: .utf8) else { return .binary }
+        if ext == "csv" || ext == "tsv" { return .csv(text) }
+        if ext == "json" { return .json(text) }
         return ext == "md" || ext == "markdown" ? .markdown(text) : .text(text)
     }
 }
@@ -34,10 +41,18 @@ struct FilePreviewView: View {
     let url: URL
     let close: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
+
     @State private var content: FilePreviewContent = .unreadable
     @State private var draft = ""
     @State private var savedText = ""
     @State private var showMarkdownSource = false
+    /// Text (non-markdown) files default to a read-only, syntax-highlighted
+    /// view; this toggle drops into the plain `TextEditor` for editing.
+    @State private var isEditingText = false
+    /// Cached highlighted rendering of `draft`, recomputed only when the source,
+    /// language, or appearance changes (never on every keystroke).
+    @State private var highlighted = AttributedString("")
     @State private var saveError: String?
     /// The file actually shown; lags `url` while an unsaved-changes prompt is up.
     @State private var displayedURL: URL?
@@ -69,6 +84,12 @@ struct FilePreviewView: View {
                 load()
             }
         }
+        // Re-highlight when appearance flips or when returning to read mode with
+        // edited (or reverted/discarded) text. Skipped while editing so typing
+        // never pays the highlight cost.
+        .onChange(of: colorScheme) { _, _ in refreshHighlight() }
+        .onChange(of: isEditingText) { _, editing in if !editing { refreshHighlight() } }
+        .onChange(of: draft) { _, _ in if !isEditingText { refreshHighlight() } }
         .confirmationDialog(
             "Unsaved changes",
             isPresented: Binding(get: { pendingAction != nil }, set: { if !$0 { pendingAction = nil } })
@@ -125,6 +146,12 @@ struct FilePreviewView: View {
                     .toggleStyle(.button)
                     .controlSize(.small)
             }
+            if case .text = content {
+                Toggle("Edit", isOn: $isEditingText)
+                    .toggleStyle(.button)
+                    .controlSize(.small)
+                    .help("Switch between the read-only highlighted view and editing")
+            }
             if isEditable {
                 Button("Revert") { draft = savedText }
                     .disabled(!isDirty)
@@ -155,7 +182,18 @@ struct FilePreviewView: View {
     private func body(for content: FilePreviewContent) -> some View {
         switch content {
         case .text:
-            editor
+            if isEditingText {
+                editor
+            } else {
+                ScrollView {
+                    Text(highlighted)
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineSpacing(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                }
+            }
         case .markdown:
             if showMarkdownSource {
                 editor
@@ -177,6 +215,12 @@ struct FilePreviewView: View {
             } else {
                 ContentUnavailableView("Could not load image", systemImage: "photo")
             }
+        case let .csv(text):
+            CsvPreview(text: text)
+        case let .json(text):
+            JsonPreview(text: text)
+        case .html:
+            HtmlFilePreview(fileURL: displayedURL ?? url)
         case let .tooLarge(size):
             ContentUnavailableView(
                 "File too large to preview",
@@ -207,7 +251,28 @@ struct FilePreviewView: View {
             draft = ""
             savedText = ""
         }
+        // Every newly opened file starts in read mode.
+        isEditingText = false
         saveError = nil
+        refreshHighlight()
+    }
+
+    /// Rebuild the syntax-highlighted rendering of `draft` for the current file
+    /// and appearance. Non-highlightable extensions (and non-text content) fall
+    /// back to a plain monospaced rendering. Pure and cheap — the highlighter
+    /// caps and degrades on its own.
+    private func refreshHighlight() {
+        guard case .text = content else {
+            highlighted = AttributedString(draft)
+            return
+        }
+        let ext = (displayedURL ?? url).pathExtension
+        guard let language = SyntaxHighlighter.language(forExtension: ext) else {
+            highlighted = AttributedString(draft)
+            return
+        }
+        let theme: SyntaxHighlighter.Theme = colorScheme == .dark ? .dark : .light
+        highlighted = SyntaxHighlighter.highlight(draft, language: language, theme: theme)
     }
 
     private func save() {
@@ -241,6 +306,14 @@ struct WorkspaceRailView: View {
 
     @State private var expanded: Set<String> = []
     @State private var refreshToken = 0
+    /// Live FSEvents watcher — agent writes refresh the tree automatically.
+    @StateObject private var watcher: WorkspaceWatcher
+
+    init(root: URL, openFile: @escaping (URL) -> Void) {
+        self.root = root
+        self.openFile = openFile
+        _watcher = StateObject(wrappedValue: WorkspaceWatcher(root: root))
+    }
 
     var body: some View {
         ScrollView {
@@ -252,14 +325,48 @@ struct WorkspaceRailView: View {
         .frame(width: 230)
         .background(.background.secondary)
         .id(refreshToken)
+        .onChange(of: watcher.changeToken) { _, _ in refreshToken += 1 }
         .contextMenu {
             Button("Refresh") {
                 ProjectFileIndex.shared.invalidate()
                 refreshToken += 1
             }
+            Button("New AGENTS.md") {
+                let target = root.appendingPathComponent("AGENTS.md")
+                if !FileManager.default.fileExists(atPath: target.path) {
+                    try? Self.agentsTemplate.write(to: target, atomically: true, encoding: .utf8)
+                    ProjectFileIndex.shared.invalidate()
+                    refreshToken += 1
+                }
+                openFile(target)
+            }
         }
         .accessibilityLabel("Workspace files")
     }
+
+    /// Starter AGENTS.md dropped at the project root — the emerging convention
+    /// agent CLIs read for repo-specific guidance. Opens the existing file
+    /// instead when one is already there.
+    static let agentsTemplate = """
+    # AGENTS.md
+
+    Guidance for AI agents working in this repository.
+
+    ## Project overview
+
+    Describe what this project is and how it fits together.
+
+    ## Commands
+
+    - Build:
+    - Test:
+    - Lint:
+
+    ## Conventions
+
+    Code style, structure, and review expectations agents should follow.
+    """
+
 
     @ViewBuilder
     private func nodeRows(for directory: URL, depth: Int) -> some View {

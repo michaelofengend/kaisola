@@ -20,6 +20,23 @@ enum AcpEvent: Sendable {
     case exited(code: Int32)
 }
 
+/// A file or image the user attached to a prompt, carried into the ACP prompt
+/// as a real content block (never merely a path). `image` becomes an ACP
+/// `image` block (base64 pixels + mime); `textFile` becomes an embedded
+/// `resource` block whose inline text is the file's UTF-8 contents.
+enum AcpAttachment: Equatable, Sendable {
+    case image(data: Data, mimeType: String, name: String)
+    case textFile(path: String, contents: String, name: String)
+
+    /// The display filename used for chips and the prompt's "📎 …" suffix line.
+    var name: String {
+        switch self {
+        case let .image(_, _, name): name
+        case let .textFile(_, _, name): name
+        }
+    }
+}
+
 /// A native ACP client: spawns the adapter, runs the JSON-RPC handshake
 /// (initialize → session/new), sends prompts, and streams the agent's
 /// `session/update` notifications plus permission callbacks. Newline-delimited
@@ -124,14 +141,63 @@ actor AcpClient {
     }
 
     /// Send a user prompt; the turn's updates arrive on the event handler and
-    /// this returns when the turn fully ends.
-    func prompt(_ text: String) async throws {
+    /// this returns when the turn fully ends. `attachments` ride as real ACP
+    /// content blocks alongside the text (see `promptBlocks`). The no-attachment
+    /// call stays source-compatible via the default.
+    func prompt(_ text: String, attachments: [AcpAttachment] = []) async throws {
         guard let sessionID else { throw AcpClientError.notRunning }
         _ = try await request("session/prompt", params: .object([
             "sessionId": .string(sessionID),
-            "prompt": .array([.object(["type": .string("text"), "text": .string(text)])]),
+            "prompt": .array(Self.promptBlocks(
+                text: text, attachments: attachments, promptImageOk: capabilities.promptImage
+            )),
         ]), timeoutNanoseconds: 0)
         eventHandler?(.turnEnded)
+    }
+
+    /// Build the ACP `session/prompt` content-block array for a user turn: the
+    /// text block first, then a real `image` block per image attachment (base64
+    /// pixels + mime, mirroring electron/ipc/acp.cjs — gated on the agent having
+    /// advertised `promptCapabilities.image`, exactly like Electron's
+    /// `promptImageOk`), then an embedded `resource` block per text-file
+    /// attachment carrying its UTF-8 contents inline. Pure and static so the
+    /// wire encoding is unit-testable without a live transport.
+    static func promptBlocks(
+        text: String, attachments: [AcpAttachment], promptImageOk: Bool
+    ) -> [JSONValue] {
+        var blocks: [JSONValue] = [.object(["type": .string("text"), "text": .string(text)])]
+        for attachment in attachments {
+            switch attachment {
+            case let .image(data, mimeType, _):
+                // Image blocks only reach agents that take them; a text-only
+                // agent still learns the filename from the prompt text (the
+                // caller appends a "📎 <name>" line), never a rejected block.
+                guard promptImageOk else { continue }
+                blocks.append(.object([
+                    "type": .string("image"),
+                    "mimeType": .string(mimeType),
+                    "data": .string(data.base64EncodedString()),
+                ]))
+            case let .textFile(path, contents, _):
+                blocks.append(.object([
+                    "type": .string("resource"),
+                    "resource": .object([
+                        "uri": .string(fileURI(path)),
+                        "mimeType": .string("text/plain"),
+                        "text": .string(contents),
+                    ]),
+                ]))
+            }
+        }
+        return blocks
+    }
+
+    /// A `file://` URI for an attachment path, percent-encoding only bytes that
+    /// aren't URL-path-legal (spaces etc.); an encoding-free absolute path
+    /// becomes `file://` + path verbatim (e.g. `file:///tmp/notes.txt`).
+    static func fileURI(_ path: String) -> String {
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+        return "file://" + encoded
     }
 
     func cancel() async {

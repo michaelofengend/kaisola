@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// A compact Git panel: branch + ahead/behind, staged / unstaged / untracked
@@ -10,16 +11,31 @@ final class GitPanelModel: ObservableObject {
     @Published var commitMessage = ""
     @Published private(set) var isBusy = false
 
+    /// One-click PR state: the current branch's push/PR readiness, plus the
+    /// result of the last Create-PR run (a PR or compare URL, and a status note).
+    @Published private(set) var prPrepInfo: GitService.PRPrep?
+    @Published private(set) var prState: String?
+    @Published private(set) var prURL: String?
+
     let repoRoot: URL
+    /// Whether the GitHub CLI is installed — resolved once (it may spawn a
+    /// subprocess) so the view can render the fallback note without re-probing.
+    let ghAvailable: Bool
     private let service: GitService
 
     init(repoRoot: URL) {
         self.repoRoot = repoRoot
         self.service = GitService(repoRoot: repoRoot)
+        self.ghAvailable = GitService.ghAvailable()
     }
 
     func refresh() {
-        perform { try $0.status() } apply: { self.status = $0 }
+        perform { svc -> (GitService.Status, GitService.PRPrep?) in
+            (try svc.status(), try? svc.prPrep())
+        } apply: {
+            self.status = $0.0
+            self.prPrepInfo = $0.1
+        }
     }
 
     func stage(_ path: String) {
@@ -32,8 +48,9 @@ final class GitPanelModel: ObservableObject {
 
     func commit() {
         let message = commitMessage
-        perform { (try $0.commit(message: message), try $0.status()) } apply: {
+        perform { (try $0.commit(message: message), try $0.status(), try? $0.prPrep()) } apply: {
             self.status = $0.1
+            self.prPrepInfo = $0.2
             self.commitMessage = ""
             ToastCenter.shared.show("Committed \($0.0.prefix(7))", style: .success)
         }
@@ -66,6 +83,60 @@ final class GitPanelModel: ObservableObject {
         }
     }
 
+    /// One-click "committed work → pushed branch + opened PR". Runs the whole
+    /// sequence off the main actor in a single `perform`: fork a branch when on
+    /// the default branch, capture the PR title/body from the ahead commits
+    /// (before the push sets an upstream that would empty that range), push
+    /// (-u the first time), then either `gh pr create` or — when gh is missing —
+    /// resolve a browser compare URL. The apply step reports the result and
+    /// refreshes branch/ahead state (the branch may have changed).
+    func createPR(branchName rawName: String) {
+        prState = nil
+        prURL = nil
+        let branchName = rawName.trimmingCharacters(in: .whitespaces)
+        perform { service -> PROutcome in
+            let prep = try service.prPrep()
+            if prep.isDefaultBranch {
+                guard !branchName.isEmpty else {
+                    throw GitService.GitError.commandFailed("Enter a branch name for the pull request.")
+                }
+                try service.createBranchFromHead(named: branchName)
+            }
+            let subjects = try service.aheadSubjects()
+            let title = subjects.first ?? "Kaisola changes"
+            let body = subjects.isEmpty
+                ? "Opened from Kaisola."
+                : subjects.map { "- \($0)" }.joined(separator: "\n")
+
+            let hasUpstream = (try? service.prPrep().hasUpstream) ?? false
+            try service.pushCurrentBranch(setUpstream: !hasUpstream)
+
+            let result: PRResult
+            if GitService.ghAvailable() {
+                result = .created(url: try service.createPullRequest(title: title, body: body))
+            } else if let compare = try service.compareURL() {
+                result = .compare(url: compare)
+            } else {
+                throw GitService.GitError.commandFailed("Install the GitHub CLI (gh) or add a GitHub origin remote to open a pull request.")
+            }
+            return PROutcome(result: result, status: try service.status(), prep: try? service.prPrep())
+        } apply: { outcome in
+            self.status = outcome.status
+            self.prPrepInfo = outcome.prep
+            switch outcome.result {
+            case let .created(url):
+                self.prURL = url
+                self.prState = "Pull request opened."
+                ToastCenter.shared.show("Pull request opened", style: .success)
+            case let .compare(url):
+                self.prURL = url
+                self.prState = "gh not installed — opened a compare page in your browser."
+                if let target = URL(string: url) { _ = NSWorkspace.shared.open(target) }
+                ToastCenter.shared.show("Opened compare page in browser", style: .info)
+            }
+        }
+    }
+
     /// Run a git operation off the main actor (git blocks), then apply its
     /// Sendable result back on the main actor. GitService and Status are
     /// Sendable, so nothing unsafe crosses the boundary.
@@ -89,9 +160,24 @@ final class GitPanelModel: ObservableObject {
     }
 }
 
+/// The terminal outcome of a one-click Create-PR run, carried back across the
+/// actor boundary with a fresh status/prep snapshot so the panel updates in one
+/// step.
+private struct PROutcome: Sendable {
+    let result: PRResult
+    let status: GitService.Status
+    let prep: GitService.PRPrep?
+}
+
+private enum PRResult: Sendable {
+    case created(url: String)   // gh opened a real pull request
+    case compare(url: String)   // gh missing — a browser compare page instead
+}
+
 struct GitPanelView: View {
     @StateObject private var model: GitPanelModel
     @State private var restoreCandidate: String?
+    @State private var prBranchName = "kaisola/pr-branch"
 
     init(repoRoot: URL) {
         _model = StateObject(wrappedValue: GitPanelModel(repoRoot: repoRoot))
@@ -146,6 +232,7 @@ struct GitPanelView: View {
             VStack(spacing: 0) {
                 ContentUnavailableView("Working tree clean", systemImage: "checkmark.seal")
                 logSection
+                prSection
             }
         } else {
             ScrollView {
@@ -154,6 +241,7 @@ struct GitPanelView: View {
                     fileSection("Changes", status.unstaged.map { ($0.path, $0.code) }, action: "Stage", staged: false, restorable: true) { model.stage($0) }
                     fileSection("Untracked", status.untracked.map { ($0, "?") }, action: "Stage", staged: false) { model.stage($0) }
                     logSection
+                    prSection
                 }
                 .padding(12)
             }
@@ -190,6 +278,75 @@ struct GitPanelView: View {
             }
         }
         .padding(.horizontal, model.status?.isClean == true ? 12 : 0)
+    }
+
+    /// One-click Create-PR: the current branch + ahead count, a new-branch field
+    /// when sitting on the default branch, and the button that pushes and opens
+    /// the PR (or a browser compare page when gh is absent). The result URL is a
+    /// tappable Link.
+    @ViewBuilder
+    private var prSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Create PR")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 10)
+
+            if let prep = model.prPrepInfo {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.triangle.branch").font(.caption2).foregroundStyle(.secondary)
+                    Text(prep.branch).font(.caption.monospaced())
+                    if prep.aheadCount > 0 {
+                        Text("· \(prep.aheadCount) ahead").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("· nothing to push").font(.caption).foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                }
+
+                if prep.isDefaultBranch {
+                    Text("On \(prep.branch) — a new branch is created for the PR.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    TextField("Branch name", text: $prBranchName)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+                }
+            }
+
+            Button {
+                model.createPR(branchName: prBranchName)
+            } label: {
+                Label("Push & Create PR", systemImage: "arrow.up.forward.square")
+                    .font(.caption)
+            }
+            .disabled(createPRDisabled)
+
+            if let url = model.prURL, let target = URL(string: url) {
+                Link(destination: target) {
+                    Label(url, systemImage: "link")
+                        .font(.caption)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            if let note = model.prState {
+                Text(note).font(.caption2).foregroundStyle(.secondary)
+            }
+            if !model.ghAvailable {
+                Text("GitHub CLI (gh) not found — Create PR opens a browser compare page instead.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, model.status?.isClean == true ? 12 : 0)
+        .padding(.bottom, 10)
+    }
+
+    private var createPRDisabled: Bool {
+        if model.isBusy { return true }
+        guard let prep = model.prPrepInfo else { return true }
+        if prep.isDefaultBranch && prBranchName.trimmingCharacters(in: .whitespaces).isEmpty { return true }
+        return prep.aheadCount == 0
     }
 
     @ViewBuilder
