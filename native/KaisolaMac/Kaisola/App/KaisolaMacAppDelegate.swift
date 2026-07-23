@@ -38,6 +38,7 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         // profile. Broker discovery is explicitly read-only and lives elsewhere.
         try? NativePreviewPaths.prepareApplicationSupport()
         settings.applyAppearance()
+        NotificationBridge.shared.requestAuthorizationIfNeeded()
         installMainMenu()
         _ = makeWindow()
         NSApp.activate(ignoringOtherApps: true)
@@ -185,6 +186,7 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
             frame: NSStringFromRect(window.frame),
             projectName: model.selectedProjectName
         ))
+        ToastCenter.shared.show("Layout saved", style: .success)
     }
 
     @objc private func openSavedWindow(_ sender: Any?) {
@@ -262,7 +264,8 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         let view = SettingsView(
             settings: settings,
             checkForUpdates: { [weak self] in self?.updateController.checkForUpdates(nil) },
-            updateDetail: updateController.availability.detail
+            updateDetail: updateController.availability.detail,
+            workspace: keyModel()?.currentProjectDirectory
         )
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),

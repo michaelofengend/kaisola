@@ -71,6 +71,15 @@ final class NativePreviewSettings: ObservableObject {
     static let terminalFontRange: ClosedRange<Double> = 9...22
     static let terminalFontDefault: Double = 13
 
+    /// Terminal font family ("System Mono" sentinel = SF Mono) and weight.
+    @Published var terminalFontFamily: String {
+        didSet { defaults.set(terminalFontFamily, forKey: Keys.terminalFontFamily) }
+    }
+
+    @Published var terminalFontWeight: String {
+        didSet { defaults.set(terminalFontWeight, forKey: Keys.terminalFontWeight) }
+    }
+
     /// Whether the workspace rail (file tree, ⌘B) is shown.
     @Published var workspaceRailVisible: Bool {
         didSet { defaults.set(workspaceRailVisible, forKey: Keys.workspaceRail) }
@@ -94,7 +103,8 @@ final class NativePreviewSettings: ObservableObject {
 
     /// Environment overlay for agent processes from the account settings.
     var agentEnvironmentOverlay: [String: String] {
-        var env: [String: String] = [:]
+        // API keys join first; the explicit account vars below always win.
+        var env = ApiKeyStore().environmentOverlay()
         let claude = claudeConfigDir.trimmingCharacters(in: .whitespacesAndNewlines)
         if !claude.isEmpty { env["CLAUDE_CONFIG_DIR"] = (claude as NSString).expandingTildeInPath }
         let codex = codexHome.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -108,6 +118,8 @@ final class NativePreviewSettings: ObservableObject {
         static let layout = "navigationLayout"
         static let appearance = "appearanceMode"
         static let terminalFontSize = "terminalFontSize"
+        static let terminalFontFamily = "terminalFontFamily"
+        static let terminalFontWeight = "terminalFontWeight"
         static let workspaceRail = "workspaceRailVisible"
         static let sensitiveGlobs = "sensitiveGlobs"
         static let claudeConfigDir = "claudeConfigDir"
@@ -123,6 +135,8 @@ final class NativePreviewSettings: ObservableObject {
             ? min(max(stored, Self.terminalFontRange.lowerBound), Self.terminalFontRange.upperBound)
             : Self.terminalFontDefault
         workspaceRailVisible = defaults.object(forKey: Keys.workspaceRail) as? Bool ?? false
+        terminalFontFamily = defaults.string(forKey: Keys.terminalFontFamily) ?? TerminalFontOptions.systemMonoSentinel
+        terminalFontWeight = defaults.string(forKey: Keys.terminalFontWeight) ?? "regular"
         sensitiveGlobs = defaults.stringArray(forKey: Keys.sensitiveGlobs) ?? AcpPermissionRules.defaultSensitiveGlobs
         claudeConfigDir = defaults.string(forKey: Keys.claudeConfigDir) ?? ""
         codexHome = defaults.string(forKey: Keys.codexHome) ?? ""

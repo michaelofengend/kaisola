@@ -8,10 +8,22 @@ struct MeshView: View {
     @State private var draft = ""
     @State private var diffColumnID: String?
     @State private var diffText = ""
+    @State private var integrateColumnID: String?
+    @State private var integrationStatus: String?
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let status = integrationStatus {
+                Divider()
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(isConflictStatus(status) ? .orange : .secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 5)
+            }
             Divider()
             if mesh.columns.isEmpty {
                 ProgressView("Starting agents…")
@@ -20,9 +32,11 @@ struct MeshView: View {
                 HStack(spacing: 0) {
                     ForEach(Array(mesh.columns.enumerated()), id: \.element.id) { index, column in
                         if index > 0 { Divider() }
-                        MeshColumnView(column: column) {
-                            diffColumnID = column.id
-                        }
+                        MeshColumnView(
+                            column: column,
+                            showDiff: { diffColumnID = column.id },
+                            integrate: { integrateColumnID = column.id }
+                        )
                     }
                 }
             }
@@ -30,6 +44,19 @@ struct MeshView: View {
             composer
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .confirmationDialog(
+            "Apply this column's diff to the base workspace?",
+            isPresented: Binding(
+                get: { integrateColumnID != nil },
+                set: { if !$0 { integrateColumnID = nil } }
+            ),
+            presenting: integrateColumnID
+        ) { columnID in
+            Button("Apply Diff") { integrate(columnID) }
+            Button("Cancel", role: .cancel) { integrateColumnID = nil }
+        } message: { _ in
+            Text("Grafts this column's edits onto \(mesh.baseDirectory.lastPathComponent) with a 3-way merge. Conflicts leave git markers you'll need to resolve.")
+        }
         .sheet(item: Binding(
             get: { diffColumnID.map(DiffSheetID.init) },
             set: { diffColumnID = $0?.id }
@@ -61,6 +88,14 @@ struct MeshView: View {
         HStack(spacing: 10) {
             Image(systemName: "circle.hexagongrid.fill").foregroundStyle(.purple)
             Text(mesh.title).font(.subheadline.weight(.medium))
+            if let chip = headerChip {
+                Text(chip)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.purple)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.purple.opacity(0.15)))
+            }
             if mesh.anyRunning {
                 ProgressView().controlSize(.small)
             }
@@ -96,8 +131,52 @@ struct MeshView: View {
     }
 
     private func send() {
-        mesh.send(draft)
+        let text = draft
         draft = ""
+        switch (mesh.purpose, mesh.mode) {
+        case (.idea, _): mesh.sendIdea(text)
+        case (.build, .staged): mesh.sendStaged(text)
+        case (.build, .flat): mesh.send(text)
+        }
+    }
+
+    /// The header status chip: the run's purpose plus, when a staged/idea
+    /// pipeline is active, its current phase. Nil for a plain flat build run.
+    private var headerChip: String? {
+        switch mesh.purpose {
+        case .idea:
+            return mesh.stage == "Idle" ? "Idea" : "Idea · \(mesh.stage)"
+        case .build:
+            return mesh.mode == .staged ? "Staged · \(mesh.stage)" : nil
+        }
+    }
+
+    /// Fetch the column's worktree diff and graft it onto the base workspace.
+    /// Success and conflict/error alike surface in the status line under the
+    /// header. Runs on the main actor so the @State write is safe.
+    private func integrate(_ columnID: String) {
+        let name = mesh.columns.first { $0.id == columnID }?.agent.name ?? "column"
+        let base = mesh.baseDirectory
+        Task { @MainActor in
+            let patch = await mesh.diff(for: columnID)
+            guard !patch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                integrationStatus = "\(name): no changes to apply."
+                return
+            }
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try GitService(repoRoot: base).applyPatch(patch)
+                }.value
+                integrationStatus = "Applied \(name)'s diff to \(base.lastPathComponent)."
+            } catch {
+                integrationStatus = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    private func isConflictStatus(_ status: String) -> Bool {
+        status.range(of: "conflict", options: .caseInsensitive) != nil
+            || status.range(of: "marker", options: .caseInsensitive) != nil
     }
 }
 
@@ -106,11 +185,13 @@ struct MeshView: View {
 private struct MeshColumnView: View {
     let column: MeshSession.Column
     let showDiff: () -> Void
+    let integrate: () -> Void
     @ObservedObject private var conversation: AcpConversation
 
-    init(column: MeshSession.Column, showDiff: @escaping () -> Void) {
+    init(column: MeshSession.Column, showDiff: @escaping () -> Void, integrate: @escaping () -> Void) {
         self.column = column
         self.showDiff = showDiff
+        self.integrate = integrate
         self.conversation = column.conversation
     }
 
@@ -128,6 +209,10 @@ private struct MeshColumnView: View {
                         .buttonStyle(.borderless)
                         .font(.caption)
                         .help("This column's isolated worktree diff vs HEAD")
+                    Button("Integrate", action: integrate)
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .help("Apply this column's diff onto the base workspace")
                 }
             }
             .padding(.horizontal, 10)

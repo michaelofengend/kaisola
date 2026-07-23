@@ -151,6 +151,12 @@ struct CommandPaletteView: View {
         items.append(PaletteItem(id: "action.newMesh", title: "New Mesh (all agents)", subtitle: "Action", systemImage: "circle.hexagongrid.fill") {
             RootShellView.promptForNewMesh(model: model)
         })
+        items.append(PaletteItem(id: "action.newStagedMesh", title: "New Staged Mesh (scout → execute)", subtitle: "Action", systemImage: "arrow.triangle.branch") {
+            RootShellView.promptForNewMesh(model: model, staged: true)
+        })
+        items.append(PaletteItem(id: "action.newIdeaMesh", title: "New Idea Mesh (brainstorm)", subtitle: "Action", systemImage: "lightbulb") {
+            RootShellView.promptForNewMesh(model: model, idea: true)
+        })
         items.append(PaletteItem(id: "action.toggleRail", title: "Toggle Workspace Rail", subtitle: "View · ⌘B", systemImage: "sidebar.left") {
             settings.workspaceRailVisible.toggle()
         })

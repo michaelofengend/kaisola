@@ -41,6 +41,7 @@ final class AttentionCenter: ObservableObject {
         ))
         if entries.count > 50 { entries.removeFirst(entries.count - 50) }
         updateBadge()
+        NotificationBridge.shared.post(kind: kind, title: title, detail: detail, targetID: targetID)
     }
 
     /// Clear every entry pointing at a target (called when the user visits it).

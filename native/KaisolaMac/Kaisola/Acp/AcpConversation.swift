@@ -46,6 +46,11 @@ final class AcpConversation: ObservableObject {
     /// Pre-turn working-tree snapshots (git stash create), restorable from the
     /// header. Present only when the workspace is a git repo with changes.
     @Published private(set) var checkpoints: [TurnCheckpoint] = []
+    /// The chat view renders only the last `visibleLimit` rows for performance;
+    /// full history stays in `rows`. Grown by `expandEarlier()` ("Show earlier
+    /// messages"); reset to the default when a new turn starts unless the user
+    /// expanded during that turn. Settable so tests and the view can drive it.
+    @Published var visibleLimit: Int = AcpConversation.defaultVisibleLimit
 
     struct QueuedMessage: Identifiable, Equatable, Sendable {
         let id: String
@@ -62,6 +67,11 @@ final class AcpConversation: ObservableObject {
     /// Reports needs-you moments (permission surfaced, turn finished) so the
     /// owner can decide whether they warrant an inbox entry. Set by AppModel.
     var onAttention: ((AttentionCenter.Kind, _ detail: String) -> Void)?
+    /// Stable per-chat key for persisting the composer draft across relaunches.
+    /// Set by the owner (AppModel passes the chat id) or the `draftKey` init
+    /// parameter. Nil disables persistence: `loadDraft` returns "" and
+    /// `saveDraft` is a no-op.
+    var draftStorageKey: String?
     private let client: AcpClient
     private let command: String
     private let arguments: [String]
@@ -73,6 +83,14 @@ final class AcpConversation: ObservableObject {
     private var turnCounter = 0
     private var queueCounter = 0
 
+    /// Default transcript render window: only the last 120 rows paint until the
+    /// user asks for more. Each "Show earlier" click reveals `expandStep` more.
+    static let defaultVisibleLimit = 120
+    private static let expandStep = 200
+    /// Set when the user expands earlier history during the current turn, so the
+    /// next turn keeps the widened window instead of snapping back to the tail.
+    private var didExpandDuringTurn = false
+
     init(
         title: String,
         command: String,
@@ -82,7 +100,8 @@ final class AcpConversation: ObservableObject {
         mcpServers: [JSONValue] = [],
         client: AcpClient = AcpClient(),
         ruleStore: PermissionRuleStore = PermissionRuleStore(),
-        sensitiveGlobs: [String] = AcpPermissionRules.defaultSensitiveGlobs
+        sensitiveGlobs: [String] = AcpPermissionRules.defaultSensitiveGlobs,
+        draftKey: String? = nil
     ) {
         self.title = title
         self.command = command
@@ -93,6 +112,7 @@ final class AcpConversation: ObservableObject {
         self.client = client
         self.ruleStore = ruleStore
         self.sensitiveGlobs = sensitiveGlobs
+        self.draftStorageKey = draftKey
     }
 
     func start() async {
@@ -169,6 +189,11 @@ final class AcpConversation: ObservableObject {
 
     private func dispatch(_ trimmed: String) {
         turnCounter += 1
+        // A new turn snaps the transcript back to its tail window — unless the
+        // user deliberately expanded earlier history during the turn just ended,
+        // in which case their widened view is preserved for one more turn.
+        if !didExpandDuringTurn { visibleLimit = Self.defaultVisibleLimit }
+        didExpandDuringTurn = false
         let rowID = "\(turnCounter)"
         let turn = turnCounter
         rows.append(.user(id: rowID, text: trimmed, failed: false))
@@ -314,15 +339,76 @@ final class AcpConversation: ObservableObject {
         let workspace = cwd
         Task.detached(priority: .userInitiated) { [weak self] in
             let service = GitService(repoRoot: URL(fileURLWithPath: workspace, isDirectory: true))
-            let message: String?
+            let outcome: Result<Void, any Error>
             do {
                 try service.applyCheckpoint(id)
-                message = "Checkpoint restored."
+                outcome = .success(())
             } catch {
-                message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                outcome = .failure(error)
             }
-            await MainActor.run { [weak self] in self?.statusMessage = message }
+            await MainActor.run { [weak self] in
+                switch outcome {
+                case .success:
+                    ToastCenter.shared.show("Checkpoint restored.", style: .success)
+                case let .failure(error):
+                    self?.statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            }
         }
+    }
+
+    // MARK: - Transcript paging
+
+    /// The tail of `rows` the chat view actually renders — the last
+    /// `visibleLimit` rows. Full history is always kept in `rows`; only the
+    /// rendered window is bounded so long chats stay smooth.
+    var visibleRows: [AcpTranscriptRow] {
+        rows.count > visibleLimit ? Array(rows.suffix(visibleLimit)) : rows
+    }
+
+    /// How many earlier rows sit hidden above the rendered window — the count
+    /// shown in the "Show earlier messages" button (0 hides the button).
+    var hiddenEarlierCount: Int {
+        max(0, rows.count - visibleLimit)
+    }
+
+    /// Reveal `expandStep` (200) more earlier rows. Flags the current turn as
+    /// user-expanded so the next turn won't snap the window back to the tail.
+    func expandEarlier() {
+        didExpandDuringTurn = true
+        visibleLimit += Self.expandStep
+    }
+
+    // MARK: - Persistent draft
+
+    private var draftDefaultsKey: String? {
+        draftStorageKey.map { "chatDraft.\($0)" }
+    }
+
+    /// The composer draft persisted for this chat, or "" when none exists or the
+    /// chat is unkeyed.
+    func loadDraft() -> String {
+        guard let key = draftDefaultsKey else { return "" }
+        return UserDefaults.standard.string(forKey: key) ?? ""
+    }
+
+    /// Persist the composer draft for this chat, or clear it (remove the key)
+    /// when empty. No-op for an unkeyed chat.
+    func saveDraft(_ text: String) {
+        guard let key = draftDefaultsKey else { return }
+        if text.isEmpty {
+            UserDefaults.standard.removeObject(forKey: key)
+        } else {
+            UserDefaults.standard.set(text, forKey: key)
+        }
+    }
+
+    // MARK: - Test hooks
+
+    /// Test-only: replace the transcript wholesale so paging math can be
+    /// exercised without driving a live turn. Not called by production code.
+    func seedRowsForTesting(_ newRows: [AcpTranscriptRow]) {
+        rows = newRows
     }
 
     // MARK: - Stream accumulation

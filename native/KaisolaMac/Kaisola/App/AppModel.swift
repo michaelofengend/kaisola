@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 
 @MainActor
@@ -56,6 +57,12 @@ final class AppModel: ObservableObject {
     /// A file opened from the workspace rail / palette; non-nil replaces the
     /// detail pane with the preview/editor until closed.
     @Published var previewedFileURL: URL?
+    /// Line target for the previewed file (from a terminal :LINE citation);
+    /// retained for a future editor scroll.
+    @Published var previewedFileLine: Int?
+    /// A local dev-server URL opened as an in-app browser card (Electron
+    /// parity); non-nil raises a BrowserCardView in the detail pane.
+    @Published var browserCardURL: URL?
 
     private let brokerPreparer: any BrokerInfoPreparing
     private let client: any ObserveOnlyBrokerServing
@@ -104,6 +111,8 @@ final class AppModel: ObservableObject {
         self.jitter = jitter
     }
 
+    /// Keeps the per-chat usage observers alive for this window's lifetime.
+    private var usageObservers = Set<AnyCancellable>()
     /// The separate native-profile broker used when Electron's is incompatible.
     private let fallbackPreparer: (any BrokerInfoPreparing)?
     /// True when this window is connected to the app's own separate broker
@@ -132,9 +141,10 @@ final class AppModel: ObservableObject {
             uniquingKeysWith: { first, _ in first }
         )
         let sessionsByProject = Dictionary(grouping: sessions, by: \.projectID)
+        let pins = SessionPinStore().pins()
 
         func group(for id: String) -> ProjectGroup {
-            let sessions = (sessionsByProject[id] ?? []).sorted { $0.title < $1.title }
+            let sessions = AppModel.pinnedOrder(sessionsByProject[id] ?? [], pinned: pins)
             let name = openedByID[id]?.name
                 ?? ownedByID[id].map { ($0.cwd as NSString).lastPathComponent }
                 ?? id
@@ -166,6 +176,11 @@ final class AppModel: ObservableObject {
 
     func moveProject(id: String, delta: Int) {
         sessionStore.moveProject(id: id, delta: delta)
+        objectWillChange.send()
+    }
+
+    func moveProject(id: String, toIndex: Int) {
+        sessionStore.moveProject(id: id, toIndex: toIndex)
         objectWillChange.send()
     }
 
@@ -248,6 +263,7 @@ final class AppModel: ObservableObject {
     func openChat(_ agent: AgentProfile, inDirectory directory: URL) {
         guard let adapter = AcpAdapter.forAgent(agent.id) else { return }
         let chatID = "chat-\(UUID().uuidString.lowercased().prefix(8))"
+        let mcp = McpConfigStore(workspace: directory).servers()
         let conversation = AcpConversation(
             title: "\(agent.name) · \((directory.path as NSString).lastPathComponent)",
             command: adapter.command,
@@ -256,8 +272,26 @@ final class AppModel: ObservableObject {
                 NativePreviewSettings.shared.agentEnvironmentOverlay
             ) { _, custom in custom },
             cwd: directory.path,
-            sensitiveGlobs: NativePreviewSettings.shared.sensitiveGlobs
+            mcpServers: McpConfigStore.jsonValues(mcp),
+            sensitiveGlobs: NativePreviewSettings.shared.sensitiveGlobs,
+            draftKey: "\(agent.id)|\(directory.path)"
         )
+        // Fan this chat's live context usage into the session-wide UsageCenter.
+        let usageTitle = conversation.title
+        conversation.$usage
+            .compactMap { $0 }
+            .sink { usage in
+                UsageCenter.shared.record(
+                    chatID: chatID, title: usageTitle, agentID: agent.id,
+                    usage: usage.used, max: usage.max
+                )
+            }
+            .store(in: &usageObservers)
+        conversation.$isRunning
+            .scan((false, false)) { ($0.1, $1) }
+            .filter { $0.0 && !$0.1 }
+            .sink { _ in UsageCenter.shared.recordTurn(chatID: chatID) }
+            .store(in: &usageObservers)
         // Needs-you moments land in the inbox only when the chat isn't the
         // focused surface (or the app is in the background).
         let title = conversation.title
@@ -295,11 +329,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var meshes: [MeshSession] = []
     @Published var selectedMeshID: String?
 
-    /// Start a Mesh in a directory with every ACP-capable agent (v1 roster).
-    func openMesh(inDirectory directory: URL) {
+    /// Start a Mesh in a directory with every ACP-capable agent. `staged`
+    /// runs the scout→execute pipeline; `idea` runs the read-only brainstorm.
+    func openMesh(inDirectory directory: URL, staged: Bool = false, idea: Bool = false) {
         let agents = AgentRegistry.all.filter { AcpAdapter.forAgent($0.id) != nil }
         guard !agents.isEmpty else { return }
-        let mesh = MeshSession(baseDirectory: directory)
+        let mesh = MeshSession(
+            baseDirectory: directory,
+            mode: staged ? .staged : .flat,
+            purpose: idea ? .idea : .build
+        )
         meshes.append(mesh)
         selectedMeshID = mesh.id
         selectedChatID = nil
@@ -549,6 +588,24 @@ final class AppModel: ObservableObject {
         objectWillChange.send()
     }
 
+    /// A live OSC title from an owned session's terminal (SwiftTerm's
+    /// setTerminalTitle). Auto-names the session unless the user renamed it.
+    func applyAutoTitle(_ rawTitle: String, to terminalID: String) {
+        guard isOwned(terminalID),
+              let stored = sessionStore.sessions().first(where: { $0.id == terminalID }) else { return }
+        let agentName = agentProfile(for: terminalID)?.name
+        let folder = (stored.cwd as NSString).lastPathComponent
+        guard let auto = SessionTitleTracker.autoTitle(fromOSC: rawTitle, agentName: agentName, folder: folder) else { return }
+        let defaultTitle = agentName.map { "\($0) · \(folder)" } ?? folder
+        guard SessionTitleTracker.shouldApply(
+            autoTitle: auto,
+            currentTitle: stored.title,
+            userRenamed: sessionStore.hasCustomTitle(terminalID, defaultTitle: defaultTitle)
+        ) else { return }
+        sessionStore.applyAutoTitle(auto, terminalID: terminalID)
+        objectWillChange.send()
+    }
+
     /// Keyboard bytes from an owned session's surface. Ownership is re-checked
     /// here so no UI wiring mistake can ever write to an observed terminal. For
     /// an agent session, a submitted line (carriage return) opens an agent
@@ -614,6 +671,29 @@ final class AppModel: ObservableObject {
             sessions = status.terminals
         }
         refreshBranches()
+        refreshMeta()
+    }
+
+    /// Process-name + listening-port meta per OWNED session (Electron's meta
+    /// poller), refreshed on a TTL so the inventory tick stays cheap.
+    @Published private(set) var metaByTerminalID: [String: TerminalMeta] = [:]
+    private var lastMetaScan = Date.distantPast
+
+    func meta(for terminalID: String) -> TerminalMeta? { metaByTerminalID[terminalID] }
+
+    private func refreshMeta() {
+        guard Date().timeIntervalSince(lastMetaScan) > 5 else { return }
+        lastMetaScan = Date()
+        let owned: [(String, Int32)] = sessions.compactMap {
+            guard ownedTerminalIDs.contains($0.id), !$0.exited, let pid = $0.pid else { return nil }
+            return ($0.id, pid)
+        }
+        Task.detached(priority: .utility) { [weak self] in
+            var out: [String: TerminalMeta] = [:]
+            for (id, pid) in owned { out[id] = TerminalMetaService.collect(pid: pid) }
+            let collected = out
+            await MainActor.run { [weak self] in self?.metaByTerminalID = collected }
+        }
     }
 
     /// Git branch per owned-session folder (session-row meta), refreshed on a

@@ -24,7 +24,13 @@ struct AcpChatView: View {
             Divider()
             composer
         }
-        .task { await conversation.start() }
+        .task {
+            draft = conversation.loadDraft()
+            await conversation.start()
+        }
+        .onChange(of: draft) { _, newValue in
+            conversation.saveDraft(newValue)
+        }
     }
 
     private var header: some View {
@@ -129,7 +135,19 @@ struct AcpChatView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    ForEach(conversation.rows) { row in
+                    if conversation.hiddenEarlierCount > 0 {
+                        Button {
+                            conversation.expandEarlier()
+                        } label: {
+                            Label("Show earlier messages (\(conversation.hiddenEarlierCount) more)", systemImage: "chevron.up")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 4)
+                        .help("Render 200 more earlier messages (full history is always kept)")
+                    }
+                    ForEach(conversation.visibleRows) { row in
                         TranscriptRowView(
                             row: row,
                             retry: { conversation.retryFailed($0) },

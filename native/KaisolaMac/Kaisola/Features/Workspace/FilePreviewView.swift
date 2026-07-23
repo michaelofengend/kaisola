@@ -215,8 +215,10 @@ struct FilePreviewView: View {
             try draft.write(to: displayedURL ?? url, atomically: true, encoding: .utf8)
             savedText = draft
             saveError = nil
+            ToastCenter.shared.show("Saved \((displayedURL ?? url).lastPathComponent)", style: .success)
         } catch {
             saveError = error.localizedDescription
+            ToastCenter.shared.show(error.localizedDescription, style: .error)
         }
     }
 

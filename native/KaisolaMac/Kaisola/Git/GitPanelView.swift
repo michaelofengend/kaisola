@@ -32,9 +32,10 @@ final class GitPanelModel: ObservableObject {
 
     func commit() {
         let message = commitMessage
-        perform { _ = try $0.commit(message: message); return try $0.status() } apply: {
-            self.status = $0
+        perform { (try $0.commit(message: message), try $0.status()) } apply: {
+            self.status = $0.1
             self.commitMessage = ""
+            ToastCenter.shared.show("Committed \($0.0.prefix(7))", style: .success)
         }
     }
 

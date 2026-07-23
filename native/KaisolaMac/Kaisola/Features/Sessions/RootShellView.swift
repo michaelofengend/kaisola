@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 struct RootShellView: View {
@@ -10,6 +11,8 @@ struct RootShellView: View {
     @State private var renameText: String = ""
     @State private var gitRepo: URL?
     @State private var showPalette = false
+    @State private var showOmniBar = false
+    @State private var showOnboarding = false
     /// A Close Mesh request whose worktrees still hold uncommitted changes.
     @State private var meshCloseConfirm: (id: String, dirty: Int)?
 
@@ -38,6 +41,38 @@ struct RootShellView: View {
     }
 
     var body: some View {
+        chromeDecorated
+            .onReceive(NotificationCenter.default.publisher(for: .kaisolaOpenFileLink)) { note in
+                guard let url = note.userInfo?["url"] as? URL else { return }
+                model.previewedFileLine = note.userInfo?["line"] as? Int
+                model.previewedFileURL = url
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .kaisolaOpenBrowserCard)) { note in
+                guard let url = note.object as? URL else { return }
+                model.previewedFileURL = nil
+                model.selectedMeshID = nil
+                model.browserCardURL = url
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .kaisolaAttentionJump)) { note in
+                if let targetID = note.userInfo?[NotificationBridge.targetIDKey] as? String {
+                    model.jumpToAttentionTarget(targetID)
+                }
+            }
+            .onAppear {
+                if OnboardingState.shouldShow() { showOnboarding = true }
+            }
+            .sheet(isPresented: $showOnboarding) {
+                OnboardingView {
+                    OnboardingState.markSeen()
+                    showOnboarding = false
+                }
+                .frame(width: 640, height: 460)
+            }
+    }
+
+    /// The layout plus its sheets — split from `body` so the modifier chain
+    /// stays within the type-checker's budget.
+    private var sheeted: some View {
         Group {
             switch settings.navigationLayout {
             case .leftTree: leftTreeLayout
@@ -77,6 +112,11 @@ struct RootShellView: View {
                     .frame(width: 520, height: 460)
             }
         }
+    }
+
+    /// Shortcuts, overlays, toasts, and the Mesh-close dialog over `sheeted`.
+    private var chromeDecorated: some View {
+        sheeted
         .background(
             Group {
                 Button(action: { showPalette.toggle() }) { EmptyView() }
@@ -85,6 +125,9 @@ struct RootShellView: View {
                 Button(action: { settings.workspaceRailVisible.toggle() }) { EmptyView() }
                     .keyboardShortcut("b", modifiers: .command)
                     .accessibilityLabel("Toggle Workspace Rail")
+                Button(action: { showOmniBar.toggle() }) { EmptyView() }
+                    .keyboardShortcut("l", modifiers: .command)
+                    .accessibilityLabel("Message Current Agent")
             }
         )
         .overlay {
@@ -98,7 +141,18 @@ struct RootShellView: View {
                 }
                 .transition(.opacity)
             }
+            if showOmniBar {
+                ZStack(alignment: .top) {
+                    Color.black.opacity(0.18)
+                        .ignoresSafeArea()
+                        .onTapGesture { showOmniBar = false }
+                    OmniBarView(model: model, isPresented: $showOmniBar)
+                        .padding(.top, 72)
+                }
+                .transition(.opacity)
+            }
         }
+        .overlay { ToastOverlayView() }
         .confirmationDialog(
             "Close Mesh?",
             isPresented: Binding(get: { meshCloseConfirm != nil }, set: { if !$0 { meshCloseConfirm = nil } })
@@ -183,12 +237,13 @@ struct RootShellView: View {
     /// "Top bar" mode).
     private var topBarLayout: some View {
         VStack(spacing: 0) {
-            ProjectTabStrip(
+            ProjectTabStripView(
                 projects: model.projects,
                 chatCount: model.chats.count,
                 selected: activeProjectBinding,
                 menu: { project in AnyView(self.projectContextMenu(project)) },
-                openFolder: { RootShellView.promptForOpenFolder(model: model) }
+                openFolder: { RootShellView.promptForOpenFolder(model: model) },
+                reorder: { model.moveProject(id: $0, toIndex: $1) }
             )
             Divider()
             SessionStrip(
@@ -263,12 +318,19 @@ struct RootShellView: View {
             session: session,
             owned: model.isOwned(session.id),
             agent: model.agentProfile(for: session.id),
-            branch: model.branch(for: session.id)
+            branch: model.branch(for: session.id),
+            meta: model.meta(for: session.id)
         )
         .tag(Optional(session.id))
         .contextMenu {
             Button("Open in New Window") {
                 KaisolaMacAppDelegate.popOut(sessionID: session.id)
+            }
+            Button {
+                model.togglePin(session.id)
+            } label: {
+                Label(model.isPinned(session.id) ? "Unpin" : "Pin",
+                      systemImage: model.isPinned(session.id) ? "pin.slash" : "pin")
             }
             if session.id != model.selectedSessionID,
                model.splitDocuments[session.id] == nil,
@@ -333,7 +395,9 @@ struct RootShellView: View {
             newAgent: { agent in RootShellView.promptForNewAgent(agent, model: model) },
             newChat: { agent in RootShellView.promptForNewChat(agent, model: model) },
             jumpToAttention: { model.jumpToAttentionTarget($0) },
-            newMesh: { RootShellView.promptForNewMesh(model: model) }
+            newMesh: { RootShellView.promptForNewMesh(model: model) },
+            newStagedMesh: { RootShellView.promptForNewMesh(model: model, staged: true) },
+            newIdeaMesh: { RootShellView.promptForNewMesh(model: model, idea: true) }
         )
     }
 
@@ -375,10 +439,10 @@ struct RootShellView: View {
     /// New Mesh in the active project (or a picked folder): every ACP-capable
     /// agent, each in an isolated worktree when the folder is a git repo.
     @MainActor
-    static func promptForNewMesh(model: AppModel) {
+    static func promptForNewMesh(model: AppModel, staged: Bool = false, idea: Bool = false) {
         guard let directory = model.currentProjectDirectory
             ?? chooseDirectory(prompt: "Run Mesh Here", startingAt: model.currentProjectDirectory) else { return }
-        model.openMesh(inDirectory: directory)
+        model.openMesh(inDirectory: directory, staged: staged, idea: idea)
     }
 
     @MainActor
@@ -524,6 +588,8 @@ struct RootShellView: View {
                 endOffset: model.terminalDocument.cursor?.offset,
                 isOwned: owned,
                 fontSize: settings.terminalFontSize,
+                fontFamily: settings.terminalFontFamily,
+                fontWeight: settings.terminalFontWeight,
                 lightSurface: colorScheme == .light,
                 onInput: owned ? { data in
                     guard let sessionID else { return }
@@ -532,6 +598,10 @@ struct RootShellView: View {
                 onResize: owned ? { columns, rows in
                     guard let sessionID else { return }
                     model.resizeTerminal(sessionID, columns: columns, rows: rows)
+                } : nil,
+                onTitleChange: owned ? { title in
+                    guard let sessionID else { return }
+                    model.applyAutoTitle(title, to: sessionID)
                 } : nil
             )
             .id("\(sessionID ?? "none")-\(owned)")
@@ -557,9 +627,12 @@ struct RootShellView: View {
                 endOffset: document.cursor?.offset,
                 isOwned: owned,
                 fontSize: settings.terminalFontSize,
+                fontFamily: settings.terminalFontFamily,
+                fontWeight: settings.terminalFontWeight,
                 lightSurface: colorScheme == .light,
                 onInput: owned ? { data in model.sendInput(data, to: splitID) } : nil,
-                onResize: owned ? { columns, rows in model.resizeTerminal(splitID, columns: columns, rows: rows) } : nil
+                onResize: owned ? { columns, rows in model.resizeTerminal(splitID, columns: columns, rows: rows) } : nil,
+                onTitleChange: owned ? { title in model.applyAutoTitle(title, to: splitID) } : nil
             )
             .id("split-\(splitID)-\(owned)")
         }
@@ -749,6 +822,7 @@ private struct SessionRow: View {
     let owned: Bool
     let agent: AgentProfile?
     var branch: String?
+    var meta: TerminalMeta?
 
     var body: some View {
         HStack(spacing: 9) {
@@ -802,6 +876,10 @@ private struct SessionRow: View {
             detail = owned ? liveDetail : "\(liveDetail) · observed"
         }
         if let branch, !session.exited { detail += " · ⎇ \(branch)" }
+        if let meta, !session.exited {
+            if let name = meta.processName { detail += " · \(name)" }
+            if !meta.ports.isEmpty { detail += " · :" + meta.ports.map(String.init).joined(separator: ",") }
+        }
         return detail
     }
 
@@ -820,6 +898,10 @@ private struct ConnectionFooter: View {
     let newChat: (AgentProfile) -> Void
     var jumpToAttention: ((String) -> Void)?
     var newMesh: (() -> Void)?
+    var newStagedMesh: (() -> Void)?
+    var newIdeaMesh: (() -> Void)?
+
+    @ObservedObject private var usage = UsageCenter.shared
 
     @ObservedObject private var attention = AttentionCenter.shared
     @State private var showInbox = false
@@ -846,15 +928,27 @@ private struct ConnectionFooter: View {
                 }
             }
             Spacer()
-            if let newMesh {
-                Button {
-                    newMesh()
-                } label: {
-                    Image(systemName: "circle.hexagongrid.fill")
-                        .foregroundStyle(.purple)
+            if usage.totalPeakTokens > 0 {
+                HStack(spacing: 4) {
+                    Image(systemName: "gauge.with.dots.needle.bottom.50percent")
+                    Text("\(usage.totalPeakTokens / 1000)k").monospacedDigit()
+                    Text("· \(Int((usage.contextPressure * 100).rounded()))%")
+                        .foregroundStyle(usage.contextPressure >= 0.85 ? .orange : .secondary)
                 }
-                .buttonStyle(.borderless)
-                .help("New Mesh — fan a prompt out to every agent, each in an isolated worktree")
+                .font(.caption)
+                .help("Session tokens (peak) · highest context pressure")
+            }
+            if newMesh != nil || newStagedMesh != nil || newIdeaMesh != nil {
+                Menu {
+                    if let newMesh { Button("New Mesh (all agents)", action: newMesh) }
+                    if let newStagedMesh { Button("New Staged Mesh (scout → execute)", action: newStagedMesh) }
+                    if let newIdeaMesh { Button("New Idea Mesh (brainstorm)", action: newIdeaMesh) }
+                } label: {
+                    Image(systemName: "circle.hexagongrid.fill").foregroundStyle(.purple)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("New Mesh — flat, staged, or idea")
             }
             if attention.count > 0 {
                 Button {

@@ -3,18 +3,29 @@ import SwiftUI
 /// The native Settings window (⌘,): General, Terminal, Guardrails, Agents.
 struct SettingsView: View {
     @ObservedObject var settings: NativePreviewSettings
+    /// Monospace families are enumerated once — probing every installed font
+    /// per body evaluation is too slow.
+    @State private var fontFamilies = TerminalFontOptions.availableMonospaceFamilies()
     /// Update affordance from the app delegate (Sparkle).
     var checkForUpdates: (() -> Void)?
     var updateDetail: String?
+    /// The key window's active project (feeds workspace-scoped tabs like MCP).
+    var workspace: URL?
 
     var body: some View {
         TabView {
             general.tabItem { Label("General", systemImage: "gearshape") }
             terminal.tabItem { Label("Terminal", systemImage: "terminal") }
             guardrails.tabItem { Label("Guardrails", systemImage: "shield.lefthalf.filled") }
+            McpSettingsTab(workspace: workspace)
+                .tabItem { Label("MCP", systemImage: "puzzlepiece.extension") }
             agents.tabItem { Label("Agents", systemImage: "sparkles") }
+            ApiKeysSettingsTab()
+                .tabItem { Label("Models & keys", systemImage: "key") }
+            UsageSettingsTab()
+                .tabItem { Label("Usage", systemImage: "gauge.with.dots.needle.bottom.50percent") }
         }
-        .frame(width: 560, height: 420)
+        .frame(width: 620, height: 460)
     }
 
     private var general: some View {
@@ -29,6 +40,12 @@ struct SettingsView: View {
                     Text(mode.title).tag(mode)
                 }
             }
+            Toggle("Native notifications", isOn: Binding(
+                get: { NotificationBridge.shared.enabled },
+                set: { NotificationBridge.shared.enabled = $0 }
+            ))
+            Text("When Kaisola is in the background, needs-you moments post a system notification. Click it to jump back.")
+                .font(.caption).foregroundStyle(.secondary)
             LabeledContent("Updates") {
                 VStack(alignment: .trailing, spacing: 4) {
                     Button("Check for Updates…") { checkForUpdates?() }
@@ -58,6 +75,12 @@ struct SettingsView: View {
                         .frame(width: 44, alignment: .trailing)
                     Button("Reset") { settings.resetTerminalFont() }
                 }
+            }
+            Picker("Font family", selection: $settings.terminalFontFamily) {
+                ForEach(fontFamilies, id: \.self) { Text($0).tag($0) }
+            }
+            Picker("Weight", selection: $settings.terminalFontWeight) {
+                ForEach(TerminalFontOptions.weightChoices, id: \.raw) { Text($0.title).tag($0.raw) }
             }
             LabeledContent("Palette") {
                 Text("Terminals follow the app appearance: ink on dark, paper on light (Electron parity).")
