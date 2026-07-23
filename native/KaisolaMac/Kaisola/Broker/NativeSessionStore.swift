@@ -24,6 +24,15 @@ struct NativeOwnedSession: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// An explicitly-opened project tab: a folder the user opened as a workspace,
+/// which persists even with no live sessions and carries a custom name.
+struct OpenProject: Codable, Equatable, Identifiable, Sendable {
+    let id: String
+    let path: String
+    var name: String
+    let createdAt: Int64
+}
+
 /// Persists the app's broker owner identity and its owned-terminal registry in
 /// the native application-support directory (never Electron's). Writes are
 /// atomic; a corrupt file degrades to an empty registry rather than a crash.
@@ -31,6 +40,7 @@ struct NativeSessionStore: Sendable {
     private struct Payload: Codable {
         var ownerID: String
         var sessions: [NativeOwnedSession]
+        var projects: [OpenProject]?
     }
 
     let fileURL: URL
@@ -54,6 +64,46 @@ struct NativeSessionStore: Sendable {
 
     func sessions() -> [NativeOwnedSession] {
         read()?.sessions ?? []
+    }
+
+    // MARK: - Opened project tabs
+
+    func projects() -> [OpenProject] {
+        read()?.projects ?? []
+    }
+
+    /// Add a project tab for a directory (idempotent by projectID). Returns the
+    /// project so the caller can select it.
+    @discardableResult
+    func openProject(directory path: String) -> OpenProject {
+        let id = Self.projectID(forDirectory: path)
+        var payload = read() ?? Payload(ownerID: ownerID(), sessions: [], projects: [])
+        var projects = payload.projects ?? []
+        if let existing = projects.first(where: { $0.id == id }) { return existing }
+        let project = OpenProject(
+            id: id,
+            path: (path as NSString).standardizingPath,
+            name: (path as NSString).lastPathComponent,
+            createdAt: Int64(Date().timeIntervalSince1970 * 1_000)
+        )
+        projects.append(project)
+        payload.projects = projects
+        write(payload)
+        return project
+    }
+
+    func renameProject(id: String, name: String) {
+        guard var payload = read(), var projects = payload.projects,
+              let index = projects.firstIndex(where: { $0.id == id }) else { return }
+        projects[index].name = name
+        payload.projects = projects
+        write(payload)
+    }
+
+    func closeProject(id: String) {
+        guard var payload = read() else { return }
+        payload.projects?.removeAll { $0.id == id }
+        write(payload)
     }
 
     func owns(terminalID: String) -> Bool {

@@ -95,19 +95,64 @@ final class AppModel: ObservableObject {
         self.jitter = jitter
     }
 
-    var projects: [(name: String, sessions: [BrokerTerminalRecord])] {
-        let ownedNames = Dictionary(
-            uniqueKeysWithValues: sessionStore.sessions().map {
-                ($0.projectID, ($0.cwd as NSString).lastPathComponent)
-            }
+    /// A project grouping for the sidebar/tabs: a stable id, a display name,
+    /// its optional local directory, and its live sessions. Explicitly-opened
+    /// project tabs appear even with no sessions.
+    struct ProjectGroup: Identifiable, Equatable {
+        let id: String
+        let name: String
+        let directory: URL?
+        let sessions: [BrokerTerminalRecord]
+    }
+
+    var projects: [ProjectGroup] {
+        let opened = sessionStore.projects()
+        let openedByID = Dictionary(uniqueKeysWithValues: opened.map { ($0.id, $0) })
+        let ownedByID = Dictionary(
+            sessionStore.sessions().map { ($0.projectID, $0) },
+            uniquingKeysWith: { first, _ in first }
         )
-        return Dictionary(grouping: sessions, by: \.projectID)
-            .map { (name: ownedNames[$0.key] ?? $0.key, sessions: $0.value.sorted { $0.title < $1.title }) }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let sessionsByProject = Dictionary(grouping: sessions, by: \.projectID)
+
+        // Every project id we know about: opened tabs ∪ projects with sessions.
+        let allIDs = Set(opened.map(\.id)).union(sessionsByProject.keys)
+        return allIDs.map { id -> ProjectGroup in
+            let sessions = (sessionsByProject[id] ?? []).sorted { $0.title < $1.title }
+            let name = openedByID[id]?.name
+                ?? ownedByID[id].map { ($0.cwd as NSString).lastPathComponent }
+                ?? id
+            let directory = openedByID[id].map { URL(fileURLWithPath: $0.path) }
+                ?? ownedByID[id].map { URL(fileURLWithPath: $0.cwd) }
+            return ProjectGroup(id: id, name: name, directory: directory, sessions: sessions)
+        }
+        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     func isOwned(_ terminalID: String) -> Bool {
         ownedTerminalIDs.contains(terminalID)
+    }
+
+    // MARK: - Project tabs
+
+    /// Open a folder as a project tab (persists even with no sessions).
+    func openProject(directory: URL) {
+        let project = sessionStore.openProject(directory: directory.path)
+        selectedProjectName = project.name
+        objectWillChange.send()
+    }
+
+    func renameProject(id: String, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        sessionStore.renameProject(id: id, name: trimmed)
+        objectWillChange.send()
+    }
+
+    /// Close a project tab. Its live sessions keep running on the broker; this
+    /// just removes the tab from the persisted list.
+    func closeProject(id: String) {
+        sessionStore.closeProject(id: id)
+        objectWillChange.send()
     }
 
     /// The working directory of an owned session (for the Git panel). Observed
@@ -294,6 +339,8 @@ final class AppModel: ObservableObject {
                 createdAt: Int64(Date().timeIntervalSince1970 * 1_000),
                 agentID: agent?.id
             ))
+            // Ensure the session's folder is a persistent project tab.
+            sessionStore.openProject(directory: cwd)
             ownedTerminalIDs.insert(terminalID)
             await refreshInventory()
             selectedSessionID = terminalID

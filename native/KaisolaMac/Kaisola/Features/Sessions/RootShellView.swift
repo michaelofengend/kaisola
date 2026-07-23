@@ -5,6 +5,7 @@ struct RootShellView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var settings: NativePreviewSettings
     @State private var renameTarget: String?
+    @State private var renameProjectTarget: String?
     @State private var renameText: String = ""
     @State private var gitRepo: URL?
 
@@ -35,6 +36,14 @@ struct RootShellView: View {
             }
             .onAppear {
                 renameText = model.sessions.first(where: { $0.id == target.id })?.title ?? ""
+            }
+        }
+        .sheet(item: Binding(get: { renameProjectTarget.map(RenameID.init) }, set: { renameProjectTarget = $0?.id })) { target in
+            RenameSheet(text: $renameText, title: "Rename Project") { newName in
+                model.renameProject(id: target.id, to: newName)
+                renameProjectTarget = nil
+            } cancel: {
+                renameProjectTarget = nil
             }
         }
         .sheet(item: Binding(get: { gitRepo.map(GitRepoID.init) }, set: { gitRepo = $0?.url })) { repo in
@@ -69,11 +78,21 @@ struct RootShellView: View {
                         }
                     }
                 }
-                ForEach(model.projects, id: \.name) { project in
-                    Section(project.name) {
+                ForEach(model.projects) { project in
+                    Section {
                         ForEach(project.sessions) { session in
                             sessionRow(session)
                         }
+                        if project.sessions.isEmpty {
+                            Text("No sessions yet")
+                                .font(.caption).foregroundStyle(.tertiary)
+                        }
+                    } header: {
+                        Text(project.name)
+                            .contextMenu {
+                                Button("Rename Project…") { renameProjectTarget = project.id; renameText = project.name }
+                                Button("Close Project", role: .destructive) { model.closeProject(id: project.id) }
+                            }
                     }
                 }
             }
@@ -92,9 +111,12 @@ struct RootShellView: View {
     private var topBarLayout: some View {
         VStack(spacing: 0) {
             ProjectTabStrip(
-                projects: model.projects.map(\.name),
+                projects: model.projects,
                 chatCount: model.chats.count,
-                selected: activeProjectBinding
+                selected: activeProjectBinding,
+                renameProject: { renameProjectTarget = $0; renameText = model.projects.first { $0.id == renameProjectTarget }?.name ?? "" },
+                closeProject: { model.closeProject(id: $0) },
+                openFolder: { RootShellView.promptForOpenFolder(model: model) }
             )
             Divider()
             SessionStrip(
@@ -184,6 +206,13 @@ struct RootShellView: View {
         Task { await model.createAgentSession(agent, inDirectory: directory) }
     }
 
+    /// Folder picker → open a folder as a project tab (no session yet).
+    @MainActor
+    static func promptForOpenFolder(model: AppModel) {
+        guard let directory = chooseDirectory(prompt: "Open Project") else { return }
+        model.openProject(directory: directory)
+    }
+
     /// Folder picker → new ACP chat conversation with the agent there.
     @MainActor
     static func promptForNewChat(_ agent: AgentProfile, model: AppModel) {
@@ -254,9 +283,12 @@ struct RootShellView: View {
 /// A horizontal strip of project tabs plus a Chats pill, for the top-bar
 /// layout. Clicking a tab makes it the active project.
 private struct ProjectTabStrip: View {
-    let projects: [String]
+    let projects: [AppModel.ProjectGroup]
     let chatCount: Int
     @Binding var selected: String?
+    let renameProject: (String) -> Void
+    let closeProject: (String) -> Void
+    let openFolder: () -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -268,21 +300,30 @@ private struct ProjectTabStrip: View {
                         .padding(.vertical, 5)
                         .background(.quaternary, in: Capsule())
                 }
-                ForEach(projects, id: \.self) { name in
+                ForEach(projects) { project in
                     Button {
-                        selected = name
+                        selected = project.name
                     } label: {
-                        Text(name)
-                            .font(.callout.weight(selected == name ? .semibold : .regular))
+                        Text(project.name)
+                            .font(.callout.weight(selected == project.name ? .semibold : .regular))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 5)
                             .background(
-                                selected == name ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.clear),
+                                selected == project.name ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.clear),
                                 in: Capsule()
                             )
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button("Rename Project…") { renameProject(project.id) }
+                        Button("Close Project", role: .destructive) { closeProject(project.id) }
+                    }
                 }
+                Button(action: openFolder) {
+                    Image(systemName: "plus").font(.caption)
+                }
+                .buttonStyle(.plain)
+                .help("Open a folder as a project (⌘O)")
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
@@ -386,14 +427,15 @@ private struct GitRepoID: Identifiable { let url: URL; var id: String { url.path
 
 private struct RenameSheet: View {
     @Binding var text: String
+    var title: String = "Rename Session"
     let commit: (String) -> Void
     let cancel: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Rename Session")
+            Text(title)
                 .font(.headline)
-            TextField("Session name", text: $text)
+            TextField("Name", text: $text)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 260)
                 .onSubmit { commit(text) }

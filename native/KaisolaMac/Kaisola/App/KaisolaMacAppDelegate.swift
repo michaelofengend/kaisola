@@ -121,6 +121,11 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         makeWindow()
     }
 
+    @objc private func openFolder(_ sender: Any?) {
+        guard let model = keyModel() else { return }
+        RootShellView.promptForOpenFolder(model: model)
+    }
+
     @objc private func checkForUpdates(_ sender: Any?) {
         updateController.checkForUpdates(sender)
     }
@@ -177,6 +182,8 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
             updateDetail: updateController.availability.detail,
             newWindowTarget: self,
             newWindowAction: #selector(newWindow(_:)),
+            openFolderTarget: self,
+            openFolderAction: #selector(openFolder(_:)),
             newTerminalTarget: self,
             newTerminalAction: #selector(newTerminalSession(_:)),
             newAgentTarget: self,
@@ -201,6 +208,8 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         updateDetail: String?,
         newWindowTarget: AnyObject? = nil,
         newWindowAction: Selector? = nil,
+        openFolderTarget: AnyObject? = nil,
+        openFolderAction: Selector? = nil,
         newTerminalTarget: AnyObject? = nil,
         newTerminalAction: Selector? = nil,
         newAgentTarget: AnyObject? = nil,
@@ -252,6 +261,11 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
             let item = fileMenu.addItem(withTitle: "New Window", action: newWindowAction, keyEquivalent: "n")
             item.keyEquivalentModifierMask = [.command, .shift]
             item.target = newWindowTarget
+            fileMenu.addItem(.separator())
+        }
+        if let openFolderAction {
+            let item = fileMenu.addItem(withTitle: "Open Folder…", action: openFolderAction, keyEquivalent: "o")
+            item.target = openFolderTarget
             fileMenu.addItem(.separator())
         }
         if let newChatAction {

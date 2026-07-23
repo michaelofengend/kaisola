@@ -48,6 +48,17 @@ final class NativePreviewSettingsTests: XCTestCase {
         XCTAssertEqual(newWindow.keyEquivalentModifierMask, [.command, .shift])
     }
 
+    func testFileMenuCarriesOpenFolderWithShortcut() throws {
+        let menu = KaisolaMacAppDelegate.makeMainMenu(
+            updateTarget: nil, updateAction: nil, updateEnabled: false, updateDetail: nil,
+            openFolderTarget: nil, openFolderAction: #selector(NSResponder.doCommand(by:))
+        )
+        let fileMenu = try XCTUnwrap(menu.item(withTitle: "File")?.submenu)
+        let openFolder = try XCTUnwrap(fileMenu.items.first { $0.title == "Open Folder…" })
+        XCTAssertEqual(openFolder.keyEquivalent, "o")
+        XCTAssertEqual(openFolder.keyEquivalentModifierMask, [.command])
+    }
+
     func testViewMenuCarriesLayoutAndAppearanceToggles() throws {
         let menu = KaisolaMacAppDelegate.makeMainMenu(
             updateTarget: nil, updateAction: nil, updateEnabled: false, updateDetail: nil,

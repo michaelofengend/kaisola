@@ -39,13 +39,13 @@ optional pending a scope decision.
 |---|---|---|---|
 | Multi-window (independent workspaces, ⌘⇧N) | DONE | P0 | each window its own AppModel + broker observer connection (`KaisolaMacAppDelegate.makeWindow`) |
 | Two navigation layouts (Left tree vs Top bar), live-switchable | DONE | P0 | `NativePreviewSettings.navigationLayout`; View menu; persisted |
-| Project tabs (Chrome-style, drag-reorder, rename, color, activity badges) | PARTIAL | P0 | top-bar layout has a project tab strip; drag-reorder/rename/color still to add |
+| Project tabs (Chrome-style, drag-reorder, rename, color, activity badges) | PARTIAL | P0 | explicit open (⌘O / "+")/rename/close persisted in `NativeSessionStore` (`OpenProject`); tabs survive with no live sessions; drag-reorder/color/activity badges still to add |
 | Session tabs / dock-grid (draggable columns, split, close, pop) | PARTIAL | P0 | top-bar layout has a session strip; dock-grid/split/pop to add |
 | Full macOS menu bar (App/File/Edit/View/Window/Help + accelerators) | PARTIAL | P0 | App/File/Edit/View done (New Window/Chat/Agent/Terminal, layout+appearance); Window/Help to add |
 | Session groups (named, tinted, collapsible; pinned) | NEW | P1 | `SessionGroup` |
 | Reopen closed session/project (⌘⇧T / ⌘⌥T, 7-day stack) | NEW | P1 | `closedStack` |
 | Saved windows (persist/reopen/delete named states) | NEW | P1 | `SavedWindows.tsx` |
-| Project rename / relocate / recents | NEW | P1 | `renameProjectTab`/`recentProjects` |
+| Project rename / relocate / recents | PARTIAL | P1 | rename done (`AppModel.renameProject` + Rename Project sheet); relocate/recents still to add |
 | Workspace rail (file tree, ⌘B) | NEW | P1 | `WorkspaceRail.tsx` |
 | Command palette (⌘K/⌘P, fuzzy files + actions) | NEW | P1 | `CommandPalette.tsx` |
 | Detach project to new window / adopt | NEW | P2 | renderer-to-renderer transfer; complex |
