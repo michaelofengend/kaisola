@@ -148,6 +148,9 @@ struct CommandPaletteView: View {
             })
         }
 
+        items.append(PaletteItem(id: "action.newMesh", title: "New Mesh (all agents)", subtitle: "Action", systemImage: "circle.hexagongrid.fill") {
+            RootShellView.promptForNewMesh(model: model)
+        })
         items.append(PaletteItem(id: "action.toggleRail", title: "Toggle Workspace Rail", subtitle: "View · ⌘B", systemImage: "sidebar.left") {
             settings.workspaceRailVisible.toggle()
         })

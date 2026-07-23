@@ -60,6 +60,37 @@ final class GitServiceTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: repo.appendingPathComponent("keep.txt"), encoding: .utf8), "one\n")
     }
 
+    func testWorktreeAddDiffRemoveLifecycle() throws {
+        try write("base.txt", "base\n")
+        try git(["add", "base.txt"])
+        try git(["commit", "-q", "-m", "base"])
+        let service = GitService(repoRoot: repo)
+        let worktreePath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kaisola-wt-\(UUID().uuidString.prefix(6))").path
+        let branch = "\(GitService.meshBranchPrefix)test-claude"
+
+        try service.worktreeAdd(path: worktreePath, branch: branch)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: worktreePath + "/base.txt"))
+
+        // An edit inside the worktree shows in ITS diff, not the base repo's.
+        try "changed\n".write(toFile: worktreePath + "/base.txt", atomically: true, encoding: .utf8)
+        let worktreeService = GitService(repoRoot: URL(fileURLWithPath: worktreePath, isDirectory: true))
+        XCTAssertTrue(try worktreeService.diffAgainstHead().contains("+changed"))
+        XCTAssertFalse(try service.diffAgainstHead().contains("+changed"))
+
+        try service.worktreeRemove(path: worktreePath, branch: branch)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: worktreePath))
+    }
+
+    func testWorktreeAPIsRefuseNonMeshBranches() throws {
+        try write("f.txt", "x\n")
+        try git(["add", "f.txt"])
+        try git(["commit", "-q", "-m", "base"])
+        let service = GitService(repoRoot: repo)
+        XCTAssertThrowsError(try service.worktreeAdd(path: "/tmp/anywhere", branch: "main-2"))
+        XCTAssertThrowsError(try service.worktreeRemove(path: "/tmp/anywhere", branch: "main"))
+    }
+
     func testStatusParsesStagedUnstagedUntracked() throws {
         try write("committed.txt", "one\n")
         try git(["add", "committed.txt"])

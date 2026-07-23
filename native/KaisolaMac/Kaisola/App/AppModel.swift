@@ -273,7 +273,43 @@ final class AppModel: ObservableObject {
         selectedChatID = chatID
         if let chatID {
             selectedSessionID = nil
+            selectedMeshID = nil
             AttentionCenter.shared.clear(targetID: chatID)
+        }
+    }
+
+    // MARK: - Kaisola Mesh
+
+    /// Live Mesh sessions (app-scoped, like chats).
+    @Published private(set) var meshes: [MeshSession] = []
+    @Published var selectedMeshID: String?
+
+    /// Start a Mesh in a directory with every ACP-capable agent (v1 roster).
+    func openMesh(inDirectory directory: URL) {
+        let agents = AgentRegistry.all.filter { AcpAdapter.forAgent($0.id) != nil }
+        guard !agents.isEmpty else { return }
+        let mesh = MeshSession(baseDirectory: directory)
+        meshes.append(mesh)
+        selectedMeshID = mesh.id
+        selectedChatID = nil
+        selectedSessionID = nil
+        let environment = ProcessInfo.processInfo.environment.merging(
+            NativePreviewSettings.shared.agentEnvironmentOverlay
+        ) { _, custom in custom }
+        Task { await mesh.start(agents: agents, environment: environment) }
+    }
+
+    func closeMesh(_ meshID: String) {
+        meshes.first { $0.id == meshID }?.shutdown()
+        meshes.removeAll { $0.id == meshID }
+        if selectedMeshID == meshID { selectedMeshID = nil }
+    }
+
+    func selectMesh(_ meshID: String?) {
+        selectedMeshID = meshID
+        if meshID != nil {
+            selectedChatID = nil
+            selectedSessionID = nil
         }
     }
 

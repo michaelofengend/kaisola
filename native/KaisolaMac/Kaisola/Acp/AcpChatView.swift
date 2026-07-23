@@ -250,7 +250,7 @@ struct AcpChatView: View {
     }
 }
 
-private struct TranscriptRowView: View {
+struct TranscriptRowView: View {
     let row: AcpTranscriptRow
     var retry: ((String) -> Void)?
     var terminalSnapshot: (@Sendable (String) async -> AcpTerminalHost.Snapshot?)?
@@ -307,7 +307,7 @@ private struct TranscriptRowView: View {
     }
 }
 
-private struct ToolCallCard: View {
+struct ToolCallCard: View {
     let call: AcpToolCall
     var terminalSnapshot: (@Sendable (String) async -> AcpTerminalHost.Snapshot?)?
     @State private var expanded = false
@@ -381,7 +381,7 @@ private struct ToolCallCard: View {
 
 /// Live output of an agent-spawned terminal inside a tool card: polls the
 /// AcpTerminalHost snapshot until the process exits.
-private struct TerminalContentView: View {
+struct TerminalContentView: View {
     let terminalID: String
     var snapshot: (@Sendable (String) async -> AcpTerminalHost.Snapshot?)?
     @State private var output = ""
@@ -427,7 +427,7 @@ private struct TerminalContentView: View {
 
 /// A compact unified diff for a tool-call file edit: removed lines tinted red,
 /// added lines tinted green, mirroring the Electron chat's inline diff card.
-private struct DiffView: View {
+struct DiffView: View {
     let path: String
     let oldText: String?
     let newText: String
@@ -465,7 +465,7 @@ private struct DiffView: View {
     }
 }
 
-private struct PlanCard: View {
+struct PlanCard: View {
     let entries: [AcpPlanEntry]
 
     var body: some View {

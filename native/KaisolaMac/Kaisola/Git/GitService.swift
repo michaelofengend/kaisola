@@ -121,6 +121,34 @@ struct GitService: Sendable {
         _ = try run(["stash", "apply", hash])
     }
 
+    // MARK: - Worktrees (Kaisola Mesh)
+
+    /// Branch prefix for Mesh worktrees; removal APIs refuse anything else so
+    /// no user branch can ever be deleted by Mesh cleanup.
+    static let meshBranchPrefix = "kaisola-mesh-"
+
+    /// Create an isolated worktree at `path` on a fresh branch from HEAD.
+    func worktreeAdd(path: String, branch: String) throws {
+        guard branch.hasPrefix(Self.meshBranchPrefix) else {
+            throw GitError.commandFailed("Mesh worktrees must use the \(Self.meshBranchPrefix)* namespace")
+        }
+        _ = try run(["worktree", "add", "-b", branch, path])
+    }
+
+    /// Remove a Mesh worktree and its branch. Refuses non-Mesh branches.
+    func worktreeRemove(path: String, branch: String) throws {
+        guard branch.hasPrefix(Self.meshBranchPrefix) else {
+            throw GitError.commandFailed("Refusing to remove a non-Mesh worktree branch")
+        }
+        _ = try run(["worktree", "remove", "--force", path])
+        _ = try run(["branch", "-D", branch])
+    }
+
+    /// The full working-tree diff against HEAD (Mesh column review).
+    func diffAgainstHead() throws -> String {
+        try run(["diff", "HEAD"])
+    }
+
     // MARK: - Parsing
 
     static func parseStatus(_ output: String) -> Status {

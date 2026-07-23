@@ -12,10 +12,11 @@ struct RootShellView: View {
 
     private var sidebarSelection: Binding<String?> {
         Binding(
-            get: { model.selectedChatID ?? model.selectedSessionID },
+            get: { model.selectedChatID ?? model.selectedMeshID ?? model.selectedSessionID },
             set: { id in
                 if let id, id.hasPrefix("chat-") { model.selectChat(id) }
-                else { model.selectChat(nil); Task { await model.select(id) } }
+                else if let id, id.hasPrefix("mesh-") { model.selectMesh(id) }
+                else { model.selectChat(nil); model.selectMesh(nil); Task { await model.select(id) } }
             }
         )
     }
@@ -97,6 +98,17 @@ struct RootShellView: View {
                                 .tag(Optional(chat.id))
                                 .contextMenu {
                                     Button("Close Chat", role: .destructive) { model.closeChat(chat.id) }
+                                }
+                        }
+                    }
+                }
+                if !model.meshes.isEmpty {
+                    Section("Mesh") {
+                        ForEach(model.meshes) { mesh in
+                            Label(mesh.title, systemImage: "circle.hexagongrid.fill")
+                                .tag(Optional(mesh.id))
+                                .contextMenu {
+                                    Button("Close Mesh", role: .destructive) { model.closeMesh(mesh.id) }
                                 }
                         }
                     }
@@ -259,6 +271,9 @@ struct RootShellView: View {
     private var detailContent: some View {
         if let fileURL = model.previewedFileURL {
             FilePreviewView(url: fileURL) { model.previewedFileURL = nil }
+        } else if let mesh = model.meshes.first(where: { $0.id == model.selectedMeshID }) {
+            MeshView(mesh: mesh)
+                .id(mesh.id)
         } else if let chat = model.chats.first(where: { $0.id == model.selectedChatID }) {
             AcpChatView(conversation: chat.conversation)
                 .id(chat.id)
@@ -284,7 +299,8 @@ struct RootShellView: View {
             newTerminal: { RootShellView.promptForNewTerminal(model: model) },
             newAgent: { agent in RootShellView.promptForNewAgent(agent, model: model) },
             newChat: { agent in RootShellView.promptForNewChat(agent, model: model) },
-            jumpToAttention: { model.jumpToAttentionTarget($0) }
+            jumpToAttention: { model.jumpToAttentionTarget($0) },
+            newMesh: { RootShellView.promptForNewMesh(model: model) }
         )
     }
 
@@ -321,6 +337,15 @@ struct RootShellView: View {
         guard let directory = model.currentProjectDirectory
             ?? chooseDirectory(prompt: "Chat with \(agent.name) Here", startingAt: model.currentProjectDirectory) else { return }
         model.openChat(agent, inDirectory: directory)
+    }
+
+    /// New Mesh in the active project (or a picked folder): every ACP-capable
+    /// agent, each in an isolated worktree when the folder is a git repo.
+    @MainActor
+    static func promptForNewMesh(model: AppModel) {
+        guard let directory = model.currentProjectDirectory
+            ?? chooseDirectory(prompt: "Run Mesh Here", startingAt: model.currentProjectDirectory) else { return }
+        model.openMesh(inDirectory: directory)
     }
 
     @MainActor
@@ -716,6 +741,7 @@ private struct ConnectionFooter: View {
     let newAgent: (AgentProfile) -> Void
     let newChat: (AgentProfile) -> Void
     var jumpToAttention: ((String) -> Void)?
+    var newMesh: (() -> Void)?
 
     @ObservedObject private var attention = AttentionCenter.shared
     @State private var showInbox = false
@@ -734,6 +760,16 @@ private struct ConnectionFooter: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            if let newMesh {
+                Button {
+                    newMesh()
+                } label: {
+                    Image(systemName: "circle.hexagongrid.fill")
+                        .foregroundStyle(.purple)
+                }
+                .buttonStyle(.borderless)
+                .help("New Mesh — fan a prompt out to every agent, each in an isolated worktree")
+            }
             if attention.count > 0 {
                 Button {
                     showInbox.toggle()
