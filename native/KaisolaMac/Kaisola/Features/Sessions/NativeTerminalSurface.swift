@@ -11,6 +11,8 @@ struct NativeTerminalSurface: NSViewRepresentable {
     var isOwned: Bool = false
     /// Terminal font size (⌘+/⌘−/⌘0 via NativePreviewSettings).
     var fontSize: Double = NativePreviewSettings.terminalFontDefault
+    /// Paper palette on light appearances, ink on dark (Electron parity).
+    var lightSurface: Bool = false
     var onInput: ((String) -> Void)? = nil
     var onResize: ((_ columns: Int, _ rows: Int) -> Void)? = nil
 
@@ -24,7 +26,7 @@ struct NativeTerminalSurface: NSViewRepresentable {
             ? OwnedTerminalView(frame: .zero, font: font)
             : ReadOnlyTerminalView(frame: .zero, font: font)
         view.terminalDelegate = context.coordinator
-        view.configureKaisolaTheme()
+        view.configureKaisolaTheme(light: lightSurface)
         view.allowMouseReporting = isOwned
         view.linkReporting = .implicit
         view.optionAsMetaKey = false
@@ -40,6 +42,9 @@ struct NativeTerminalSurface: NSViewRepresentable {
         context.coordinator.onResize = onResize
         if abs(view.font.pointSize - fontSize) > 0.1 {
             view.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        }
+        if view.isLightTheme != lightSurface {
+            view.configureKaisolaTheme(light: lightSurface)
         }
         context.coordinator.apply(output: output, epoch: streamEpoch, endOffset: endOffset, to: view)
     }
@@ -176,17 +181,23 @@ class ReadOnlyTerminalView: TerminalView {
         }
     }
 
-    /// Installs the Kaisola palette (matched to the Electron xterm theme)
-    /// instead of SwiftTerm's OS-default black-on-white.
-    func configureKaisolaTheme() {
-        installColors(TerminalTheme.ansiColors)
-        nativeForegroundColor = TerminalTheme.foreground
-        nativeBackgroundColor = TerminalTheme.background
-        caretColor = TerminalTheme.cursor
-        selectedTextBackgroundColor = TerminalTheme.selection
+    /// Which palette is installed, so appearance flips reconfigure exactly once.
+    private(set) var isLightTheme = false
+
+    /// Installs the Kaisola palette (matched to the Electron xterm themes):
+    /// ink on dark appearances, paper on light — instead of SwiftTerm's
+    /// OS-default black-on-white.
+    func configureKaisolaTheme(light: Bool = false) {
+        let palette = TerminalTheme.palette(light: light)
+        isLightTheme = light
+        installColors(palette.ansi)
+        nativeForegroundColor = palette.foreground
+        nativeBackgroundColor = palette.background
+        caretColor = palette.cursor
+        selectedTextBackgroundColor = palette.selection
         useBrightColors = true
         wantsLayer = true
-        layer?.backgroundColor = TerminalTheme.background.cgColor
+        layer?.backgroundColor = palette.background.cgColor
     }
 
     func updateAccessibilityValue(from output: String) {

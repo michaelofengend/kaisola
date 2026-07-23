@@ -347,6 +347,7 @@ final class AppModel: ObservableObject {
         reconnectTask?.cancel()
         reconnectTask = nil
         await persistCurrentCursor()
+        await clearSplits()
         connectionGeneration &+= 1
         let generation = connectionGeneration
         connectionState = .looking
@@ -710,6 +711,7 @@ final class AppModel: ObservableObject {
         cursorSaveTask?.cancel()
         cursorSaveTask = nil
         await persistCurrentCursor()
+        await clearSplits()
         await releaseOwnedSessionsForQuit()
         if let selectedSession, connectionState.isConnected {
             try? await client.unsubscribe(from: selectedSession, ownerID: observerOwnerID)
@@ -818,8 +820,28 @@ final class AppModel: ObservableObject {
         if case let .activity(busy, completedAt) = event.kind {
             applyActivity(busy: busy, completedAt: completedAt, to: event.terminalID)
         }
-        guard event.ownerID == observerOwnerID,
-              event.projectID == selectedSession?.projectID,
+        guard event.ownerID == observerOwnerID else { return }
+
+        // Split panes get the same event handling as the primary document.
+        if splitDocuments[event.terminalID] != nil, event.terminalID != selectedSession?.id {
+            switch event.kind {
+            case let .output(epoch, startOffset, endOffset, data):
+                if splitDocuments[event.terminalID]?.append(
+                    epoch: epoch, startOffset: startOffset, endOffset: endOffset, data: data
+                ) != true {
+                    Task { await resubscribeSplit(event.terminalID) }
+                }
+            case .snapshotRequired:
+                Task { await resubscribeSplit(event.terminalID) }
+            case .exit:
+                splitDocuments[event.terminalID]?.exited = true
+            case .activity:
+                break
+            }
+            return
+        }
+
+        guard event.projectID == selectedSession?.projectID,
               event.terminalID == selectedSession?.id else { return }
 
         switch event.kind {
@@ -842,6 +864,76 @@ final class AppModel: ObservableObject {
         case .activity:
             break
         }
+    }
+
+    // MARK: - Split panes (multiple sessions open at once)
+
+    /// Additional open sessions, each with its own live subscription and
+    /// document, rendered beside the primary pane. Order = pane order.
+    @Published private(set) var splitDocuments: [String: TerminalDocument] = [:]
+    @Published private(set) var splitOrder: [String] = []
+    static let maxSplitPanes = 3
+
+    /// Open a session in a split pane beside the primary one.
+    func openInSplit(_ terminalID: String) async {
+        guard connectionState.isConnected,
+              splitDocuments[terminalID] == nil,
+              terminalID != selectedSessionID,
+              splitOrder.count < Self.maxSplitPanes,
+              let record = sessions.first(where: { $0.id == terminalID }) else { return }
+        do {
+            let result = try await client.subscribe(to: record, ownerID: observerOwnerID, cursor: nil)
+            splitDocuments[terminalID] = TerminalDocument.empty.applying(result, sessionID: terminalID)
+            splitOrder.append(terminalID)
+        } catch {
+            splitDocuments[terminalID] = nil
+        }
+    }
+
+    /// Close a split pane; its session keeps running on the broker.
+    func closeSplit(_ terminalID: String) async {
+        guard splitDocuments[terminalID] != nil else { return }
+        await persistSplitCursor(terminalID)
+        if connectionState.isConnected,
+           let record = sessions.first(where: { $0.id == terminalID }) {
+            try? await client.unsubscribe(from: record, ownerID: observerOwnerID)
+        }
+        splitDocuments[terminalID] = nil
+        splitOrder.removeAll { $0 == terminalID }
+    }
+
+    /// Promote a split to the primary pane (tab click): the split subscription
+    /// closes with its cursor persisted, then the normal select path resumes
+    /// from that cursor — continuous scrollback, one subscription per terminal.
+    func promoteSplit(_ terminalID: String) async {
+        guard splitDocuments[terminalID] != nil else { return }
+        await closeSplit(terminalID)
+        selectedChatID = nil
+        selectedMeshID = nil
+        await select(terminalID)
+    }
+
+    /// Drop every split (connection loss / reload), persisting cursors.
+    private func clearSplits() async {
+        for id in splitOrder { await persistSplitCursor(id) }
+        splitDocuments.removeAll()
+        splitOrder.removeAll()
+    }
+
+    private func resubscribeSplit(_ terminalID: String) async {
+        guard splitDocuments[terminalID] != nil,
+              let record = sessions.first(where: { $0.id == terminalID }) else { return }
+        if let result = try? await client.subscribe(to: record, ownerID: observerOwnerID, cursor: nil) {
+            splitDocuments[terminalID] = TerminalDocument.empty.applying(result, sessionID: terminalID)
+        }
+    }
+
+    private func persistSplitCursor(_ terminalID: String) async {
+        guard let document = splitDocuments[terminalID],
+              let record = sessions.first(where: { $0.id == terminalID }),
+              let scope = cursorScope(for: record),
+              let cursor = document.cursor else { return }
+        try? await cursorStore.save(cursor, for: scope)
     }
 
     private func applyActivity(busy: Bool, completedAt: Int64?, to terminalID: String) {
@@ -870,6 +962,7 @@ final class AppModel: ObservableObject {
     private func connectionLost(_ error: any Error, generation: Int) {
         guard generation == connectionGeneration, shouldReconnect else { return }
         connectionState = .unavailable(error.kaisolaSafeDescription)
+        Task { await clearSplits() }   // subscriptions died with the socket
         scheduleReconnect(attempt: 0, generation: generation)
     }
 

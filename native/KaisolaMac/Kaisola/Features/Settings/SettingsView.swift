@@ -60,7 +60,7 @@ struct SettingsView: View {
                 }
             }
             LabeledContent("Palette") {
-                Text("Terminals stay ink-dark on every appearance — a Kaisola invariant.")
+                Text("Terminals follow the app appearance: ink on dark, paper on light (Electron parity).")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

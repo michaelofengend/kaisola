@@ -4,6 +4,7 @@ import SwiftUI
 struct RootShellView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var settings: NativePreviewSettings
+    @Environment(\.colorScheme) private var colorScheme
     @State private var renameTarget: String?
     @State private var renameProjectTarget: String?
     @State private var renameText: String = ""
@@ -269,6 +270,18 @@ struct RootShellView: View {
             Button("Open in New Window") {
                 KaisolaMacAppDelegate.popOut(sessionID: session.id)
             }
+            if session.id != model.selectedSessionID,
+               model.splitDocuments[session.id] == nil,
+               model.splitOrder.count < AppModel.maxSplitPanes {
+                Button("Open in Split") {
+                    Task { await model.openInSplit(session.id) }
+                }
+            }
+            if model.splitDocuments[session.id] != nil {
+                Button("Close Split") {
+                    Task { await model.closeSplit(session.id) }
+                }
+            }
             if model.isOwned(session.id) {
                 Button("Rename…") { renameTarget = session.id }
                 if let dir = model.directory(for: session.id) {
@@ -445,35 +458,117 @@ struct RootShellView: View {
                 )
             }
         } else {
-            let sessionID = model.terminalDocument.sessionID
-            let owned = sessionID.map(model.isOwned) ?? false
-            ZStack(alignment: .topTrailing) {
-                NativeTerminalSurface(
-                    output: model.terminalDocument.output,
-                    streamEpoch: model.terminalDocument.cursor?.streamEpoch,
-                    endOffset: model.terminalDocument.cursor?.offset,
-                    isOwned: owned,
-                    fontSize: settings.terminalFontSize,
-                    onInput: owned ? { data in
-                        guard let sessionID else { return }
-                        model.sendInput(data, to: sessionID)
-                    } : nil,
-                    onResize: owned ? { columns, rows in
-                        guard let sessionID else { return }
-                        model.resizeTerminal(sessionID, columns: columns, rows: rows)
-                    } : nil
-                )
-                .id("\(sessionID ?? "none")-\(owned)")
-                if model.terminalDocument.truncated {
-                    Label("Retained tail", systemImage: "ellipsis.rectangle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(8)
-                        .background(.regularMaterial, in: Capsule())
-                        .padding(10)
-                        .accessibilityLabel("Older terminal output was outside the retained history")
+            VStack(spacing: 0) {
+                if !model.splitOrder.isEmpty {
+                    sessionTabsBar
+                    Divider()
+                }
+                HStack(spacing: 0) {
+                    primaryPane
+                    ForEach(model.splitOrder, id: \.self) { splitID in
+                        Divider()
+                        splitPane(splitID)
+                    }
                 }
             }
+        }
+    }
+
+    /// Tabs for every open pane: the primary plus each split. Clicking a split
+    /// promotes it to primary; × closes it.
+    private var sessionTabsBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                if let primaryID = model.terminalDocument.sessionID {
+                    tabChip(id: primaryID, isPrimary: true)
+                }
+                ForEach(model.splitOrder, id: \.self) { splitID in
+                    tabChip(id: splitID, isPrimary: false)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+        }
+        .frame(height: 34)
+    }
+
+    private func tabChip(id: String, isPrimary: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "terminal").font(.caption2)
+            Text(model.sessions.first { $0.id == id }?.title ?? id)
+                .font(.caption.weight(isPrimary ? .semibold : .regular))
+                .lineLimit(1)
+            if !isPrimary {
+                Button {
+                    Task { await model.closeSplit(id) }
+                } label: {
+                    Image(systemName: "xmark").font(.caption2)
+                }
+                .buttonStyle(.borderless)
+                .help("Close this split (the session keeps running)")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(
+            isPrimary ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.quaternary.opacity(0.4)),
+            in: Capsule()
+        )
+        .contentShape(Capsule())
+        .onTapGesture {
+            if !isPrimary { Task { await model.promoteSplit(id) } }
+        }
+    }
+
+    private var primaryPane: some View {
+        let sessionID = model.terminalDocument.sessionID
+        let owned = sessionID.map(model.isOwned) ?? false
+        return ZStack(alignment: .topTrailing) {
+            NativeTerminalSurface(
+                output: model.terminalDocument.output,
+                streamEpoch: model.terminalDocument.cursor?.streamEpoch,
+                endOffset: model.terminalDocument.cursor?.offset,
+                isOwned: owned,
+                fontSize: settings.terminalFontSize,
+                lightSurface: colorScheme == .light,
+                onInput: owned ? { data in
+                    guard let sessionID else { return }
+                    model.sendInput(data, to: sessionID)
+                } : nil,
+                onResize: owned ? { columns, rows in
+                    guard let sessionID else { return }
+                    model.resizeTerminal(sessionID, columns: columns, rows: rows)
+                } : nil
+            )
+            .id("\(sessionID ?? "none")-\(owned)")
+            if model.terminalDocument.truncated {
+                Label("Retained tail", systemImage: "ellipsis.rectangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(10)
+                    .accessibilityLabel("Older terminal output was outside the retained history")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func splitPane(_ splitID: String) -> some View {
+        if let document = model.splitDocuments[splitID] {
+            let owned = model.isOwned(splitID)
+            NativeTerminalSurface(
+                output: document.output,
+                streamEpoch: document.cursor?.streamEpoch,
+                endOffset: document.cursor?.offset,
+                isOwned: owned,
+                fontSize: settings.terminalFontSize,
+                lightSurface: colorScheme == .light,
+                onInput: owned ? { data in model.sendInput(data, to: splitID) } : nil,
+                onResize: owned ? { columns, rows in model.resizeTerminal(splitID, columns: columns, rows: rows) } : nil
+            )
+            .id("split-\(splitID)-\(owned)")
         }
     }
 }

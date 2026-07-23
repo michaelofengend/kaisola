@@ -1,28 +1,54 @@
 import AppKit
 import SwiftTerm
 
-/// The terminal palette, matched to the Electron renderer's xterm theme so the
-/// native surface reads as the same product. Kaisola is dark-mode-invariant for
-/// terminals (a light desktop still gets an ink terminal), so a single dark
-/// palette is authoritative; the surface background follows the "ink" tone.
+/// The terminal palettes, matched to the Electron renderer's xterm themes
+/// (src/components/Terminal.tsx DARK_THEME / LIGHT_THEME) so the native
+/// surface reads as the same product: ink on a dark appearance, paper on a
+/// light one — exactly like Electron's lightSurface switch.
 enum TerminalTheme {
-    // Hex values copied from src/components/Terminal.tsx DARK_THEME / TERM_SURFACE.ink.
-    static let background = color(0x0D0F13)
-    static let foreground = color(0xD6DAE2)
-    static let cursor = color(0xD6DAE2)
-    static let selection = color(0x95A456, alpha: 0.25)
+    struct Palette {
+        let background: NSColor
+        let foreground: NSColor
+        let cursor: NSColor
+        let selection: NSColor
+        let ansi: [SwiftTerm.Color]
+    }
 
-    /// ANSI 0-15 in SwiftTerm order (black, red, green, yellow, blue, magenta,
-    /// cyan, white, then the bright variants). Computed because SwiftTerm's
-    /// `Color` is a reference type and not Sendable, so it cannot be a shared
-    /// static.
-    static var ansiColors: [SwiftTerm.Color] {
-        [
-            term(0x14161C), term(0xE16A6A), term(0x54C08A), term(0xD8A44A),
-            term(0x5AA9E6), term(0xA88752), term(0x5EC5C0), term(0xC4C8D2),
-            term(0x5A5F6B), term(0xE16A6A), term(0x54C08A), term(0xD8A44A),
-            term(0x5AA9E6), term(0xA88752), term(0x5EC5C0), term(0xF3F4F6),
-        ]
+    /// DARK_THEME (ink). Values from Terminal.tsx / TERM_SURFACE.ink.
+    static var dark: Palette {
+        Palette(
+            background: color(0x0D0F13),
+            foreground: color(0xD6DAE2),
+            cursor: color(0xD6DAE2),
+            selection: color(0x95A456, alpha: 0.25),
+            ansi: [
+                term(0x14161C), term(0xE16A6A), term(0x54C08A), term(0xD8A44A),
+                term(0x5AA9E6), term(0xA88752), term(0x5EC5C0), term(0xC4C8D2),
+                term(0x5A5F6B), term(0xE16A6A), term(0x54C08A), term(0xD8A44A),
+                term(0x5AA9E6), term(0xA88752), term(0x5EC5C0), term(0xF3F4F6),
+            ]
+        )
+    }
+
+    /// LIGHT_THEME (paper). ANSI black inverts to paper exactly as the
+    /// Electron theme does, so TUIs that paint black panels stay readable.
+    static var light: Palette {
+        Palette(
+            background: color(0xE9EBEF),
+            foreground: color(0x21242B),
+            cursor: color(0x21242B),
+            selection: color(0x5E7030, alpha: 0.18),
+            ansi: [
+                term(0xEEF0F4), term(0xCF4F4F), term(0x2F9E6B), term(0x9A6B1F),
+                term(0x2F86C9), term(0x8A713A), term(0x1F8F88), term(0x3B3F48),
+                term(0x8B909D), term(0xCF4F4F), term(0x2F9E6B), term(0x9A6B1F),
+                term(0x2F86C9), term(0x8A713A), term(0x1F8F88), term(0x16181D),
+            ]
+        )
+    }
+
+    static func palette(light: Bool) -> Palette {
+        light ? Self.light : Self.dark
     }
 
     private static func color(_ rgb: Int, alpha: CGFloat = 1) -> NSColor {

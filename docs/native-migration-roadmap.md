@@ -40,7 +40,7 @@ optional pending a scope decision.
 | Multi-window (independent workspaces, ⌘⇧N) | DONE | P0 | each window its own AppModel + broker observer connection (`KaisolaMacAppDelegate.makeWindow`) |
 | Two navigation layouts (Left tree vs Top bar), live-switchable | DONE | P0 | `NativePreviewSettings.navigationLayout`; View menu; persisted |
 | Project tabs (Chrome-style, drag-reorder, rename, color, activity badges) | DONE | P0 | open/rename/close/relocate, tint colors, working-count activity badges, Move Left/Right reorder (persisted); pointer drag-reorder deferred |
-| Session tabs / dock-grid (draggable columns, split, close, pop) | PARTIAL | P0 | session strip + End Session + pop-out (Open in New Window covers side-by-side via windows); in-window dock-grid/split deferred |
+| Session tabs / dock-grid (draggable columns, split, close, pop) | DONE | P0 | in-window splits (up to 4 panes, each its own live subscription; owned panes fully interactive), tab bar with promote/close, Open in Split context menu, pop-out to window; pointer drag-reorder of panes deferred |
 | Full macOS menu bar (App/File/Edit/View/Window/Help + accelerators) | DONE | P0 | App (Settings ⌘,)/File (Open Recent, reopen ⌘⇧T/⌘⌥T)/Edit/View (layout, appearance, font ⌘±)/Window (saved layouts, NSApp.windowsMenu)/Help |
 | Session groups (named, tinted, collapsible; pinned) | PARTIAL | P1 | projects are the grouping: named (rename), tinted (colorHex), collapsible (persisted); ad-hoc cross-project groups/pinning deferred |
 | Reopen closed session/project (⌘⇧T / ⌘⌥T, 7-day stack) | DONE | P1 | both stacks bounded in `NativeSessionStore`; ⌘⌥T recreates the shell/agent in the same folder |
@@ -61,7 +61,7 @@ optional pending a scope decision.
 | PTY create/write/resize/kill/signal | DONE | P0 | |
 | Observation (list/subscribe/diagnostics) | DONE | P0 | |
 | PTY continuity across restart / detached broker | DONE | P0 | broker contract + reattach-on-relaunch + selection restore; retained-tail marker in the surface |
-| Theming (dark/light/eco, tones, cursor color) | DONE | P1 | app-wide light/dark/system; terminals stay ink (product invariant), Electron palette + cursor color; eco n/a natively (no renderer cost to shed) |
+| Theming (dark/light/eco, tones, cursor color) | DONE | P1 | app-wide light/dark/system; terminals follow the appearance (Electron DARK_THEME/LIGHT_THEME both ported, live-switch); eco n/a natively |
 | Fonts (family/size ⌘±/weight/line-height) | PARTIAL | P1 | size ⌘+/⌘−/⌘0 persisted (View menu + Settings slider); family/weight deferred |
 | Search in scrollback | DONE | P1 | SwiftTerm ⌘F find bar (Edit ▸ Find) |
 | Links: URLs + OSC 8 hyperlinks | DONE | P1 | implicit link detection + OSC 8; http(s) → browser, file:// → reveal in Finder |
