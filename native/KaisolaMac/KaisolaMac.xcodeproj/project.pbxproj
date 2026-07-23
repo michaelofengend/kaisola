@@ -12,6 +12,7 @@
 		0D03FEEA4FCFE67D5204F5BE /* GitServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73C156565BA4025A74960AD9 /* GitServiceTests.swift */; };
 		0D3E13FDB264A6EBAE5510BE /* GitPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9586CAAF5EE496B213F01998 /* GitPanelView.swift */; };
 		0D4A39DA0B681BD534EA239F /* AcpAdapterResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC20168C86DDDBA7D70222F3 /* AcpAdapterResolver.swift */; };
+		1201C759D1EDB1BB9A4D12F4 /* AppModelBrokerFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A70FC513A508673AD06C7E8 /* AppModelBrokerFallbackTests.swift */; };
 		143B9FBEC29D4FD6104DD505 /* BrokerModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D98396E44670C6412BE1415 /* BrokerModels.swift */; };
 		15B7789EF6CCF94F2416E478 /* KaisolaBrokerProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 35E6E0DC943424C3E5094F7F /* KaisolaBrokerProtocol */; };
 		1A6AAB746D2AAAA698AB3628 /* AcpChatHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDC5D762925B519587B9EF95 /* AcpChatHandle.swift */; };
@@ -142,6 +143,7 @@
 		44220D13FC4D0265D132F67A /* TerminalCursorStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalCursorStore.swift; sourceTree = "<group>"; };
 		455D0FF2F635A75069247811 /* BrokerBootstrapClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerBootstrapClient.swift; sourceTree = "<group>"; };
 		45799AC8A5D80828BB3EB235 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		4A70FC513A508673AD06C7E8 /* AppModelBrokerFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelBrokerFallbackTests.swift; sourceTree = "<group>"; };
 		4AEB389DB67AC63D7147C0BA /* AcpChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcpChatView.swift; sourceTree = "<group>"; };
 		4C1E742D2099046E14888F80 /* SwiftTermStressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftTermStressTests.swift; sourceTree = "<group>"; };
 		502B709E629F1098130633B7 /* FilePreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePreviewView.swift; sourceTree = "<group>"; };
@@ -389,6 +391,7 @@
 				9FAD1CF1DFF4378CF3677E4A /* AcpProcessIntegrationTests.swift */,
 				07F25711B7E71707CD583039 /* AcpTerminalHostTests.swift */,
 				0A75F9D9A2E3D4F6821B1F0A /* AcpToolArtifactsTests.swift */,
+				4A70FC513A508673AD06C7E8 /* AppModelBrokerFallbackTests.swift */,
 				07063F75FCF57994E572B99C /* AppModelProjectContextTests.swift */,
 				9971B075277E2DD1494755BE /* AppModelReconnectTests.swift */,
 				CD40F6DB5889F51004BEF1C9 /* BrokerControlClientTests.swift */,
@@ -684,6 +687,7 @@
 				E6654BD397157414CD77460C /* AcpProcessIntegrationTests.swift in Sources */,
 				877EEA77C8AE068966E94814 /* AcpTerminalHostTests.swift in Sources */,
 				C490492DC4C65C9BCA0842C0 /* AcpToolArtifactsTests.swift in Sources */,
+				1201C759D1EDB1BB9A4D12F4 /* AppModelBrokerFallbackTests.swift in Sources */,
 				640841FC93C7BCB00DFFA219 /* AppModelProjectContextTests.swift in Sources */,
 				F0340491DE4B839A15E2B447 /* AppModelReconnectTests.swift in Sources */,
 				CFA09B2F2E24E8EFF4E27E32 /* BrokerControlClientTests.swift in Sources */,

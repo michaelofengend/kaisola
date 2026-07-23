@@ -113,6 +113,11 @@ protocol BrokerInfoLocating: Sendable {
 struct BrokerInfoLocator: BrokerInfoLocating, Sendable {
     static let installedProfileNames = ["pasola", "Pasola", "Kiasola", "Kaisola"]
     static let developmentProfileName = "Kaisola Dev"
+    /// The native app's OWN broker profile — used when Electron's broker exists
+    /// but predates the features the native app needs. Fully separate: nothing
+    /// under an Electron profile is read or written, and Electron's broker (and
+    /// every session on it) is left untouched.
+    static let nativeOwnProfileName = "Kaisola Native"
     static let maximumMetadataBytes: off_t = 64 * 1_024
 
     let userDataCandidates: [URL]
@@ -137,6 +142,15 @@ struct BrokerInfoLocator: BrokerInfoLocating, Sendable {
             userDataCandidates: profileNames.map {
                 support.appendingPathComponent($0, isDirectory: true)
             }
+        )
+    }
+
+    /// Locator for the native app's own separate broker profile.
+    static func nativeOwn(fileManager: FileManager = .default) -> BrokerInfoLocator {
+        let support = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support", isDirectory: true)
+        return BrokerInfoLocator(
+            userDataCandidates: [support.appendingPathComponent(nativeOwnProfileName, isDirectory: true)]
         )
     }
 

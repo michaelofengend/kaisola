@@ -77,6 +77,10 @@ final class AppModel: ObservableObject {
 
     init(
         brokerPreparer: any BrokerInfoPreparing = BrokerStartupCoordinator.live(),
+        fallbackPreparer: (any BrokerInfoPreparing)? = BrokerStartupCoordinator(
+            locator: .nativeOwn(),
+            launcher: BrokerBootstrapClient()
+        ),
         client: any ObserveOnlyBrokerServing = ObserveOnlyBrokerClient(),
         controlClient: any BrokerControlServing = BrokerControlClient(),
         sessionStore: NativeSessionStore = NativeSessionStore(),
@@ -90,6 +94,7 @@ final class AppModel: ObservableObject {
         }
     ) {
         self.brokerPreparer = brokerPreparer
+        self.fallbackPreparer = fallbackPreparer
         self.client = client
         self.controlClient = controlClient
         self.sessionStore = sessionStore
@@ -98,6 +103,12 @@ final class AppModel: ObservableObject {
         self.sleep = sleep
         self.jitter = jitter
     }
+
+    /// The separate native-profile broker used when Electron's is incompatible.
+    private let fallbackPreparer: (any BrokerInfoPreparing)?
+    /// True when this window is connected to the app's own separate broker
+    /// (Electron's remains untouched beside it).
+    @Published private(set) var usingSeparateBroker = false
 
     /// A project grouping for the sidebar/tabs: a stable id, a display name,
     /// its optional local directory, and its live sessions. Explicitly-opened
@@ -736,21 +747,44 @@ final class AppModel: ObservableObject {
         }
 
         do {
-            let info = try await brokerPreparer.prepare()
-            activeBrokerIdentity = info.persistenceIdentity
-            await client.setEventHandler { [weak self] event in
-                Task { @MainActor in self?.consume(event) }
+            var info: BrokerInfo
+            var hello: BrokerHello
+            do {
+                info = try await brokerPreparer.prepare()
+                activeBrokerIdentity = info.persistenceIdentity
+                await client.setEventHandler { [weak self] event in
+                    Task { @MainActor in self?.consume(event) }
+                }
+                await client.setDisconnectHandler { [weak self] error in
+                    Task { @MainActor in self?.connectionLost(error, generation: generation) }
+                }
+                hello = try await client.connect(to: info)
+                usingSeparateBroker = false
+            } catch BrokerClientError.observeFeatureMissing where fallbackPreparer != nil {
+                // Electron's broker is alive but predates the features this app
+                // needs. Leave it (and every session on it) untouched and run
+                // the app's OWN broker under its separate profile instead.
+                guard let fallbackPreparer else { throw BrokerClientError.observeFeatureMissing }
+                // The failed hello leaves the client attached to the old
+                // socket; reset it before dialing the separate broker.
+                await client.disconnect()
+                info = try await fallbackPreparer.prepare()
+                activeBrokerIdentity = info.persistenceIdentity
+                await client.setEventHandler { [weak self] event in
+                    Task { @MainActor in self?.consume(event) }
+                }
+                await client.setDisconnectHandler { [weak self] error in
+                    Task { @MainActor in self?.connectionLost(error, generation: generation) }
+                }
+                hello = try await client.connect(to: info)
+                usingSeparateBroker = true
             }
-            await client.setDisconnectHandler { [weak self] error in
-                Task { @MainActor in self?.connectionLost(error, generation: generation) }
-            }
-            let hello = try await client.connect(to: info)
             let status = try await client.inventory()
             guard generation == connectionGeneration, shouldReconnect else { return false }
 
             sessions = status.terminals
             connectionState = .connected(
-                version: hello.version,
+                version: hello.version + (usingSeparateBroker ? " · separate native broker" : ""),
                 pid: hello.pid,
                 serverEnforcedObserver: hello.serverEnforcedObserver
             )
