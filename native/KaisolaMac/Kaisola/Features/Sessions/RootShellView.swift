@@ -319,15 +319,8 @@ struct RootShellView: View {
                 .id(chat.id)
                 .background(Color(nsColor: .windowBackgroundColor))
         } else {
-            VStack(spacing: 0) {
-                StatusBar(
-                    state: model.connectionState,
-                    ownsSelection: model.selectedSessionID.map(model.isOwned) ?? false
-                )
-                Divider()
-                terminalContent
-            }
-            .background(Color(nsColor: .windowBackgroundColor))
+            terminalContent
+                .background(Color(nsColor: .windowBackgroundColor))
         }
     }
 
@@ -815,47 +808,6 @@ private struct SessionRow: View {
     private var statusColor: Color {
         if case .working = session.agentActivity, !session.exited { return .accentColor }
         return .secondary
-    }
-}
-
-private struct StatusBar: View {
-    let state: AppModel.ConnectionState
-    let ownsSelection: Bool
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(state.isConnected ? Color.green : Color.secondary.opacity(0.6))
-                .frame(width: 7, height: 7)
-            Text(state.title)
-                .font(.subheadline.weight(.medium))
-            if let detail = state.detail {
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-            if ownsSelection {
-                Label("Interactive", systemImage: "keyboard")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(.quaternary, in: Capsule())
-                    .accessibilityLabel("This terminal accepts keyboard input")
-            } else {
-                Label("Read only", systemImage: "eye")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(.quaternary, in: Capsule())
-                    .accessibilityLabel("Terminal access is read only")
-            }
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 48)
     }
 }
 

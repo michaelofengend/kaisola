@@ -747,17 +747,19 @@ final class AppModel: ObservableObject {
         }
 
         do {
+            // The disconnect handler stays DISARMED until a connection is fully
+            // established: an aborted probe handshake (e.g. Electron's broker
+            // failing the feature check) must never fire connectionLost against
+            // the connection the fallback goes on to establish.
+            await client.setDisconnectHandler(nil)
+            await client.setEventHandler { [weak self] event in
+                Task { @MainActor in self?.consume(event) }
+            }
             var info: BrokerInfo
             var hello: BrokerHello
             do {
                 info = try await brokerPreparer.prepare()
                 activeBrokerIdentity = info.persistenceIdentity
-                await client.setEventHandler { [weak self] event in
-                    Task { @MainActor in self?.consume(event) }
-                }
-                await client.setDisconnectHandler { [weak self] error in
-                    Task { @MainActor in self?.connectionLost(error, generation: generation) }
-                }
                 hello = try await client.connect(to: info)
                 usingSeparateBroker = false
             } catch BrokerClientError.observeFeatureMissing where fallbackPreparer != nil {
@@ -770,17 +772,14 @@ final class AppModel: ObservableObject {
                 await client.disconnect()
                 info = try await fallbackPreparer.prepare()
                 activeBrokerIdentity = info.persistenceIdentity
-                await client.setEventHandler { [weak self] event in
-                    Task { @MainActor in self?.consume(event) }
-                }
-                await client.setDisconnectHandler { [weak self] error in
-                    Task { @MainActor in self?.connectionLost(error, generation: generation) }
-                }
                 hello = try await client.connect(to: info)
                 usingSeparateBroker = true
             }
             let status = try await client.inventory()
             guard generation == connectionGeneration, shouldReconnect else { return false }
+            await client.setDisconnectHandler { [weak self] error in
+                Task { @MainActor in self?.connectionLost(error, generation: generation) }
+            }
 
             sessions = status.terminals
             connectionState = .connected(
