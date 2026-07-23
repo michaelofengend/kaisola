@@ -17,6 +17,7 @@ final class BrokerControlClientTests: XCTestCase {
                 "terminal.resize",
                 "terminal.kill",
                 "terminal.detachOwner",
+                "terminal.agentTurn",
             ]
         )
     }
@@ -65,6 +66,69 @@ final class BrokerControlClientTests: XCTestCase {
         XCTAssertNotEqual(one, other)
         XCTAssertTrue(one.hasPrefix("nproj_"))
         XCTAssertFalse(one.hasPrefix("proj_"))
+    }
+
+    func testControlSurfaceIncludesAgentTurnAndStaysSealed() {
+        XCTAssertTrue(ControlBrokerMethod.allCases.map(\.rawValue).contains("terminal.agentTurn"))
+        // Still disjoint from the observer reads and still a strict subset of
+        // the methods the observer policy forbids — the two lanes never blur.
+        let controlMethods = Set(ControlBrokerMethod.allCases.map(\.rawValue))
+        XCTAssertTrue(controlMethods.isDisjoint(with: Set(ObserveOnlyBrokerMethod.allCases.map(\.rawValue))))
+        XCTAssertTrue(controlMethods.isSubset(of: ObserveOnlyBrokerPolicy.forbiddenTerminalMethods))
+    }
+
+    func testAgentRegistryRecognizesClaudeAndCodexByCommand() {
+        XCTAssertEqual(AgentRegistry.profile(id: "claude-code")?.name, "Claude")
+        XCTAssertEqual(AgentRegistry.profile(id: "codex")?.name, "Codex")
+        XCTAssertEqual(AgentRegistry.profile(forCommand: "claude")?.id, "claude-code")
+        XCTAssertEqual(AgentRegistry.profile(forCommand: "/opt/homebrew/bin/codex")?.id, "codex")
+        XCTAssertNil(AgentRegistry.profile(forCommand: "/bin/zsh"))
+        XCTAssertNil(AgentRegistry.profile(forCommand: ""))
+    }
+
+    func testSessionStorePersistsAgentIdentity() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kaisola-agent-store-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("native-sessions.json")
+
+        let store = NativeSessionStore(fileURL: file)
+        store.upsert(NativeOwnedSession(
+            id: "term-nproj_x-1", projectID: "nproj_x", cwd: "/tmp/x",
+            title: "Claude · x", createdAt: 1, agentID: "claude-code"
+        ))
+        let reread = NativeSessionStore(fileURL: file).sessions().first
+        XCTAssertEqual(reread?.agentID, "claude-code")
+    }
+
+    func testAgentActivityParsesFromBrokerRecord() {
+        let working = BrokerTerminalRecord(
+            value: .object([
+                "id": .string("term-nproj_a-1"),
+                "owner": .string("native-1|1|nproj_a"),
+                "agentBusy": .bool(true),
+            ])
+        )
+        XCTAssertEqual(working?.agentActivity, .working)
+
+        let responded = BrokerTerminalRecord(
+            value: .object([
+                "id": .string("term-nproj_a-2"),
+                "owner": .string("native-1|1|nproj_a"),
+                "agentBusy": .bool(false),
+                "agentCompletedAt": .integer(1_700_000_000_000),
+            ])
+        )
+        XCTAssertEqual(responded?.agentActivity, .responded(at: 1_700_000_000_000))
+
+        let idle = BrokerTerminalRecord(
+            value: .object([
+                "id": .string("term-nproj_a-3"),
+                "owner": .string("native-1|1|nproj_a"),
+            ])
+        )
+        XCTAssertEqual(idle?.agentActivity, .idle)
     }
 
     func testCorruptStoreDegradesToEmptyRegistry() throws {

@@ -11,6 +11,7 @@
 		0B95CB6DB59DBD720A65A98E /* ObserveOnlyBrokerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0225E687EE0462F0D9C548 /* ObserveOnlyBrokerClient.swift */; };
 		143B9FBEC29D4FD6104DD505 /* BrokerModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D98396E44670C6412BE1415 /* BrokerModels.swift */; };
 		15B7789EF6CCF94F2416E478 /* KaisolaBrokerProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 35E6E0DC943424C3E5094F7F /* KaisolaBrokerProtocol */; };
+		20AC2166801F213916ED1EB1 /* TerminalTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9BB2E9EA7403C1040B07AB9 /* TerminalTheme.swift */; };
 		2E168574504779BD1AB8637A /* BrokerHelperPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7BF0B4BEB31139A942C49DC /* BrokerHelperPackageTests.swift */; };
 		37C9F63E6C257114907021FA /* BrokerControlClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBB9416285BEDB50CF079DF8 /* BrokerControlClient.swift */; };
 		39C5E91B15694071103E31CE /* NativeUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5245B06FDE5E37D212A59E72 /* NativeUpdateController.swift */; };
@@ -28,6 +29,7 @@
 		6DFF60157687B575AD4176D7 /* UnixBrokerTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1139547AB3E3B3A9C7AAEDA /* UnixBrokerTransport.swift */; };
 		6E8756D55ADB435BF33E5D5E /* KaisolaBrokerProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = BE5CAEF422CD9708D0FE4084 /* KaisolaBrokerProtocol */; };
 		6EAC794B55DA08FD078D9BAA /* BrokerBootstrapXPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CF54122B716B55D67623C3F /* BrokerBootstrapXPC.swift */; };
+		6F112F55B8EA5E9F777175F0 /* AgentRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9AE494034173A39FE10B346 /* AgentRegistry.swift */; };
 		6FC06029C8643A919750FD77 /* BrokerBootstrapService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FD5419F311EE385C8A43CD8 /* BrokerBootstrapService.swift */; };
 		798DE8FD51B9FFE7D6F9706F /* BrokerLaunchConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58663742F2D4497A3D234BF7 /* BrokerLaunchConfiguration.swift */; };
 		7B168B0E70A7503AD02FF74D /* DetachedBrokerProcess.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C8F92A50B6817748440EAE /* DetachedBrokerProcess.swift */; };
@@ -123,6 +125,8 @@
 		D7BF0B4BEB31139A942C49DC /* BrokerHelperPackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerHelperPackageTests.swift; sourceTree = "<group>"; };
 		DBB9416285BEDB50CF079DF8 /* BrokerControlClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerControlClient.swift; sourceTree = "<group>"; };
 		E66C339455BFF598A81C41DE /* NativeTerminalSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTerminalSurface.swift; sourceTree = "<group>"; };
+		E9BB2E9EA7403C1040B07AB9 /* TerminalTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTheme.swift; sourceTree = "<group>"; };
+		F9AE494034173A39FE10B346 /* AgentRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRegistry.swift; sourceTree = "<group>"; };
 		FA616801D125F0ACE1E5A177 /* NativeUpdateConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeUpdateConfigurationTests.swift; sourceTree = "<group>"; };
 		FBDFA0DF725244691C0496A5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -224,6 +228,7 @@
 				E66C339455BFF598A81C41DE /* NativeTerminalSurface.swift */,
 				CBB83EF128840150F6F7103D /* RootShellView.swift */,
 				13BFA68C0E2E3E83379B2835 /* TerminalDocument.swift */,
+				E9BB2E9EA7403C1040B07AB9 /* TerminalTheme.swift */,
 			);
 			path = Sessions;
 			sourceTree = "<group>";
@@ -283,6 +288,7 @@
 		E67FF59E24CA8E30D69906E5 /* Broker */ = {
 			isa = PBXGroup;
 			children = (
+				F9AE494034173A39FE10B346 /* AgentRegistry.swift */,
 				455D0FF2F635A75069247811 /* BrokerBootstrapClient.swift */,
 				DBB9416285BEDB50CF079DF8 /* BrokerControlClient.swift */,
 				16F343A1F0C6E1A6F95DB932 /* BrokerInfo.swift */,
@@ -459,6 +465,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6F112F55B8EA5E9F777175F0 /* AgentRegistry.swift in Sources */,
 				ACC0996E20F391DC8E473C42 /* AppModel.swift in Sources */,
 				7D477D2931DFC68EAB18253B /* BrokerBootstrapClient.swift in Sources */,
 				4DAB489B89232644868831B3 /* BrokerBootstrapXPC.swift in Sources */,
@@ -480,6 +487,7 @@
 				6B76FFE3C1F1E11155040E2F /* RootShellView.swift in Sources */,
 				ADF15F7FA4CF4D7D2FA753AE /* TerminalCursorStore.swift in Sources */,
 				D478A5901D0C96CE5D108C4A /* TerminalDocument.swift in Sources */,
+				20AC2166801F213916ED1EB1 /* TerminalTheme.swift in Sources */,
 				6DFF60157687B575AD4176D7 /* UnixBrokerTransport.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

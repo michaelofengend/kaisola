@@ -71,6 +71,14 @@ struct BrokerStatus: Equatable, Sendable {
     }
 }
 
+/// Whether an agent CLI is mid-turn. The broker owns this signal (a hidden
+/// tab's turn still settles), broadcast on `terminal:observer-activity`.
+enum AgentActivity: Equatable, Hashable, Sendable {
+    case idle
+    case working
+    case responded(at: Int64)
+}
+
 struct BrokerTerminalRecord: Identifiable, Equatable, Hashable, Sendable {
     let id: String
     let projectID: String
@@ -78,6 +86,7 @@ struct BrokerTerminalRecord: Identifiable, Equatable, Hashable, Sendable {
     let exited: Bool
     let streamEpoch: String?
     let endOffset: Int64
+    var agentActivity: AgentActivity
 
     var title: String {
         let tail = id.split(separator: ":").last.map(String.init) ?? id
@@ -102,15 +111,32 @@ struct BrokerTerminalRecord: Identifiable, Equatable, Hashable, Sendable {
         self.exited = object["exited"]?.boolValue ?? false
         self.streamEpoch = object["streamEpoch"]?.stringValue
         self.endOffset = object["endOffset"]?.intValue ?? 0
+        let busy = (live?["agentBusy"] ?? object["agentBusy"])?.boolValue ?? false
+        if busy {
+            self.agentActivity = .working
+        } else if let completed = (live?["agentCompletedAt"] ?? object["agentCompletedAt"])?.intValue {
+            self.agentActivity = .responded(at: completed)
+        } else {
+            self.agentActivity = .idle
+        }
     }
 
-    init(id: String, projectID: String, pid: Int32?, exited: Bool, streamEpoch: String?, endOffset: Int64) {
+    init(
+        id: String,
+        projectID: String,
+        pid: Int32?,
+        exited: Bool,
+        streamEpoch: String?,
+        endOffset: Int64,
+        agentActivity: AgentActivity = .idle
+    ) {
         self.id = id
         self.projectID = projectID
         self.pid = pid
         self.exited = exited
         self.streamEpoch = streamEpoch
         self.endOffset = endOffset
+        self.agentActivity = agentActivity
     }
 
     private static func projectID(from owner: String?) -> String? {
@@ -174,7 +200,7 @@ struct BrokerEvent: Equatable, Sendable {
         case output(epoch: String, startOffset: Int64, endOffset: Int64, data: String)
         case snapshotRequired
         case exit
-        case activity
+        case activity(busy: Bool, completedAt: Int64?)
     }
 
     let ownerID: String
@@ -201,7 +227,11 @@ struct BrokerEvent: Equatable, Sendable {
             kind = .output(epoch: epoch, startOffset: start, endOffset: end, data: data)
         case "terminal:observer-snapshot-required": kind = .snapshotRequired
         case "terminal:observer-exit": kind = .exit
-        case "terminal:observer-activity": kind = .activity
+        case "terminal:observer-activity":
+            kind = .activity(
+                busy: payload["busy"]?.boolValue ?? false,
+                completedAt: payload["completedAt"]?.intValue
+            )
         default: return nil
         }
 

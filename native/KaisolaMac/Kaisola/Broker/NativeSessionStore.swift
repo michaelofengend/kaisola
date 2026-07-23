@@ -10,6 +10,18 @@ struct NativeOwnedSession: Codable, Equatable, Identifiable, Sendable {
     let cwd: String
     var title: String
     let createdAt: Int64
+    /// The agent CLI this session boots (AgentRegistry id), or nil for a plain
+    /// shell. Persisted so a relaunched session keeps its agent identity.
+    var agentID: String?
+
+    init(id: String, projectID: String, cwd: String, title: String, createdAt: Int64, agentID: String? = nil) {
+        self.id = id
+        self.projectID = projectID
+        self.cwd = cwd
+        self.title = title
+        self.createdAt = createdAt
+        self.agentID = agentID
+    }
 }
 
 /// Persists the app's broker owner identity and its owned-terminal registry in

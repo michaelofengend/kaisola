@@ -15,6 +15,7 @@ enum ControlBrokerMethod: String, CaseIterable, Sendable {
     case resize = "terminal.resize"
     case kill = "terminal.kill"
     case detachOwner = "terminal.detachOwner"
+    case agentTurn = "terminal.agentTurn"
 }
 
 struct TerminalCreation: Equatable, Sendable {
@@ -40,6 +41,7 @@ protocol BrokerControlServing: Sendable {
     func resize(projectID: String, terminalID: String, columns: Int, rows: Int) async throws
     func kill(projectID: String, terminalID: String) async throws
     func detachOwner(projectID: String, terminalID: String) async throws
+    func setAgentTurn(projectID: String, terminalID: String, busy: Bool) async throws
     func disconnect() async
 }
 
@@ -166,6 +168,14 @@ actor BrokerControlClient: BrokerControlServing {
 
     func detachOwner(projectID: String, terminalID: String) async throws {
         _ = try await request(.detachOwner, params: identity(projectID: projectID, terminalID: terminalID))
+    }
+
+    func setAgentTurn(projectID: String, terminalID: String, busy: Bool) async throws {
+        guard var params = identity(projectID: projectID, terminalID: terminalID).objectValue else {
+            throw BrokerClientError.malformedResponse
+        }
+        params["busy"] = .bool(busy)
+        _ = try await request(.agentTurn, params: .object(params))
     }
 
     func disconnect() async {

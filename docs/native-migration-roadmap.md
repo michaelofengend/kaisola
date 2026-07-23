@@ -1,0 +1,193 @@
+# Kaisola native (Swift/macOS) migration roadmap
+
+The Electron app is the daily driver. The native app grows by strangling it —
+driving the shared `session-broker` first, porting surfaces one at a time. This
+is the authoritative parity checklist: every user-facing Electron capability,
+its status in native, and a migration priority.
+
+**Status:** DONE (in native) · PARTIAL (scaffolding exists) · NEW (not started).
+**Priority:** P0 core daily-driver · P1 important · P2 nice-to-have / legacy.
+
+**Product-scope caveat:** the repo carries two identities — the **agent
+workspace** (terminals, ACP Claude/Codex, Mesh) and an older **research
+assistant** (papers, citations, hypotheses, campaigns). The native migration
+prioritizes the agent workspace; the research pipeline (§9 legacy rows, most of
+§4 annotations, §3 domain reasoning providers) is treated as explicitly
+optional pending a scope decision.
+
+---
+
+## Already done / in-flight in native (baseline)
+
+- Terminal **observation** — `broker.status`/`terminal.list`/`subscribe`/`diagnostics` (`ObserveOnlyBrokerClient.swift`).
+- Native terminal **ownership**: create/type/resize/kill, durable across quit/update/crash, reattach on relaunch (`BrokerControlClient.swift`, `NativeTerminalSurface.swift`, `NativeSessionStore.swift`).
+- **Agent CLI sessions**: one-click Claude/Codex/OpenCode/Gemini owned terminals with live working/idle status (`AgentRegistry.swift`, agent-activity via `terminal:observer-activity`).
+- **Terminal theming** matched to the Electron xterm palette (`TerminalTheme.swift`).
+- Detached-broker **reconnect/backoff**, wake/foreground recovery (`BrokerStartupCoordinator.swift`, `BrokerReconnectBackoff.swift`).
+- Distribution: Developer ID signing, notarization, stapling, Sparkle updates from a signed appcast (`NativeUpdateController.swift`, release pipeline).
+- Companion **protocol + crypto** shared library (`KaisolaCore/{Protocol,Security,Domain}`) — already consumed by the iPhone app.
+- Session persistence (partial): `NativeSessionStore.swift`, `TerminalCursorStore.swift`.
+
+---
+
+## 1. Window & workspace shell
+
+| Feature | Status | Pri | Notes / key files |
+|---|---|---|---|
+| Multi-window (independent workspaces, ⌘⇧N) | NEW | P0 | `main.cjs` createWindow; native needs NSWindow-per-workspace |
+| Project tabs (Chrome-style, drag-reorder, rename, color, activity badges) | NEW | P0 | central organizing metaphor; store `projectTabs`/`switchProject` |
+| Two navigation layouts (Left tree vs Top bar), live-switchable | NEW | P0 | headline differentiator; `TabLayout`/`setTabLayout` |
+| Session tabs / dock-grid (draggable columns, split, close, pop) | NEW | P0 | `SessionTabs.tsx`/`dockGrid` |
+| Full macOS menu bar (App/File/Edit/View/Window/Help + accelerators) | PARTIAL | P0 | native has App/File/Edit; needs View/Window/dynamic tab list |
+| Session groups (named, tinted, collapsible; pinned) | NEW | P1 | `SessionGroup` |
+| Reopen closed session/project (⌘⇧T / ⌘⌥T, 7-day stack) | NEW | P1 | `closedStack` |
+| Saved windows (persist/reopen/delete named states) | NEW | P1 | `SavedWindows.tsx` |
+| Project rename / relocate / recents | NEW | P1 | `renameProjectTab`/`recentProjects` |
+| Workspace rail (file tree, ⌘B) | NEW | P1 | `WorkspaceRail.tsx` |
+| Command palette (⌘K/⌘P, fuzzy files + actions) | NEW | P1 | `CommandPalette.tsx` |
+| Detach project to new window / adopt | NEW | P2 | renderer-to-renderer transfer; complex |
+| Focus vs Studio layout mode | NEW | P2 | Studio is legacy research surface |
+| OmniBar (⌘L) | NEW | P2 | `OmniBar.tsx` |
+| Keymap overrides (`keymap.json`) | NEW | P2 | |
+| Onboarding flow | NEW | P2 | |
+
+## 2. Terminal features
+
+| Feature | Status | Pri | Notes |
+|---|---|---|---|
+| PTY create/write/resize/kill/signal | DONE | P0 | |
+| Observation (list/subscribe/diagnostics) | DONE | P0 | |
+| PTY continuity across restart / detached broker | PARTIAL | P0 | broker contract done; continuity UX to port |
+| Theming (dark/light/eco, tones, cursor color) | PARTIAL | P1 | `TerminalTheme.swift` started (dark/ink) |
+| Fonts (family/size ⌘±/weight/line-height) | NEW | P1 | |
+| Search in scrollback | NEW | P1 | native ⌘F wired to SwiftTerm find bar |
+| Links: URLs + OSC 8 hyperlinks | NEW | P1 | (OSC 8 landed in Electron; native has the terminal find/link groundwork) |
+| Rename / auto-name / prompt title | NEW | P1 | native has manual rename for owned sessions |
+| Agent detection / meta (process, cwd, branch, ports, exit) | PARTIAL | P0 | native has agent id + activity; meta poller to add |
+| Scroll pinning / bracketed paste / clipboard | NEW | P1 | |
+| File links in output → open in editor | NEW | P2 | `terminalFileLinks.ts` |
+| Browser-card on localhost dev ports | NEW | P2 | |
+| Blocks / OSC 133 prompt marks | NEW | P2 | |
+| CLI draft survival (retype into resumed agent) | NEW | P2 | |
+| Pop-out terminal to window | NEW | P2 | |
+
+## 3. Agent surfaces
+
+| Feature | Status | Pri | Notes |
+|---|---|---|---|
+| Agent CLI sessions (prepared terminal: Claude/Codex/…) | DONE | P0 | owned terminal booting the CLI + activity status |
+| ACP chat threads (structured, resumable) | NEW | P0 | `acpHandler.cjs`; the richer chat surface beyond terminal agents |
+| Tool-call cards / artifacts (diff/terminal/content) | NEW | P0 | |
+| Thinking / thought blocks (elapsed time) | NEW | P0 | |
+| Permissions / gates (allow/reject/always; rules; sensitive globs) | NEW | P0 | safety-critical |
+| Model + effort selection (Claude/Codex effort, per-thread) | NEW | P0 | |
+| Permission mode / autonomy dial (plan/default/acceptEdits/bypass) | NEW | P0 | |
+| Steering + queued follow-ups | NEW | P1 | |
+| Agent plan (todo list) | NEW | P1 | ACP `plan` |
+| Real context-window usage | NEW | P1 | ACP `usage_update` |
+| Optimistic dispatch + rollback | NEW | P1 | |
+| Turn checkpoints / restore (pre-turn git snapshot) | NEW | P1 | |
+| Slash commands / available commands | NEW | P1 | |
+| ACP terminals (agent-spawned, watch/take over) | NEW | P1 | |
+| Kaisola Mesh (group agents: scout→contract→execute→review→integrate) | NEW | P1 | signature feature, large; worktrees |
+| Transcript archive / paging | NEW | P2 | |
+| @-mentions (project entities) | NEW | P2 | research-tied |
+| Reasoning providers (domain research agents) | NEW | P2 | legacy |
+
+## 4. Editor / docs / files
+
+| Feature | Status | Pri | Notes |
+|---|---|---|---|
+| File tree + fuzzy search + index + watch | NEW | P1 | `fsHandler.cjs` |
+| Code editor (syntax, save, dirty, cursor restore) | NEW | P1 | `CodeEditor.tsx` |
+| Document preview (Markdown/HTML/CSV/JSON) | NEW | P1 (md) / P2 | `DocumentPreview.tsx` |
+| Preview tabs (Zed-style transient) | NEW | P2 | |
+| PDF viewer + LaTeX synctex | NEW | P2 | |
+| Research/word diffs | NEW | P2 | |
+| Outline / cursor follow | NEW | P2 | |
+| Quote annotations | NEW | P2 | research |
+| Follow-the-agent (auto-open touched files) | NEW | P2 | |
+| Asset import/rename/trash/reveal | NEW | P2 | |
+
+## 5. Settings & configuration
+
+| Section | Status | Pri | Notes |
+|---|---|---|---|
+| General (theme, updates, onboarding) | NEW | P0 (theme) / P1 | |
+| Guardrails (sensitive globs, permission rules, autonomy) | NEW | P0 | safety-critical |
+| Terminal (font/size/weight/line-height/tone/cursor) | NEW | P1 | |
+| Agents (add custom terminal/ACP, enable presets, models) | NEW | P1 | |
+| Models & keys (API keys keychain, provider, base URLs) | NEW | P1 | |
+| Usage (Codex/Claude/OpenCode gauges, limits) | NEW | P1 | |
+| Interface (cost chips, inbox, diffs, drafts, nav, perf) | NEW | P1 | |
+| Companion (pairing/devices) | NEW | P2 | |
+| Extensions (languages/grammars/previews/MCP) | NEW | P2 | |
+| Advanced (settings.json/keymap.json editing) | NEW | P2 | |
+| Literature (OpenAlex/GROBID) | NEW | P2 | research legacy |
+
+## 6. Providers, accounts, auth
+
+| Feature | Status | Pri | Notes |
+|---|---|---|---|
+| Claude accounts (isolated CLAUDE_CONFIG_DIR, per-project) | NEW | P1 | |
+| Codex accounts (isolated CODEX_HOME, per-project) | NEW | P1 | |
+| Device-code sign-in card | NEW | P1 | |
+| API keys (Anthropic/OpenAI keychain) | NEW | P1 | |
+| MCP servers (per-workspace, add/probe/import, carried into agents) | NEW | P2 | |
+| Extensions | NEW | P2 | |
+| App account (Google/Firebase, for companion rendezvous) | NEW | P2 | |
+
+## 7. Companion / mobile
+
+Protocol + crypto already shared in `KaisolaCore`; the desktop **host** side is
+what a native app would provide. All PARTIAL/P2 — the iPhone app already works
+against the Electron host.
+
+| Feature | Status | Pri |
+|---|---|---|
+| Pairing (QR/phrase, Noise-XX, account rendezvous) | PARTIAL | P2 |
+| Projection publishing (redacted state to phone) | PARTIAL | P2 |
+| Device management (list/rename/revoke, capabilities) | NEW | P2 |
+| Capability tiers (observe / agent-control / terminal-control) | PARTIAL | P2 |
+| Relay / transport (Bonjour LAN + Cloudflare relay) | PARTIAL | P2 |
+
+## 8. Updates, releases, glass / visual effects
+
+| Feature | Status | Pri | Notes |
+|---|---|---|---|
+| Auto-updates (Sparkle) | DONE | P1 | signed appcast, real update verified |
+| Theme / dark-mode invariant (dark/light/system, follows macOS live) | NEW | P0 | |
+| Liquid Glass / vibrancy (NSGlassEffectView + fallback) | NEW | P1 | SwiftUI materials natural fit |
+| Perf/energy mode (glass vs eco) | NEW | P1 | |
+| Wallpaper tint sampling | NEW | P2 | |
+| Window mode / traffic lights / relaunch | PARTIAL | P1 | |
+
+## 9. Cross-cutting capabilities
+
+| Feature | Status | Pri | Notes |
+|---|---|---|---|
+| Attention / notifications (dock badge, native Notification, needs-you) | NEW | P1 | |
+| Cross-project inbox (one bell across tabs) | NEW | P1 | |
+| Git panel (status/stage/commit/diff/log/restore) | NEW | P1 | `gitHandler.cjs` |
+| Working-tree checkpoints (pre-turn git snapshots) | NEW | P1 | |
+| Git worktree sessions (isolated checkout per agent; Mesh) | NEW | P1 | |
+| Whole-app local persistence (layouts, drafts, metadata) | PARTIAL | P0 | native has session store; broaden |
+| Agent task ledger | NEW | P2 | |
+| Embedded browser cards | NEW | P2 | |
+| LaTeX mode | NEW | P2 | |
+| Workflows / automations | NEW | P2 | research legacy |
+| Cost / usage chips | NEW | P2 | |
+| Sandboxed experiments (mock/docker/e2b) | NEW | P2 | research legacy |
+| Research pipeline (papers/citations/hypotheses/campaigns) | NEW | P2 | large legacy; likely out of scope |
+| Toasts | NEW | P2 | |
+
+---
+
+## Suggested phase ordering
+
+- **Phase A — shell & session spine (P0):** multi-window; project tabs; the two navigation layouts; session tabs / dock-grid; full macOS menu bar; theme (dark/light/system live); broaden persistence to whole-app state; PTY-continuity UX + terminal meta poller.
+- **Phase B — agent chat depth (P0):** ACP chat UI with tool-call cards, thinking blocks, plans, streaming; permissions/guardrails + gates; model/effort/permission-mode selection; steering + queued follow-ups; optimistic dispatch/rollback.
+- **Phase C — terminal polish + workspace (P1):** terminal theming/fonts/search/links/rename; file tree + search + code editor + git panel; working-tree checkpoints + worktree sessions; attention/notifications + cross-project inbox.
+- **Phase D — Mesh + accounts + appearance (P1):** Kaisola Mesh; Claude/Codex accounts + device-code sign-in + API keys; usage/limits; glass/eco appearance + wallpaper tint; command palette + saved windows + reopen-closed.
+- **Phase E — integrations & long tail (P2):** companion host; MCP + extensions; markdown/PDF/LaTeX preview; browser cards; ledger; workflows; OmniBar; keymap; project detach/adopt.
+- **Phase F — research legacy (P2, evaluate need):** OpenAlex/GROBID/citations/provenance/hypotheses/experiments/proposals, Studio layout, research diffs/annotations, sandboxes. Confirm scope before investing.

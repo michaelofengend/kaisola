@@ -22,7 +22,7 @@ struct NativeTerminalSurface: NSViewRepresentable {
             ? OwnedTerminalView(frame: .zero, font: font)
             : ReadOnlyTerminalView(frame: .zero, font: font)
         view.terminalDelegate = context.coordinator
-        view.configureNativeColors()
+        view.configureKaisolaTheme()
         view.allowMouseReporting = isOwned
         view.linkReporting = .implicit
         view.optionAsMetaKey = false
@@ -160,6 +160,19 @@ class ReadOnlyTerminalView: TerminalView {
         if Self.shouldClaimFocus(currentFirstResponder: window.firstResponder, window: window) {
             window.makeFirstResponder(self)
         }
+    }
+
+    /// Installs the Kaisola palette (matched to the Electron xterm theme)
+    /// instead of SwiftTerm's OS-default black-on-white.
+    func configureKaisolaTheme() {
+        installColors(TerminalTheme.ansiColors)
+        nativeForegroundColor = TerminalTheme.foreground
+        nativeBackgroundColor = TerminalTheme.background
+        caretColor = TerminalTheme.cursor
+        selectedTextBackgroundColor = TerminalTheme.selection
+        useBrightColors = true
+        wantsLayer = true
+        layer?.backgroundColor = TerminalTheme.background.cgColor
     }
 
     func updateAccessibilityValue(from output: String) {

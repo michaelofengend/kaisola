@@ -59,6 +59,7 @@ final class AppModel: ObservableObject {
     private var activeBrokerIdentity: String?
     private var reconnectTask: Task<Void, Never>?
     private var cursorSaveTask: Task<Void, Never>?
+    private var inventoryRefreshTask: Task<Void, Never>?
     private var connectionGeneration = 0
     private var shouldReconnect = false
     private var hasStarted = false
@@ -200,31 +201,54 @@ final class AppModel: ObservableObject {
 
     // MARK: - Native terminal ownership (Phase 2)
 
-    /// Creates a shell the native app owns in the given directory, registers
-    /// it durably, and selects it. The PTY lives on the broker, so it survives
-    /// this app quitting, updating, or crashing exactly like Electron's do.
+    /// Creates a plain shell the native app owns in the given directory.
     func createTerminal(inDirectory directory: URL) async {
+        await createOwnedSession(inDirectory: directory, agent: nil)
+    }
+
+    /// Launches a one-click agent session: an owned terminal that boots the
+    /// agent's CLI in the chosen directory, exactly like Electron's prepared
+    /// terminal agents.
+    func createAgentSession(_ agent: AgentProfile, inDirectory directory: URL) async {
+        await createOwnedSession(inDirectory: directory, agent: agent)
+    }
+
+    /// Registers a durable owned session and selects it. The PTY lives on the
+    /// broker, so it survives this app quitting, updating, or crashing exactly
+    /// like Electron's do. An agent session boots its CLI via a login shell so
+    /// the user's PATH and CLI config apply.
+    private func createOwnedSession(inDirectory directory: URL, agent: AgentProfile?) async {
         guard controlAvailable else { return }
         let cwd = directory.path
         let projectID = NativeSessionStore.projectID(forDirectory: cwd)
         let terminalID = NativeSessionStore.terminalID(projectID: projectID)
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let arguments: [String]
+        if let agent, !agent.launchCommand.isEmpty {
+            // -ilc runs the agent as the login shell's command so it inherits
+            // the interactive environment, then hands control to the user.
+            arguments = ["-ilc", "\(agent.launchCommand); exec \(shell) -il"]
+        } else {
+            arguments = ["-il"]
+        }
         do {
             _ = try await controlClient.createTerminal(
                 projectID: projectID,
                 terminalID: terminalID,
                 command: shell,
-                arguments: ["-il"],
+                arguments: arguments,
                 cwd: cwd,
                 columns: 100,
                 rows: 30
             )
+            let folder = (cwd as NSString).lastPathComponent
             sessionStore.upsert(NativeOwnedSession(
                 id: terminalID,
                 projectID: projectID,
                 cwd: cwd,
-                title: (cwd as NSString).lastPathComponent,
-                createdAt: Int64(Date().timeIntervalSince1970 * 1_000)
+                title: agent.map { "\($0.name) · \(folder)" } ?? folder,
+                createdAt: Int64(Date().timeIntervalSince1970 * 1_000),
+                agentID: agent?.id
             ))
             ownedTerminalIDs.insert(terminalID)
             await refreshInventory()
@@ -235,13 +259,39 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The agent profile a session runs, or nil for a plain shell / observed
+    /// Electron terminal.
+    func agentProfile(for terminalID: String) -> AgentProfile? {
+        guard let stored = sessionStore.sessions().first(where: { $0.id == terminalID }),
+              let agentID = stored.agentID else { return nil }
+        return AgentRegistry.profile(id: agentID)
+    }
+
+    /// Rename an owned session's sidebar title.
+    func renameSession(_ terminalID: String, to title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isOwned(terminalID), !trimmed.isEmpty,
+              var stored = sessionStore.sessions().first(where: { $0.id == terminalID }) else { return }
+        stored.title = trimmed
+        sessionStore.upsert(stored)
+        objectWillChange.send()
+    }
+
     /// Keyboard bytes from an owned session's surface. Ownership is re-checked
-    /// here so no UI wiring mistake can ever write to an observed terminal.
+    /// here so no UI wiring mistake can ever write to an observed terminal. For
+    /// an agent session, a submitted line (carriage return) opens an agent
+    /// turn; the broker's quiet timer settles it back to idle.
     func sendInput(_ data: String, to terminalID: String) {
         guard controlAvailable, isOwned(terminalID),
               let record = sessions.first(where: { $0.id == terminalID }) else { return }
         let projectID = record.projectID
-        Task { try? await controlClient.write(projectID: projectID, terminalID: terminalID, data: data) }
+        let opensAgentTurn = agentProfile(for: terminalID) != nil && data.contains("\r")
+        Task {
+            try? await controlClient.write(projectID: projectID, terminalID: terminalID, data: data)
+            if opensAgentTurn {
+                try? await controlClient.setAgentTurn(projectID: projectID, terminalID: terminalID, busy: true)
+            }
+        }
     }
 
     func resizeTerminal(_ terminalID: String, columns: Int, rows: Int) {
@@ -268,10 +318,27 @@ final class AppModel: ObservableObject {
     }
 
     /// Refresh the session list from the broker without disturbing streams.
+    /// The `list()` rows carry agent busy/completed fields, so this keeps every
+    /// row's agent status current, not just the subscribed one.
     func refreshInventory() async {
         guard connectionState.isConnected else { return }
         if let status = try? await client.inventory() {
             sessions = status.terminals
+        }
+    }
+
+    /// A light periodic refresh so agent working/idle state stays current on
+    /// every row while the app is connected. The subscribed session also gets
+    /// immediate activity events; this covers the rest.
+    private func startInventoryRefresh(generation: Int) {
+        inventoryRefreshTask?.cancel()
+        let sleeper = sleep
+        inventoryRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await sleeper(2_500_000_000) } catch { return }
+                guard let self, generation == self.connectionGeneration else { return }
+                await self.refreshInventory()
+            }
         }
     }
 
@@ -324,6 +391,8 @@ final class AppModel: ObservableObject {
         connectionGeneration &+= 1
         reconnectTask?.cancel()
         reconnectTask = nil
+        inventoryRefreshTask?.cancel()
+        inventoryRefreshTask = nil
         cursorSaveTask?.cancel()
         cursorSaveTask = nil
         await persistCurrentCursor()
@@ -370,6 +439,7 @@ final class AppModel: ObservableObject {
                 serverEnforcedObserver: hello.serverEnforcedObserver
             )
             await restoreOwnedSessions(info: info)
+            startInventoryRefresh(generation: generation)
             let preferredID = selectedSessionID.flatMap { selected in
                 sessions.contains(where: { $0.id == selected }) ? selected : nil
             } ?? sessions.first?.id
@@ -425,6 +495,11 @@ final class AppModel: ObservableObject {
     }
 
     private func consume(_ event: BrokerEvent) {
+        // Agent activity updates the session's row even if it is the selected
+        // one; it is scoped to the subscribed terminal like every other event.
+        if case let .activity(busy, completedAt) = event.kind {
+            applyActivity(busy: busy, completedAt: completedAt, to: event.terminalID)
+        }
         guard event.ownerID == observerOwnerID,
               event.projectID == selectedSession?.projectID,
               event.terminalID == selectedSession?.id else { return }
@@ -448,6 +523,17 @@ final class AppModel: ObservableObject {
             queueCursorPersistence()
         case .activity:
             break
+        }
+    }
+
+    private func applyActivity(busy: Bool, completedAt: Int64?, to terminalID: String) {
+        guard let index = sessions.firstIndex(where: { $0.id == terminalID }) else { return }
+        if busy {
+            sessions[index].agentActivity = .working
+        } else if let completedAt {
+            sessions[index].agentActivity = .responded(at: completedAt)
+        } else {
+            sessions[index].agentActivity = .idle
         }
     }
 

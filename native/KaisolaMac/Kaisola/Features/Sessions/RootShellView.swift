@@ -3,6 +3,8 @@ import SwiftUI
 
 struct RootShellView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var renameTarget: String?
+    @State private var renameText: String = ""
 
     var body: some View {
         NavigationSplitView {
@@ -13,15 +15,22 @@ struct RootShellView: View {
                 ForEach(model.projects, id: \.name) { project in
                     Section(project.name) {
                         ForEach(project.sessions) { session in
-                            SessionRow(session: session, owned: model.isOwned(session.id))
-                                .tag(Optional(session.id))
-                                .contextMenu {
-                                    if model.isOwned(session.id) && !session.exited {
+                            SessionRow(
+                                session: session,
+                                owned: model.isOwned(session.id),
+                                agent: model.agentProfile(for: session.id)
+                            )
+                            .tag(Optional(session.id))
+                            .contextMenu {
+                                if model.isOwned(session.id) {
+                                    Button("Rename…") { renameTarget = session.id }
+                                    if !session.exited {
                                         Button("End Session", role: .destructive) {
                                             Task { await model.endSession(session.id) }
                                         }
                                     }
                                 }
+                            }
                         }
                     }
                 }
@@ -33,7 +42,8 @@ struct RootShellView: View {
                     state: model.connectionState,
                     canCreate: model.controlAvailable,
                     reload: { Task { await model.reload() } },
-                    newTerminal: { RootShellView.promptForNewTerminal(model: model) }
+                    newTerminal: { RootShellView.promptForNewTerminal(model: model) },
+                    newAgent: { agent in RootShellView.promptForNewAgent(agent, model: model) }
                 )
             }
             .accessibilityLabel("Projects and terminal sessions")
@@ -49,21 +59,44 @@ struct RootShellView: View {
             .background(Color(nsColor: .windowBackgroundColor))
         }
         .navigationSplitViewStyle(.balanced)
+        .sheet(item: Binding(get: { renameTarget.map(RenameID.init) }, set: { renameTarget = $0?.id })) { target in
+            RenameSheet(text: $renameText) { newTitle in
+                model.renameSession(target.id, to: newTitle)
+                renameTarget = nil
+            } cancel: {
+                renameTarget = nil
+            }
+            .onAppear {
+                renameText = model.sessions.first(where: { $0.id == target.id })?.title ?? ""
+            }
+        }
     }
 
     /// Folder picker → new owned shell in that directory. Reused by the File
     /// menu and the sidebar button.
     @MainActor
     static func promptForNewTerminal(model: AppModel) {
-        guard model.controlAvailable else { return }
+        guard let directory = chooseDirectory(prompt: "Open Terminal Here") else { return }
+        Task { await model.createTerminal(inDirectory: directory) }
+    }
+
+    /// Folder picker → new agent session running the agent's CLI there.
+    @MainActor
+    static func promptForNewAgent(_ agent: AgentProfile, model: AppModel) {
+        guard let directory = chooseDirectory(prompt: "Start \(agent.name) Here") else { return }
+        Task { await model.createAgentSession(agent, inDirectory: directory) }
+    }
+
+    @MainActor
+    private static func chooseDirectory(prompt: String) -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "Open Terminal Here"
-        panel.message = "Choose the folder for the new terminal session."
-        guard panel.runModal() == .OK, let directory = panel.urls.first else { return }
-        Task { await model.createTerminal(inDirectory: directory) }
+        panel.prompt = prompt
+        panel.message = "Choose the folder for the new session."
+        guard panel.runModal() == .OK else { return nil }
+        return panel.urls.first
     }
 
     @ViewBuilder
@@ -113,30 +146,91 @@ struct RootShellView: View {
     }
 }
 
+/// Identifiable wrapper so a session id can drive a `.sheet(item:)`.
+private struct RenameID: Identifiable { let id: String }
+
+private struct RenameSheet: View {
+    @Binding var text: String
+    let commit: (String) -> Void
+    let cancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Rename Session")
+                .font(.headline)
+            TextField("Session name", text: $text)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 260)
+                .onSubmit { commit(text) }
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel, action: cancel)
+                Button("Rename") { commit(text) }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+    }
+}
+
 private struct SessionRow: View {
     let session: BrokerTerminalRecord
     let owned: Bool
+    let agent: AgentProfile?
 
     var body: some View {
         HStack(spacing: 9) {
-            Image(systemName: owned ? "terminal.fill" : "terminal")
-                .foregroundStyle(session.exited ? Color.secondary : owned ? Color.accentColor : Color.green)
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: rowSymbol)
+                    .foregroundStyle(iconColor)
+                if case .working = session.agentActivity, !session.exited {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .scaleEffect(0.6)
+                        .offset(x: 4, y: 4)
+                }
+            }
+            .frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.title)
                     .lineLimit(1)
                 Text(sessionDetail)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(statusColor)
             }
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
+        .accessibilityValue(sessionDetail)
+    }
+
+    private var rowSymbol: String {
+        if let agent { return agent.symbol }
+        return owned ? "terminal.fill" : "terminal"
+    }
+
+    private var iconColor: Color {
+        if session.exited { return .secondary }
+        if agent != nil { return .accentColor }
+        return owned ? .accentColor : .green
     }
 
     private var sessionDetail: String {
         if session.exited { return "Finished" }
+        if agent != nil {
+            switch session.agentActivity {
+            case .working: return "Working…"
+            case .responded: return "Responded"
+            case .idle: return owned ? "Ready" : "Ready · observed"
+            }
+        }
         let liveDetail = "Live · PID \(session.pid.map(String.init) ?? "—")"
         return owned ? liveDetail : "\(liveDetail) · observed"
+    }
+
+    private var statusColor: Color {
+        if case .working = session.agentActivity, !session.exited { return .accentColor }
+        return .secondary
     }
 }
 
@@ -186,6 +280,7 @@ private struct ConnectionFooter: View {
     let canCreate: Bool
     let reload: () -> Void
     let newTerminal: () -> Void
+    let newAgent: (AgentProfile) -> Void
 
     var body: some View {
         HStack(spacing: 8) {
@@ -198,12 +293,27 @@ private struct ConnectionFooter: View {
             }
             Spacer()
             if canCreate {
-                Button(action: newTerminal) {
+                Menu {
+                    Button {
+                        newTerminal()
+                    } label: {
+                        Label("New Terminal", systemImage: "terminal")
+                    }
+                    Divider()
+                    ForEach(AgentRegistry.all) { agent in
+                        Button {
+                            newAgent(agent)
+                        } label: {
+                            Label("New \(agent.name) Agent", systemImage: agent.symbol)
+                        }
+                    }
+                } label: {
                     Image(systemName: "plus")
                 }
-                .buttonStyle(.borderless)
-                .help("New terminal session (⌘T)")
-                .accessibilityLabel("New terminal session")
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("New session (⌘T)")
+                .accessibilityLabel("New session")
             }
             Button(action: reload) {
                 Image(systemName: "arrow.clockwise")
