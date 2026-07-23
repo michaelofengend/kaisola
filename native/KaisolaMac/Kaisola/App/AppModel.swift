@@ -46,6 +46,10 @@ final class AppModel: ObservableObject {
     /// Whether the connected broker accepted a controller connection; older
     /// brokers stay observe-only and hide every mutation affordance.
     @Published private(set) var controlAvailable = false
+    /// Open ACP chat conversations, keyed by a synthetic chat id. These run
+    /// independently of the broker (the adapter is a child of this app).
+    @Published private(set) var chats: [AcpChatHandle] = []
+    @Published var selectedChatID: String?
 
     private let brokerPreparer: any BrokerInfoPreparing
     private let client: any ObserveOnlyBrokerServing
@@ -102,6 +106,38 @@ final class AppModel: ObservableObject {
 
     func isOwned(_ terminalID: String) -> Bool {
         ownedTerminalIDs.contains(terminalID)
+    }
+
+    // MARK: - ACP chats
+
+    /// Open a new ACP chat with the given agent in a directory. The adapter is
+    /// spawned as a child of this app (ACP sessions are app-scoped, unlike the
+    /// broker-durable terminals). Selecting the chat shows its conversation.
+    func openChat(_ agent: AgentProfile, inDirectory directory: URL) {
+        guard let adapter = AcpAdapter.forAgent(agent.id) else { return }
+        let chatID = "chat-\(UUID().uuidString.lowercased().prefix(8))"
+        let conversation = AcpConversation(
+            title: "\(agent.name) · \((directory.path as NSString).lastPathComponent)",
+            command: adapter.command,
+            arguments: adapter.arguments,
+            cwd: directory.path
+        )
+        chats.append(AcpChatHandle(id: chatID, agentID: agent.id, conversation: conversation))
+        selectedChatID = chatID
+        selectedSessionID = nil
+    }
+
+    func closeChat(_ chatID: String) {
+        if let chat = chats.first(where: { $0.id == chatID }) {
+            chat.conversation.stop()
+        }
+        chats.removeAll { $0.id == chatID }
+        if selectedChatID == chatID { selectedChatID = nil }
+    }
+
+    func selectChat(_ chatID: String?) {
+        selectedChatID = chatID
+        if chatID != nil { selectedSessionID = nil }
     }
 
     func reload() async {

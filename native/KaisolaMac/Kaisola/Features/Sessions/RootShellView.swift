@@ -6,12 +6,30 @@ struct RootShellView: View {
     @State private var renameTarget: String?
     @State private var renameText: String = ""
 
+    private var sidebarSelection: Binding<String?> {
+        Binding(
+            get: { model.selectedChatID ?? model.selectedSessionID },
+            set: { id in
+                if let id, id.hasPrefix("chat-") { model.selectChat(id) }
+                else { model.selectChat(nil); Task { await model.select(id) } }
+            }
+        )
+    }
+
     var body: some View {
         NavigationSplitView {
-            List(selection: Binding(
-                get: { model.selectedSessionID },
-                set: { id in Task { await model.select(id) } }
-            )) {
+            List(selection: sidebarSelection) {
+                if !model.chats.isEmpty {
+                    Section("Chats") {
+                        ForEach(model.chats) { chat in
+                            ChatRow(chat: chat)
+                                .tag(Optional(chat.id))
+                                .contextMenu {
+                                    Button("Close Chat", role: .destructive) { model.closeChat(chat.id) }
+                                }
+                        }
+                    }
+                }
                 ForEach(model.projects, id: \.name) { project in
                     Section(project.name) {
                         ForEach(project.sessions) { session in
@@ -43,20 +61,27 @@ struct RootShellView: View {
                     canCreate: model.controlAvailable,
                     reload: { Task { await model.reload() } },
                     newTerminal: { RootShellView.promptForNewTerminal(model: model) },
-                    newAgent: { agent in RootShellView.promptForNewAgent(agent, model: model) }
+                    newAgent: { agent in RootShellView.promptForNewAgent(agent, model: model) },
+                    newChat: { agent in RootShellView.promptForNewChat(agent, model: model) }
                 )
             }
-            .accessibilityLabel("Projects and terminal sessions")
+            .accessibilityLabel("Projects, chats, and terminal sessions")
         } detail: {
-            VStack(spacing: 0) {
-                StatusBar(
-                    state: model.connectionState,
-                    ownsSelection: model.selectedSessionID.map(model.isOwned) ?? false
-                )
-                Divider()
-                terminalContent
+            if let chat = model.chats.first(where: { $0.id == model.selectedChatID }) {
+                AcpChatView(conversation: chat.conversation)
+                    .id(chat.id)
+                    .background(Color(nsColor: .windowBackgroundColor))
+            } else {
+                VStack(spacing: 0) {
+                    StatusBar(
+                        state: model.connectionState,
+                        ownsSelection: model.selectedSessionID.map(model.isOwned) ?? false
+                    )
+                    Divider()
+                    terminalContent
+                }
+                .background(Color(nsColor: .windowBackgroundColor))
             }
-            .background(Color(nsColor: .windowBackgroundColor))
         }
         .navigationSplitViewStyle(.balanced)
         .sheet(item: Binding(get: { renameTarget.map(RenameID.init) }, set: { renameTarget = $0?.id })) { target in
@@ -85,6 +110,14 @@ struct RootShellView: View {
     static func promptForNewAgent(_ agent: AgentProfile, model: AppModel) {
         guard let directory = chooseDirectory(prompt: "Start \(agent.name) Here") else { return }
         Task { await model.createAgentSession(agent, inDirectory: directory) }
+    }
+
+    /// Folder picker → new ACP chat conversation with the agent there.
+    @MainActor
+    static func promptForNewChat(_ agent: AgentProfile, model: AppModel) {
+        guard AcpAdapter.forAgent(agent.id) != nil,
+              let directory = chooseDirectory(prompt: "Chat with \(agent.name) Here") else { return }
+        model.openChat(agent, inDirectory: directory)
     }
 
     @MainActor
@@ -143,6 +176,33 @@ struct RootShellView: View {
                 }
             }
         }
+    }
+}
+
+private struct ChatRow: View {
+    @ObservedObject var conversation: AcpConversation
+
+    init(chat: AcpChatHandle) {
+        self.conversation = chat.conversation
+    }
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "bubble.left.and.text.bubble.right")
+                .foregroundStyle(conversation.isConnected ? Color.accentColor : Color.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(conversation.title).lineLimit(1)
+                Text(conversation.isRunning ? "Working…" : conversation.isConnected ? "Chat" : "Starting…")
+                    .font(.caption)
+                    .foregroundStyle(conversation.isRunning ? Color.accentColor : .secondary)
+            }
+            if conversation.isRunning {
+                Spacer()
+                ProgressView().controlSize(.mini).scaleEffect(0.6)
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -281,6 +341,11 @@ private struct ConnectionFooter: View {
     let reload: () -> Void
     let newTerminal: () -> Void
     let newAgent: (AgentProfile) -> Void
+    let newChat: (AgentProfile) -> Void
+
+    private var chatAgents: [AgentProfile] {
+        AgentRegistry.all.filter { AcpAdapter.forAgent($0.id) != nil }
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -294,17 +359,24 @@ private struct ConnectionFooter: View {
             Spacer()
             if canCreate {
                 Menu {
+                    ForEach(chatAgents) { agent in
+                        Button {
+                            newChat(agent)
+                        } label: {
+                            Label("Chat with \(agent.name)", systemImage: "bubble.left.and.text.bubble.right")
+                        }
+                    }
+                    Divider()
                     Button {
                         newTerminal()
                     } label: {
                         Label("New Terminal", systemImage: "terminal")
                     }
-                    Divider()
                     ForEach(AgentRegistry.all) { agent in
                         Button {
                             newAgent(agent)
                         } label: {
-                            Label("New \(agent.name) Agent", systemImage: agent.symbol)
+                            Label("New \(agent.name) Agent (Terminal)", systemImage: agent.symbol)
                         }
                     }
                 } label: {
@@ -312,7 +384,7 @@ private struct ConnectionFooter: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .help("New session (⌘T)")
+                .help("New chat or session")
                 .accessibilityLabel("New session")
             }
             Button(action: reload) {
