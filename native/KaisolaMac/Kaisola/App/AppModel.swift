@@ -847,11 +847,26 @@ final class AppModel: ObservableObject {
     func endSession(_ terminalID: String) async {
         guard isOwned(terminalID),
               let record = sessions.first(where: { $0.id == terminalID }) else { return }
-        // Remember enough to recreate it (⌘⌥T) before the registry forgets.
-        if let stored = sessionStore.sessions().first(where: { $0.id == terminalID }) {
-            sessionStore.pushClosedSession(ClosedSession(cwd: stored.cwd, agentID: stored.agentID, title: stored.title))
+        // Remember enough to recreate it (⌘⌥T), but do not mutate the local
+        // registry unless the broker confirms the permanent close (or a
+        // timeout races with a close that inventory can already prove).
+        let closedSession = sessionStore.sessions()
+            .first(where: { $0.id == terminalID })
+            .map { ClosedSession(cwd: $0.cwd, agentID: $0.agentID, title: $0.title) }
+        // terminal.kill leaves an exited diagnostic record behind; release is
+        // the owner-gated permanent close and removes the spool + sidebar row.
+        do {
+            try await controlClient.release(projectID: record.projectID, terminalID: terminalID)
+        } catch {
+            await refreshInventory()
+            guard !sessions.contains(where: { $0.id == terminalID }) else {
+                ToastCenter.shared.show("Couldn't end session: \(error.kaisolaSafeDescription)", style: .error)
+                return
+            }
         }
-        try? await controlClient.kill(projectID: record.projectID, terminalID: terminalID)
+        if let closedSession {
+            sessionStore.pushClosedSession(closedSession)
+        }
         sessionStore.remove(terminalID: terminalID)
         ownedTerminalIDs.remove(terminalID)
         if selectedSessionID == terminalID {

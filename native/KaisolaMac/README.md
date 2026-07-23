@@ -51,6 +51,11 @@ everything else remains observe-only.
 The broker transport keeps observation and mutation deliberately separate.
 The read-only lane admits inventory/diagnostic/subscribe operations; the
 controller lane is capability-bound to native-owned project sessions.
+The user-facing **End Session** action invokes the owner-gated permanent
+`terminal.release` operation, which closes the PTY and removes its retained
+spool and broker inventory record. The lower-level `terminal.kill` operation
+deliberately remains available for diagnostics that should retain an exited
+record.
 
 Transient socket loss is recovered with capped exponential backoff and jitter.
 The app reconnects after wake and when an offline preview returns to the

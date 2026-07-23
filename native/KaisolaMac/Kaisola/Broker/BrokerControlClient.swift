@@ -14,6 +14,7 @@ enum ControlBrokerMethod: String, CaseIterable, Sendable {
     case write = "terminal.write"
     case resize = "terminal.resize"
     case kill = "terminal.kill"
+    case release = "terminal.release"
     case detachOwner = "terminal.detachOwner"
     case agentTurn = "terminal.agentTurn"
 }
@@ -40,6 +41,7 @@ protocol BrokerControlServing: Sendable {
     func write(projectID: String, terminalID: String, data: String) async throws
     func resize(projectID: String, terminalID: String, columns: Int, rows: Int) async throws
     func kill(projectID: String, terminalID: String) async throws
+    func release(projectID: String, terminalID: String) async throws
     func detachOwner(projectID: String, terminalID: String) async throws
     func setAgentTurn(projectID: String, terminalID: String, busy: Bool) async throws
     func disconnect() async
@@ -169,6 +171,13 @@ actor BrokerControlClient: BrokerControlServing {
 
     func kill(projectID: String, terminalID: String) async throws {
         _ = try await request(.kill, params: identity(projectID: projectID, terminalID: terminalID))
+    }
+
+    /// Permanently ends an owned terminal and removes its retained broker
+    /// record/spool. `kill` alone intentionally leaves a finished diagnostic;
+    /// the user-facing End Session action must use this stronger operation.
+    func release(projectID: String, terminalID: String) async throws {
+        _ = try await request(.release, params: identity(projectID: projectID, terminalID: terminalID))
     }
 
     func detachOwner(projectID: String, terminalID: String) async throws {

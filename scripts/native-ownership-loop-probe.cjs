@@ -3,7 +3,7 @@
 // Replicates EXACTLY what the native app's BrokerControlClient + AppModel do,
 // against the live dev broker, to prove the full ownership loop:
 //   create (owner) -> write -> echo observed -> detach (quit) -> reattach
-//   (relaunch) with SAME pid and continuous scrollback -> write again -> kill.
+//   (relaunch) with SAME pid and continuous scrollback -> write again -> release.
 const fs = require('node:fs')
 const net = require('node:net')
 const os = require('node:os')
@@ -16,6 +16,30 @@ const OWNER = 'native-' + crypto.randomUUID()          // stable per-install id 
 const PROJECT = 'nproj_' + crypto.randomBytes(3).toString('hex')
 const TERMINAL = `term-${PROJECT}-${crypto.randomUUID().slice(0, 8)}`
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+
+async function waitFor(predicate, timeoutMs = 8_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const value = predicate()
+    if (value) return value
+    await wait(25)
+  }
+  throw new Error('probe condition timed out')
+}
+
+function observerSlice(subscription, events) {
+  const relevantEvents = events.filter((event) => event.channel === 'terminal:observer-output')
+  const output = (subscription.snapshot?.output || '')
+    + relevantEvents.map((event) => event.payload?.data || '').join('')
+  const lastEvent = relevantEvents.at(-1)
+  const cursor = lastEvent
+    ? { streamEpoch: lastEvent.payload.streamEpoch, offset: lastEvent.payload.endOffset }
+    : {
+        streamEpoch: subscription.snapshot?.streamEpoch,
+        offset: subscription.snapshot?.endOffset,
+      }
+  return { output, cursor }
+}
 
 function connect(access) {
   const socket = net.createConnection(info.socketPath)
@@ -77,9 +101,13 @@ const owned = (extra = {}) => ({ ownerId: OWNER, projectId: PROJECT, id: TERMINA
   // 3) OBSERVE the echo on a separate observer connection (the app's stream lane)
   const observer = connect('observer'); await observer.ready
   const sub1 = await observer.req('terminal.subscribe', owned({ ownerId: 'obs', maxQueueBytes: 262144 }))
-  const out1 = sub1.snapshot.output
-  log('2. write + echo observed', out1.includes('native-owns-42') ? 'saw "native-owns-42" ✓' : 'MISSING ECHO')
-  const offsetBeforeQuit = sub1.snapshot.endOffset
+  const slice1 = await waitFor(() => {
+    const slice = observerSlice(sub1, observer.events)
+    return slice.output.includes('native-owns-42') ? slice : null
+  })
+  const out1 = slice1.output
+  log('2. write + echo observed', 'saw "native-owns-42" ✓')
+  const offsetBeforeQuit = slice1.cursor.offset
   await observer.req('terminal.unsubscribe', owned({ ownerId: 'obs' }))
   observer.close()
 
@@ -102,23 +130,28 @@ const owned = (extra = {}) => ({ ownerId: OWNER, projectId: PROJECT, id: TERMINA
   await wait(1000)
   const observer2 = connect('observer'); await observer2.ready
   const sub2 = await observer2.req('terminal.subscribe', owned({ ownerId: 'obs2', maxQueueBytes: 262144 }))
-  const out2 = sub2.snapshot.output
+  const slice2 = await waitFor(() => {
+    const slice = observerSlice(sub2, observer2.events)
+    return slice.output.includes('native-owns-42') && slice.output.includes('still-the-same-shell') ? slice : null
+  })
+  const out2 = slice2.output
   const continuous = out2.includes('native-owns-42') && out2.includes('still-the-same-shell')
-  const grew = sub2.snapshot.endOffset > offsetBeforeQuit
+  const grew = slice2.cursor.offset > offsetBeforeQuit
   log('6. scrollback continuous', continuous ? 'pre-quit AND post-relaunch output present ✓' : 'DISCONTINUOUS')
-  log('   offset monotonic', grew ? `${offsetBeforeQuit} -> ${sub2.snapshot.endOffset} ✓` : 'REGRESSED')
+  log('   offset monotonic', grew ? `${offsetBeforeQuit} -> ${slice2.cursor.offset} ✓` : 'REGRESSED')
   await observer2.req('terminal.unsubscribe', owned({ ownerId: 'obs2' }))
   observer2.close()
 
-  // 7) END SESSION — the app's endSession: kill removes the PTY for good.
-  await relaunched.req('terminal.kill', owned())
+  // 7) END SESSION — the app's endSession permanently releases the PTY and
+  // retained broker record/spool, so the sidebar cannot grow ghost rows.
+  await relaunched.req('terminal.release', owned())
   await wait(500)
   const diag2 = await relaunched.req('terminal.diagnostics', { ownerId: '0' })
   const gone = diag2.find((t) => t.id === TERMINAL)
-  log('7. end session (kill)', gone?.exited ? 'terminal exited ✓' : 'STILL LIVE')
+  log('7. end session (release)', !gone ? 'terminal record removed ✓' : 'STILL PRESENT')
   relaunched.close()
 
-  const pass = out1.includes('native-owns-42') && row?.pid === pid && continuous && grew && gone?.exited
+  const pass = out1.includes('native-owns-42') && row?.pid === pid && continuous && grew && !gone
   console.log(pass ? '\nFULL LOOP: PASS' : '\nFULL LOOP: FAIL')
   process.exit(pass ? 0 : 1)
 })().catch((e) => { console.error(String(e)); process.exit(1) })

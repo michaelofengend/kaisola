@@ -3,7 +3,7 @@ import KaisolaBrokerProtocol
 import XCTest
 @testable import KaisolaMacPreview
 
-/// The controller lane's contract: its sealed method set is exactly the six
+/// The controller lane's contract: its sealed method set is exactly the
 /// mutations the native app needs, every request carries the owner identity,
 /// and the connection refuses brokers that predate role enforcement.
 final class BrokerControlClientTests: XCTestCase {
@@ -16,6 +16,7 @@ final class BrokerControlClientTests: XCTestCase {
                 "terminal.write",
                 "terminal.resize",
                 "terminal.kill",
+                "terminal.release",
                 "terminal.detachOwner",
                 "terminal.agentTurn",
             ]
