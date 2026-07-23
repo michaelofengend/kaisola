@@ -116,11 +116,21 @@ final class NotificationBridge: NSObject, UNUserNotificationCenterDelegate {
         didRequestAuthorization = true
         guard let center else { return }
         center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound, .provisional]) { [weak self] granted, error in
-            if let error {
+        // MUST use the async API. The completion-handler form hands
+        // UNUserNotificationCenter a closure that — because this type is
+        // @MainActor — is main-actor-isolated, but the framework invokes it on
+        // a background queue. Swift's executor-isolation check then traps
+        // (EXC_BREAKPOINT / dispatch_assert_queue) and the app dies at launch.
+        // Awaiting inside a @MainActor task suspends and resumes on the main
+        // actor with no isolated closure crossing the C boundary.
+        Task { @MainActor [weak self] in
+            guard let center = self?.center else { return }
+            do {
+                let granted = try await center.requestAuthorization(options: [.alert, .sound, .provisional])
+                self?.authorizationGranted = granted
+            } catch {
                 NSLog("Kaisola notifications: authorization request failed: \(error.localizedDescription)")
             }
-            Task { @MainActor in self?.authorizationGranted = granted }
         }
     }
 
@@ -159,7 +169,11 @@ final class NotificationBridge: NSObject, UNUserNotificationCenterDelegate {
             content: content,
             trigger: nil            // deliver immediately
         )
-        center.add(notificationRequest) { error in
+        // @Sendable makes this completion nonisolated: without it the closure
+        // inherits this type's @MainActor isolation, but the framework calls it
+        // on a background queue — the same executor-isolation trap that crashed
+        // requestAuthorization. The body only logs, so it needs no actor.
+        center.add(notificationRequest) { @Sendable error in
             if let error {
                 NSLog("Kaisola notifications: post failed: \(error.localizedDescription)")
             }
