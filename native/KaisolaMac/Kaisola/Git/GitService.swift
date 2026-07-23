@@ -94,6 +94,33 @@ struct GitService: Sendable {
         return try run(["rev-parse", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Discard unstaged changes to one file (user-confirmed in the panel).
+    func restoreFile(path: String) throws {
+        try guardPath(path)
+        _ = try run(["restore", "--", path])
+    }
+
+    /// Snapshot the working tree without moving HEAD or touching the index:
+    /// `git stash create` writes the stash commit and returns its hash but
+    /// stores nothing, so the tree is untouched. Returns nil on a clean tree.
+    /// Powers pre-turn checkpoints.
+    func checkpoint() throws -> String? {
+        let hash = try run(["stash", "create", "kaisola pre-turn checkpoint"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !hash.isEmpty else { return nil }
+        // Keep the snapshot reachable so gc can't collect it mid-session.
+        _ = try run(["stash", "store", "-m", "kaisola checkpoint", hash])
+        return hash
+    }
+
+    /// Restore the files recorded in a checkpoint over the current tree.
+    func applyCheckpoint(_ hash: String) throws {
+        guard hash.range(of: "^[0-9a-f]{7,40}$", options: .regularExpression) != nil else {
+            throw GitError.commandFailed("Invalid checkpoint id")
+        }
+        _ = try run(["stash", "apply", hash])
+    }
+
     // MARK: - Parsing
 
     static func parseStatus(_ output: String) -> Status {

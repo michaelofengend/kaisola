@@ -283,7 +283,8 @@ struct RootShellView: View {
             reload: { Task { await model.reload() } },
             newTerminal: { RootShellView.promptForNewTerminal(model: model) },
             newAgent: { agent in RootShellView.promptForNewAgent(agent, model: model) },
-            newChat: { agent in RootShellView.promptForNewChat(agent, model: model) }
+            newChat: { agent in RootShellView.promptForNewChat(agent, model: model) },
+            jumpToAttention: { model.jumpToAttentionTarget($0) }
         )
     }
 
@@ -714,6 +715,10 @@ private struct ConnectionFooter: View {
     let newTerminal: () -> Void
     let newAgent: (AgentProfile) -> Void
     let newChat: (AgentProfile) -> Void
+    var jumpToAttention: ((String) -> Void)?
+
+    @ObservedObject private var attention = AttentionCenter.shared
+    @State private var showInbox = false
 
     private var chatAgents: [AgentProfile] {
         AgentRegistry.all.filter { AcpAdapter.forAgent($0.id) != nil }
@@ -729,6 +734,47 @@ private struct ConnectionFooter: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            if attention.count > 0 {
+                Button {
+                    showInbox.toggle()
+                } label: {
+                    Label("\(attention.count)", systemImage: "bell.badge.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                }
+                .buttonStyle(.borderless)
+                .help("Needs you — permission asks and finished agents")
+                .popover(isPresented: $showInbox, arrowEdge: .top) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(attention.entries.reversed()) { entry in
+                            Button {
+                                showInbox = false
+                                jumpToAttention?(entry.targetID)
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: entry.kind == .permission ? "hand.raised.fill" : "checkmark.circle.fill")
+                                        .foregroundStyle(entry.kind == .permission ? Color.orange : .green)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(entry.title).font(.callout).lineLimit(1)
+                                        Text(entry.detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                        }
+                        Divider()
+                        Button("Clear All") { attention.clearAll(); showInbox = false }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                            .padding(8)
+                    }
+                    .frame(width: 300)
+                    .padding(.vertical, 6)
+                }
+            }
             if canCreate {
                 Menu {
                     ForEach(chatAgents) { agent in

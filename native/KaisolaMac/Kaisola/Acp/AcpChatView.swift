@@ -4,6 +4,7 @@ import SwiftUI
 /// tool-call cards, a plan, a live permission prompt, model picker, usage, and
 /// a composer. Mirrors the Electron Assistant transcript.
 struct AcpChatView: View {
+    @State private var restoreTarget: AcpConversation.TurnCheckpoint?
     @ObservedObject var conversation: AcpConversation
     @State private var draft = ""
 
@@ -61,6 +62,33 @@ struct AcpChatView: View {
                 }
                 .labelsHidden()
                 .frame(maxWidth: 180)
+            }
+            if !conversation.checkpoints.isEmpty {
+                Menu {
+                    Text("Restore the working tree to before a turn:")
+                    ForEach(conversation.checkpoints.reversed()) { checkpoint in
+                        Button("Turn \(checkpoint.turn) — \(checkpoint.at.formatted(date: .omitted, time: .shortened))") {
+                            restoreTarget = checkpoint
+                        }
+                    }
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Pre-turn checkpoints (git snapshots)")
+                .confirmationDialog(
+                    "Restore checkpoint?",
+                    isPresented: Binding(get: { restoreTarget != nil }, set: { if !$0 { restoreTarget = nil } })
+                ) {
+                    Button("Restore Files", role: .destructive) {
+                        if let restoreTarget { conversation.restoreCheckpoint(restoreTarget.id) }
+                        restoreTarget = nil
+                    }
+                    Button("Cancel", role: .cancel) { restoreTarget = nil }
+                } message: {
+                    Text("Applies the snapshot taken before turn \(restoreTarget?.turn ?? 0) over the current working tree. Conflicts surface as git conflict markers.")
+                }
             }
             if !conversation.configOptions.isEmpty {
                 Menu {

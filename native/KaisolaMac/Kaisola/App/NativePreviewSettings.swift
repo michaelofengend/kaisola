@@ -76,6 +76,32 @@ final class NativePreviewSettings: ObservableObject {
         didSet { defaults.set(workspaceRailVisible, forKey: Keys.workspaceRail) }
     }
 
+    /// Sensitive-file globs the guardrails enforce (always prompt, never
+    /// rule-coverable, fs bridge refuses them). Editable in Settings.
+    @Published var sensitiveGlobs: [String] {
+        didSet { defaults.set(sensitiveGlobs, forKey: Keys.sensitiveGlobs) }
+    }
+
+    /// Per-agent account isolation: a custom CLAUDE_CONFIG_DIR / CODEX_HOME
+    /// applied to agent terminals and ACP adapters. Empty = the CLI default.
+    @Published var claudeConfigDir: String {
+        didSet { defaults.set(claudeConfigDir, forKey: Keys.claudeConfigDir) }
+    }
+
+    @Published var codexHome: String {
+        didSet { defaults.set(codexHome, forKey: Keys.codexHome) }
+    }
+
+    /// Environment overlay for agent processes from the account settings.
+    var agentEnvironmentOverlay: [String: String] {
+        var env: [String: String] = [:]
+        let claude = claudeConfigDir.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !claude.isEmpty { env["CLAUDE_CONFIG_DIR"] = (claude as NSString).expandingTildeInPath }
+        let codex = codexHome.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !codex.isEmpty { env["CODEX_HOME"] = (codex as NSString).expandingTildeInPath }
+        return env
+    }
+
     private let defaults: UserDefaults
 
     private enum Keys {
@@ -83,6 +109,9 @@ final class NativePreviewSettings: ObservableObject {
         static let appearance = "appearanceMode"
         static let terminalFontSize = "terminalFontSize"
         static let workspaceRail = "workspaceRailVisible"
+        static let sensitiveGlobs = "sensitiveGlobs"
+        static let claudeConfigDir = "claudeConfigDir"
+        static let codexHome = "codexHome"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -94,6 +123,9 @@ final class NativePreviewSettings: ObservableObject {
             ? min(max(stored, Self.terminalFontRange.lowerBound), Self.terminalFontRange.upperBound)
             : Self.terminalFontDefault
         workspaceRailVisible = defaults.object(forKey: Keys.workspaceRail) as? Bool ?? false
+        sensitiveGlobs = defaults.stringArray(forKey: Keys.sensitiveGlobs) ?? AcpPermissionRules.defaultSensitiveGlobs
+        claudeConfigDir = defaults.string(forKey: Keys.claudeConfigDir) ?? ""
+        codexHome = defaults.string(forKey: Keys.codexHome) ?? ""
     }
 
     /// Push the chosen appearance to the running application.

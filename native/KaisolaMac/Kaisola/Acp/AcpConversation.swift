@@ -43,13 +43,25 @@ final class AcpConversation: ObservableObject {
     /// Follow-up messages typed while a turn was running; each dispatches when
     /// the preceding turn ends.
     @Published private(set) var queued: [QueuedMessage] = []
+    /// Pre-turn working-tree snapshots (git stash create), restorable from the
+    /// header. Present only when the workspace is a git repo with changes.
+    @Published private(set) var checkpoints: [TurnCheckpoint] = []
 
     struct QueuedMessage: Identifiable, Equatable, Sendable {
         let id: String
         let text: String
     }
 
+    struct TurnCheckpoint: Identifiable, Equatable, Sendable {
+        let id: String       // stash commit hash
+        let turn: Int
+        let at: Date
+    }
+
     let title: String
+    /// Reports needs-you moments (permission surfaced, turn finished) so the
+    /// owner can decide whether they warrant an inbox entry. Set by AppModel.
+    var onAttention: ((AttentionCenter.Kind, _ detail: String) -> Void)?
     private let client: AcpClient
     private let command: String
     private let arguments: [String]
@@ -160,6 +172,7 @@ final class AcpConversation: ObservableObject {
         let rowID = "\(turnCounter)"
         rows.append(.user(id: rowID, text: trimmed, failed: false))
         isRunning = true
+        recordCheckpoint(turn: turnCounter)
         Task {
             do { try await client.prompt(trimmed) }
             catch {
@@ -226,6 +239,7 @@ final class AcpConversation: ObservableObject {
     private func handlePermission(_ request: AcpPermissionRequest) {
         if AcpPermissionRules.requestIsSensitive(globs: sensitiveGlobs, title: request.title, paths: request.paths) {
             pendingPermission = request
+            onAttention?(.permission, request.title)
             return
         }
         if AcpPermissionRules.requestMatchesRule(ruleStore.rules(), workspace: cwd, kind: request.kind, title: request.title) != nil {
@@ -233,6 +247,7 @@ final class AcpConversation: ObservableObject {
             return
         }
         pendingPermission = request
+        onAttention?(.permission, request.title)
     }
 
     /// Answer with the request's allow_once option (falling back to the first
@@ -259,6 +274,40 @@ final class AcpConversation: ObservableObject {
     /// Live output of an agent-spawned terminal, for tool-card rendering.
     func terminalSnapshot(_ id: String) async -> AcpTerminalHost.Snapshot? {
         await client.terminalSnapshot(id)
+    }
+
+    // MARK: - Pre-turn checkpoints
+
+    /// Snapshot the working tree before the agent's turn starts. Off-main; a
+    /// non-repo or clean tree is silently skipped.
+    private func recordCheckpoint(turn: Int) {
+        let workspace = cwd
+        Task.detached(priority: .utility) { [weak self] in
+            let service = GitService(repoRoot: URL(fileURLWithPath: workspace, isDirectory: true))
+            guard let hash = try? service.checkpoint() else { return }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                checkpoints.append(TurnCheckpoint(id: hash, turn: turn, at: Date()))
+                if checkpoints.count > 20 { checkpoints.removeFirst(checkpoints.count - 20) }
+            }
+        }
+    }
+
+    /// Restore a checkpoint's files over the current tree (user-confirmed in
+    /// the header). Conflicts surface as a status message, never silently.
+    func restoreCheckpoint(_ id: String) {
+        let workspace = cwd
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let service = GitService(repoRoot: URL(fileURLWithPath: workspace, isDirectory: true))
+            let message: String?
+            do {
+                try service.applyCheckpoint(id)
+                message = "Checkpoint restored."
+            } catch {
+                message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+            await MainActor.run { [weak self] in self?.statusMessage = message }
+        }
     }
 
     // MARK: - Stream accumulation
@@ -289,6 +338,7 @@ final class AcpConversation: ObservableObject {
             handlePermission(request)
         case .turnEnded:
             isRunning = false
+            onAttention?(.turnCompleted, "Finished a turn")
             flushQueue()
         case let .error(message):
             statusMessage = message

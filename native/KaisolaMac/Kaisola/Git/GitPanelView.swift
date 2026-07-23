@@ -38,6 +38,33 @@ final class GitPanelModel: ObservableObject {
         }
     }
 
+    /// Diffs revealed inline per file, keyed by path.
+    @Published private(set) var diffs: [String: String] = [:]
+    /// Recent history (lazy, shown at the panel's foot).
+    @Published private(set) var log: [GitService.Commit] = []
+
+    func toggleDiff(_ path: String, staged: Bool) {
+        if diffs[path] != nil {
+            diffs[path] = nil
+            return
+        }
+        perform { try $0.diff(path: path, staged: staged) } apply: { patch in
+            self.diffs[path] = patch.isEmpty ? "No changes." : patch
+        }
+    }
+
+    func loadLog() {
+        perform { try $0.log(limit: 10) } apply: { self.log = $0 }
+    }
+
+    /// Discard unstaged changes to a file (destructive; confirmed by the view).
+    func restore(_ path: String) {
+        perform { try $0.restoreFile(path: path); return try $0.status() } apply: {
+            self.status = $0
+            self.diffs[path] = nil
+        }
+    }
+
     /// Run a git operation off the main actor (git blocks), then apply its
     /// Sendable result back on the main actor. GitService and Status are
     /// Sendable, so nothing unsafe crosses the boundary.
@@ -63,6 +90,7 @@ final class GitPanelModel: ObservableObject {
 
 struct GitPanelView: View {
     @StateObject private var model: GitPanelModel
+    @State private var restoreCandidate: String?
 
     init(repoRoot: URL) {
         _model = StateObject(wrappedValue: GitPanelModel(repoRoot: repoRoot))
@@ -82,6 +110,18 @@ struct GitPanelView: View {
             }
         }
         .task { model.refresh() }
+        .confirmationDialog(
+            "Discard changes?",
+            isPresented: Binding(get: { restoreCandidate != nil }, set: { if !$0 { restoreCandidate = nil } })
+        ) {
+            Button("Discard Changes", role: .destructive) {
+                if let restoreCandidate { model.restore(restoreCandidate) }
+                restoreCandidate = nil
+            }
+            Button("Cancel", role: .cancel) { restoreCandidate = nil }
+        } message: {
+            Text("Unstaged changes to \((restoreCandidate as NSString?)?.lastPathComponent ?? "this file") are discarded permanently (git restore).")
+        }
     }
 
     private var header: some View {
@@ -102,13 +142,17 @@ struct GitPanelView: View {
     @ViewBuilder
     private func content(_ status: GitService.Status) -> some View {
         if status.isClean {
-            ContentUnavailableView("Working tree clean", systemImage: "checkmark.seal")
+            VStack(spacing: 0) {
+                ContentUnavailableView("Working tree clean", systemImage: "checkmark.seal")
+                logSection
+            }
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 4) {
-                    fileSection("Staged", status.staged.map { ($0.path, $0.code) }, action: "Unstage") { model.unstage($0) }
-                    fileSection("Changes", status.unstaged.map { ($0.path, $0.code) }, action: "Stage") { model.stage($0) }
-                    fileSection("Untracked", status.untracked.map { ($0, "?") }, action: "Stage") { model.stage($0) }
+                    fileSection("Staged", status.staged.map { ($0.path, $0.code) }, action: "Unstage", staged: true) { model.unstage($0) }
+                    fileSection("Changes", status.unstaged.map { ($0.path, $0.code) }, action: "Stage", staged: false, restorable: true) { model.stage($0) }
+                    fileSection("Untracked", status.untracked.map { ($0, "?") }, action: "Stage", staged: false) { model.stage($0) }
+                    logSection
                 }
                 .padding(12)
             }
@@ -125,22 +169,72 @@ struct GitPanelView: View {
     }
 
     @ViewBuilder
-    private func fileSection(_ title: String, _ files: [(String, String)], action: String, perform: @escaping (String) -> Void) -> some View {
+    private var logSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("History")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(model.log.isEmpty ? "Show" : "Refresh") { model.loadLog() }
+                    .buttonStyle(.borderless).font(.caption)
+            }
+            .padding(.top, 8)
+            ForEach(model.log) { commit in
+                HStack(spacing: 8) {
+                    Text(commit.shortHash).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    Text(commit.subject).font(.caption).lineLimit(1)
+                    Spacer()
+                }
+            }
+        }
+        .padding(.horizontal, model.status?.isClean == true ? 12 : 0)
+    }
+
+    @ViewBuilder
+    private func fileSection(
+        _ title: String,
+        _ files: [(String, String)],
+        action: String,
+        staged: Bool,
+        restorable: Bool = false,
+        perform: @escaping (String) -> Void
+    ) -> some View {
         if !files.isEmpty {
             Text("\(title) (\(files.count))")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.top, 4)
             ForEach(files, id: \.0) { path, code in
-                HStack(spacing: 8) {
-                    Text(code).font(.caption.monospaced()).foregroundStyle(color(code)).frame(width: 14)
-                    Text((path as NSString).lastPathComponent).lineLimit(1)
-                    Text((path as NSString).deletingLastPathComponent)
-                        .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
-                    Spacer()
-                    Button(action) { perform(path) }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text(code).font(.caption.monospaced()).foregroundStyle(color(code)).frame(width: 14)
+                        Button {
+                            model.toggleDiff(path, staged: staged)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text((path as NSString).lastPathComponent).lineLimit(1)
+                                Text((path as NSString).deletingLastPathComponent)
+                                    .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Show the diff")
+                        Spacer()
+                        if restorable {
+                            Button("Discard") { restoreCandidate = path }
+                                .buttonStyle(.borderless)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                        Button(action) { perform(path) }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                    }
+                    if let patch = model.diffs[path] {
+                        PatchText(patch: patch)
+                    }
                 }
                 .padding(.vertical, 1)
             }
@@ -155,5 +249,34 @@ struct GitPanelView: View {
         case "?": .secondary
         default: .primary
         }
+    }
+}
+
+/// A raw unified diff, tinted per line (+ green, − red, @@ blue), horizontally
+/// scrollable so long lines never wrap into noise.
+private struct PatchText: View {
+    let patch: String
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(patch.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
+                    Text(String(line))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(tint(for: line))
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(6)
+        }
+        .frame(maxHeight: 200)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func tint(for line: Substring) -> Color {
+        if line.hasPrefix("+"), !line.hasPrefix("+++") { return .green }
+        if line.hasPrefix("-"), !line.hasPrefix("---") { return .red }
+        if line.hasPrefix("@@") { return .blue }
+        return .primary
     }
 }

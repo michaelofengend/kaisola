@@ -57,6 +57,7 @@
 		965405BD43BA9C3BBEF15AD7 /* AcpPermissionRulesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 757C6A4EEAF0C23D949EF4A5 /* AcpPermissionRulesTests.swift */; };
 		970B14F97569D7C4D1267587 /* NativeTerminalInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C89B154EE5DAF4AFF41692D /* NativeTerminalInteractionTests.swift */; };
 		98DAE6676A641D45F023DA05 /* NativePreviewPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E78A73E4BF5DABAB5BF6826 /* NativePreviewPaths.swift */; };
+		9EDCDA90315D50D2C5B5A354 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DC5E2009F74FD5A05DFB27D /* SettingsView.swift */; };
 		A06CBCBD9882375F104D2ACA /* ObserveOnlyBrokerClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96F1989B7416C050648E9CAB /* ObserveOnlyBrokerClientTests.swift */; };
 		A375F5ED955C8A46533B5AF7 /* FuzzyMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FCBB2E107C280C3B125DF67 /* FuzzyMatch.swift */; };
 		A4DA06EEACB882CA81A46924 /* FileTreeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEA4E3B7B25D187C019B2CC9 /* FileTreeModel.swift */; };
@@ -67,6 +68,7 @@
 		ADCD5776327E816820F93512 /* BrokerDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F5A8717F4788368FDE60F93 /* BrokerDiscoveryTests.swift */; };
 		ADF15F7FA4CF4D7D2FA753AE /* TerminalCursorStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44220D13FC4D0265D132F67A /* TerminalCursorStore.swift */; };
 		B03BEF624A05606381F25A07 /* AcpPermissionRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA6828DB9339AA4CAEDA765D /* AcpPermissionRules.swift */; };
+		B2BED9B1268CF8FB20708D22 /* AttentionCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD79D4F2FC6603ED61013FA9 /* AttentionCenter.swift */; };
 		B2E80671AD073A985161ED40 /* ObserveOnlyBrokerPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DE33FAC2761474B7B6A46A2 /* ObserveOnlyBrokerPolicyTests.swift */; };
 		B5B4FC5437DED715B8B1883F /* BrokerStartupCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03184EF0234187AC455C546D /* BrokerStartupCoordinator.swift */; };
 		B8897143FAAC2BE37F42F6C9 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 5C92E4B4A8A305185CE792F5 /* Sparkle */; };
@@ -123,6 +125,7 @@
 		16F343A1F0C6E1A6F95DB932 /* BrokerInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerInfo.swift; sourceTree = "<group>"; };
 		1CF54122B716B55D67623C3F /* BrokerBootstrapXPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerBootstrapXPC.swift; sourceTree = "<group>"; };
 		1DBE251CF21C42D3D77AA57C /* NativeSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeSessionStore.swift; sourceTree = "<group>"; };
+		1DC5E2009F74FD5A05DFB27D /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		269A1E4D253C170CBDB084CA /* NativeUpdateConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeUpdateConfiguration.swift; sourceTree = "<group>"; };
 		2788B54E3ABEA6DC3BB724F1 /* KaisolaCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = KaisolaCore; path = ../KaisolaCore; sourceTree = SOURCE_ROOT; };
 		32406CFD933CD31D2751A8AF /* AcpProcessTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcpProcessTransport.swift; sourceTree = "<group>"; };
@@ -172,6 +175,7 @@
 		A8C8F92A50B6817748440EAE /* DetachedBrokerProcess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetachedBrokerProcess.swift; sourceTree = "<group>"; };
 		AF52791E7FB87F94AF30DBD2 /* NoBoardBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoBoardBoundaryTests.swift; sourceTree = "<group>"; };
 		BC20168C86DDDBA7D70222F3 /* AcpAdapterResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcpAdapterResolver.swift; sourceTree = "<group>"; };
+		BD79D4F2FC6603ED61013FA9 /* AttentionCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionCenter.swift; sourceTree = "<group>"; };
 		C1139547AB3E3B3A9C7AAEDA /* UnixBrokerTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnixBrokerTransport.swift; sourceTree = "<group>"; };
 		CA0225E687EE0462F0D9C548 /* ObserveOnlyBrokerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObserveOnlyBrokerClient.swift; sourceTree = "<group>"; };
 		CA7E0A7AF7C58D8926909FDB /* AcpDiff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcpDiff.swift; sourceTree = "<group>"; };
@@ -327,11 +331,20 @@
 			path = Sessions;
 			sourceTree = "<group>";
 		};
+		995F7D74E59D56235A4D3BBF /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				1DC5E2009F74FD5A05DFB27D /* SettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
 		B2BF6C29213F0CDAC2846C62 /* Features */ = {
 			isa = PBXGroup;
 			children = (
 				8E525454CAEE2F374B1F48C9 /* Palette */,
 				97504E856A888E6B1EDFE046 /* Sessions */,
+				995F7D74E59D56235A4D3BBF /* Settings */,
 				3AABBB474A3D9EBF5F5E9E72 /* Workspace */,
 			);
 			path = Features;
@@ -351,6 +364,7 @@
 			isa = PBXGroup;
 			children = (
 				45799AC8A5D80828BB3EB235 /* AppModel.swift */,
+				BD79D4F2FC6603ED61013FA9 /* AttentionCenter.swift */,
 				FBDFA0DF725244691C0496A5 /* Info.plist */,
 				D624AF2C46BA83B73A21F0B3 /* KaisolaMacAppDelegate.swift */,
 				6E78A73E4BF5DABAB5BF6826 /* NativePreviewPaths.swift */,
@@ -605,6 +619,7 @@
 				7F379E964C61CBE180BA4EF9 /* AcpTerminalHost.swift in Sources */,
 				6F112F55B8EA5E9F777175F0 /* AgentRegistry.swift in Sources */,
 				ACC0996E20F391DC8E473C42 /* AppModel.swift in Sources */,
+				B2BED9B1268CF8FB20708D22 /* AttentionCenter.swift in Sources */,
 				7D477D2931DFC68EAB18253B /* BrokerBootstrapClient.swift in Sources */,
 				4DAB489B89232644868831B3 /* BrokerBootstrapXPC.swift in Sources */,
 				37C9F63E6C257114907021FA /* BrokerControlClient.swift in Sources */,
@@ -633,6 +648,7 @@
 				8D941A51FE975188FDEFB2BA /* ProjectTint.swift in Sources */,
 				6B76FFE3C1F1E11155040E2F /* RootShellView.swift in Sources */,
 				C064EB5DC0F7118113696DE9 /* SavedWindowsStore.swift in Sources */,
+				9EDCDA90315D50D2C5B5A354 /* SettingsView.swift in Sources */,
 				ADF15F7FA4CF4D7D2FA753AE /* TerminalCursorStore.swift in Sources */,
 				D478A5901D0C96CE5D108C4A /* TerminalDocument.swift in Sources */,
 				20AC2166801F213916ED1EB1 /* TerminalTheme.swift in Sources */,

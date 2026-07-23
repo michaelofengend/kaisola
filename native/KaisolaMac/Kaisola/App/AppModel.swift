@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 @MainActor
@@ -240,8 +241,21 @@ final class AppModel: ObservableObject {
             title: "\(agent.name) · \((directory.path as NSString).lastPathComponent)",
             command: adapter.command,
             arguments: adapter.arguments,
-            cwd: directory.path
+            environment: ProcessInfo.processInfo.environment.merging(
+                NativePreviewSettings.shared.agentEnvironmentOverlay
+            ) { _, custom in custom },
+            cwd: directory.path,
+            sensitiveGlobs: NativePreviewSettings.shared.sensitiveGlobs
         )
+        // Needs-you moments land in the inbox only when the chat isn't the
+        // focused surface (or the app is in the background).
+        let title = conversation.title
+        conversation.onAttention = { [weak self] kind, detail in
+            guard let self else { return }
+            let appActive = NSApp?.isActive ?? true
+            if selectedChatID == chatID, appActive { return }
+            AttentionCenter.shared.notify(kind: kind, targetID: chatID, title: title, detail: detail)
+        }
         chats.append(AcpChatHandle(id: chatID, agentID: agent.id, conversation: conversation))
         selectedChatID = chatID
         selectedSessionID = nil
@@ -257,7 +271,22 @@ final class AppModel: ObservableObject {
 
     func selectChat(_ chatID: String?) {
         selectedChatID = chatID
-        if chatID != nil { selectedSessionID = nil }
+        if let chatID {
+            selectedSessionID = nil
+            AttentionCenter.shared.clear(targetID: chatID)
+        }
+    }
+
+    /// Jump from an inbox entry to its surface (chat or terminal session).
+    func jumpToAttentionTarget(_ targetID: String) {
+        AttentionCenter.shared.clear(targetID: targetID)
+        if chats.contains(where: { $0.id == targetID }) {
+            selectChat(targetID)
+        } else {
+            selectChat(nil)
+            selectedSessionID = targetID
+            Task { await select(targetID) }
+        }
     }
 
     func reload() async {
@@ -318,6 +347,7 @@ final class AppModel: ObservableObject {
         selectedSession = next
         selectedSessionID = next.id
         sessionStore.recordSelectedSession(next.id)
+        AttentionCenter.shared.clear(targetID: next.id)
         guard connectionState.isConnected else {
             terminalDocument = retainedDocument
             return
@@ -384,7 +414,13 @@ final class AppModel: ObservableObject {
         if let agent, !agent.launchCommand.isEmpty {
             // -ilc runs the agent as the login shell's command so it inherits
             // the interactive environment, then hands control to the user.
-            arguments = ["-ilc", "\(agent.launchCommand); exec \(shell) -il"]
+            // Account isolation (custom CLAUDE_CONFIG_DIR / CODEX_HOME) rides
+            // in as exported variables ahead of the CLI.
+            let overlay = NativePreviewSettings.shared.agentEnvironmentOverlay
+                .map { "export \($0.key)=\(Self.shellQuote($0.value)); " }
+                .sorted()
+                .joined()
+            arguments = ["-ilc", "\(overlay)\(agent.launchCommand); exec \(shell) -il"]
         } else {
             arguments = ["-il"]
         }
@@ -416,6 +452,10 @@ final class AppModel: ObservableObject {
         } catch {
             terminalDocument = .failure(sessionID: terminalID, message: error.kaisolaSafeDescription)
         }
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// The agent profile a session runs, or nil for a plain shell / observed
@@ -745,10 +785,22 @@ final class AppModel: ObservableObject {
 
     private func applyActivity(busy: Bool, completedAt: Int64?, to terminalID: String) {
         guard let index = sessions.firstIndex(where: { $0.id == terminalID }) else { return }
+        let wasWorking = { if case .working = sessions[index].agentActivity { return true }; return false }()
         if busy {
             sessions[index].agentActivity = .working
         } else if let completedAt {
             sessions[index].agentActivity = .responded(at: completedAt)
+            // A working agent that settled while the user was elsewhere is a
+            // needs-you moment.
+            let appActive = NSApp?.isActive ?? true
+            if wasWorking, selectedSessionID != terminalID || !appActive {
+                AttentionCenter.shared.notify(
+                    kind: .sessionResponded,
+                    targetID: terminalID,
+                    title: sessions[index].title,
+                    detail: "Agent responded"
+                )
+            }
         } else {
             sessions[index].agentActivity = .idle
         }

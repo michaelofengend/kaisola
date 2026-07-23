@@ -252,6 +252,32 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         updateController.checkForUpdates(sender)
     }
 
+    private var settingsWindow: NSWindow?
+
+    @objc func openSettings(_ sender: Any?) {
+        if let settingsWindow, settingsWindow.isVisible {
+            settingsWindow.makeKeyAndOrderFront(nil)
+            return
+        }
+        let view = SettingsView(
+            settings: settings,
+            checkForUpdates: { [weak self] in self?.updateController.checkForUpdates(nil) },
+            updateDetail: updateController.availability.detail
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Settings"
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: view)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        settingsWindow = window
+    }
+
     @objc private func newTerminalSession(_ sender: Any?) {
         guard let model = keyModel() else { return }
         RootShellView.promptForNewTerminal(model: model)
@@ -386,6 +412,13 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         updateItem.target = updateTarget
         updateItem.isEnabled = updateEnabled
         updateItem.toolTip = updateDetail
+        applicationMenu.addItem(.separator())
+        let settingsItem = applicationMenu.addItem(
+            withTitle: "Settings…",
+            action: #selector(KaisolaMacAppDelegate.openSettings(_:)),
+            keyEquivalent: ","
+        )
+        settingsItem.target = nil   // first responder → the app delegate
         applicationMenu.addItem(.separator())
         applicationMenu.addItem(
             withTitle: "Hide Kaisola Native Preview",

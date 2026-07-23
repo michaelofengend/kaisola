@@ -19,6 +19,47 @@ final class GitServiceTests: XCTestCase {
         try? FileManager.default.removeItem(at: repo)
     }
 
+    func testCheckpointSnapshotsAndRestoresTrackedChanges() throws {
+        try write("file.txt", "original\n")
+        try git(["add", "file.txt"])
+        try git(["commit", "-q", "-m", "base"])
+
+        // Dirty the tree, checkpoint, dirty differently, then restore.
+        try write("file.txt", "checkpointed change\n")
+        let service = GitService(repoRoot: repo)
+        let hash = try XCTUnwrap(service.checkpoint())
+        XCTAssertFalse(hash.isEmpty)
+        // The snapshot must not disturb the working tree.
+        XCTAssertEqual(try String(contentsOf: repo.appendingPathComponent("file.txt"), encoding: .utf8), "checkpointed change\n")
+
+        try git(["checkout", "--", "file.txt"])   // wipe the change
+        XCTAssertEqual(try String(contentsOf: repo.appendingPathComponent("file.txt"), encoding: .utf8), "original\n")
+
+        try service.applyCheckpoint(hash)
+        XCTAssertEqual(try String(contentsOf: repo.appendingPathComponent("file.txt"), encoding: .utf8), "checkpointed change\n")
+    }
+
+    func testCheckpointOnCleanTreeReturnsNil() throws {
+        try write("clean.txt", "x\n")
+        try git(["add", "clean.txt"])
+        try git(["commit", "-q", "-m", "base"])
+        XCTAssertNil(try GitService(repoRoot: repo).checkpoint())
+    }
+
+    func testApplyCheckpointRejectsMalformedHash() {
+        let service = GitService(repoRoot: repo)
+        XCTAssertThrowsError(try service.applyCheckpoint("not-a-hash; rm -rf /"))
+    }
+
+    func testRestoreFileDiscardsUnstagedChanges() throws {
+        try write("keep.txt", "one\n")
+        try git(["add", "keep.txt"])
+        try git(["commit", "-q", "-m", "base"])
+        try write("keep.txt", "dirty\n")
+        try GitService(repoRoot: repo).restoreFile(path: "keep.txt")
+        XCTAssertEqual(try String(contentsOf: repo.appendingPathComponent("keep.txt"), encoding: .utf8), "one\n")
+    }
+
     func testStatusParsesStagedUnstagedUntracked() throws {
         try write("committed.txt", "one\n")
         try git(["add", "committed.txt"])
