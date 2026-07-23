@@ -4,7 +4,9 @@ import SwiftUI
 
 /// One rendered row in the chat transcript.
 enum AcpTranscriptRow: Identifiable, Equatable {
-    case user(id: String, text: String)
+    /// `failed` marks an optimistic send whose prompt request errored — the row
+    /// stays visible with a retry affordance instead of vanishing.
+    case user(id: String, text: String, failed: Bool)
     case message(id: String, text: String)
     case thought(id: String, text: String)
     case tool(AcpToolCall)
@@ -12,7 +14,7 @@ enum AcpTranscriptRow: Identifiable, Equatable {
 
     var id: String {
         switch self {
-        case let .user(id, _): "user-\(id)"
+        case let .user(id, _, _): "user-\(id)"
         case let .message(id, _): "msg-\(id)"
         case let .thought(id, _): "thought-\(id)"
         case let .tool(call): "tool-\(call.id)"
@@ -34,6 +36,8 @@ final class AcpConversation: ObservableObject {
     @Published private(set) var currentModelID: String?
     @Published private(set) var modes: [AcpSessionInfo.Mode] = []
     @Published private(set) var currentModeID: String?
+    @Published private(set) var configOptions: [AcpConfigOption] = []
+    @Published private(set) var commands: [AcpCommand] = []
     @Published var pendingPermission: AcpPermissionRequest?
     @Published private(set) var statusMessage: String?
     /// Follow-up messages typed while a turn was running; each dispatches when
@@ -83,6 +87,7 @@ final class AcpConversation: ObservableObject {
         await client.setEventHandler { [weak self] event in
             Task { @MainActor in self?.consume(event) }
         }
+        await client.configureFsGuard(sensitiveGlobs: sensitiveGlobs)
         do {
             let info = try await client.start(
                 command: command,
@@ -95,6 +100,7 @@ final class AcpConversation: ObservableObject {
             currentModelID = info.currentModelID
             modes = info.modes
             currentModeID = info.currentModeID
+            configOptions = info.configOptions
             isConnected = true
             statusMessage = nil
         } catch {
@@ -121,15 +127,48 @@ final class AcpConversation: ObservableObject {
         queued.removeAll { $0.id == id }
     }
 
+    /// Steer: promote a queued follow-up to the front and interrupt the current
+    /// turn so it dispatches now (the cancel ends the turn, and the normal
+    /// turn-end flush sends the promoted message). Idle → dispatches directly.
+    func steerQueued(_ id: String) {
+        guard let index = queued.firstIndex(where: { $0.id == id }) else { return }
+        let message = queued.remove(at: index)
+        if isRunning {
+            queued.insert(message, at: 0)
+            Task { await client.cancel() }
+        } else {
+            dispatch(message.text)
+        }
+    }
+
+    /// Retry a failed optimistic send: the failed row is replaced by a fresh
+    /// dispatch of the same text.
+    func retryFailed(_ rowID: String) {
+        guard let index = rows.firstIndex(where: { $0.id == rowID }),
+              case let .user(_, text, failed) = rows[index], failed else { return }
+        rows.remove(at: index)
+        if isRunning {
+            queueCounter += 1
+            queued.append(QueuedMessage(id: "q\(queueCounter)", text: text))
+        } else {
+            dispatch(text)
+        }
+    }
+
     private func dispatch(_ trimmed: String) {
         turnCounter += 1
-        rows.append(.user(id: "\(turnCounter)", text: trimmed))
+        let rowID = "\(turnCounter)"
+        rows.append(.user(id: rowID, text: trimmed, failed: false))
         isRunning = true
         Task {
             do { try await client.prompt(trimmed) }
             catch {
                 statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 isRunning = false
+                // Roll back optimism: mark the row failed so the user can retry.
+                if let index = rows.firstIndex(where: { $0.id == "user-\(rowID)" }) {
+                    rows[index] = .user(id: rowID, text: trimmed, failed: true)
+                }
             }
         }
     }
@@ -146,6 +185,15 @@ final class AcpConversation: ObservableObject {
     func selectMode(_ id: String) {
         currentModeID = id
         Task { await client.setMode(id) }
+    }
+
+    /// Set an adapter config option (effort level etc.); the client re-emits the
+    /// adapter's normalized option set, which `consume` applies.
+    func selectConfigOption(_ id: String, value: String) {
+        if let index = configOptions.firstIndex(where: { $0.id == id }) {
+            configOptions[index].currentValue = value   // optimistic
+        }
+        Task { await client.setConfigOption(id: id, value: value) }
     }
 
     func answerPermission(_ optionID: String) {
@@ -208,6 +256,11 @@ final class AcpConversation: ObservableObject {
         Task { await client.stop() }
     }
 
+    /// Live output of an agent-spawned terminal, for tool-card rendering.
+    func terminalSnapshot(_ id: String) async -> AcpTerminalHost.Snapshot? {
+        await client.terminalSnapshot(id)
+    }
+
     // MARK: - Stream accumulation
 
     private func consume(_ event: AcpEvent) {
@@ -228,6 +281,10 @@ final class AcpConversation: ObservableObject {
             currentModelID = id
         case let .modeChanged(id):
             currentModeID = id
+        case let .commands(list):
+            commands = list
+        case let .configOptions(options):
+            configOptions = options
         case let .permission(request):
             handlePermission(request)
         case .turnEnded:

@@ -62,6 +62,64 @@ final class AcpProcessIntegrationTests: XCTestCase {
             }
         }
         XCTAssertTrue(diffArrived, "expected the tool_call_update's diff artifact to parse through")
+
+        // The mock's config options (approval preset + reasoning effort) parse.
+        XCTAssertFalse(info.configOptions.isEmpty, "expected configOptions from the mock")
+        // Slash commands stream via available_commands_update mid-turn.
+        XCTAssertTrue(events.contains { if case .commands = $0 { return true } else { return false } },
+                      "expected available_commands_update from the mock")
+    }
+
+    /// The full agent-driven terminal loop against the REAL mock: with
+    /// KAISOLA_MOCK_TERMINAL=1 the mock issues terminal/create → wait_for_exit →
+    /// output → release; our client runs /bin/echo through AcpTerminalHost and
+    /// the mock reports the exit back in a final tool_call_update. This proves
+    /// the whole bridge, not just the host in isolation.
+    func testAgentDrivenTerminalRoundTripAgainstRealMock() async throws {
+        guard let node = Self.resolveNode(), let mock = Self.resolveMock() else {
+            throw XCTSkip("node or the ACP mock agent is unavailable")
+        }
+        let client = AcpClient()
+        let collector = IntegrationCollector()
+        await client.setEventHandler { event in collector.append(event) }
+        collector.onPermission = { request in
+            let allow = request.options.first { $0.kind.contains("allow") } ?? request.options.first
+            if let allow { Task { await client.resolvePermission(id: request.id, optionID: allow.id) } }
+        }
+
+        var environment = ProcessInfo.processInfo.environment
+        environment["KAISOLA_MOCK_TERMINAL"] = "1"
+        do {
+            _ = try await client.start(
+                command: node,
+                arguments: [mock],
+                environment: environment,
+                cwd: FileManager.default.temporaryDirectory.path,
+                mcpServers: []
+            )
+        } catch {
+            throw XCTSkip("could not spawn the mock agent: \(error.localizedDescription)")
+        }
+        try await client.prompt("run the terminal fixture")
+        await client.stop()
+
+        let events = collector.events
+        // The mock's final update for term-tool-1 carries the exit report our
+        // host produced: /bin/echo exits 0.
+        let sawExitReport = events.contains { event in
+            guard case let .toolCallUpdate(id, _, content, _) = event, id == "term-tool-1", let content else { return false }
+            return content.contains { artifact in
+                if case let .text(text) = artifact { return text.contains("terminal-exit:") && text.contains("\"exitCode\":0") }
+                return false
+            }
+        }
+        XCTAssertTrue(sawExitReport, "expected the mock to report our terminal host's exit status")
+        // And the terminal reference itself streamed as live terminal content.
+        let sawTerminalRef = events.contains { event in
+            guard case let .toolCallUpdate(_, _, content, _) = event, let content else { return false }
+            return content.contains { if case .terminal = $0 { return true } else { return false } }
+        }
+        XCTAssertTrue(sawTerminalRef, "expected a terminal content reference in the tool card")
     }
 
     private static func resolveNode() -> String? {

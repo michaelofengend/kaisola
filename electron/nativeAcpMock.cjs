@@ -4,6 +4,7 @@
 const readline = require('node:readline')
 
 const PROTOCOL_VERSION = 1
+const MOCK_TERMINAL_ENABLED = process.env.KAISOLA_MOCK_TERMINAL === '1'
 const AUTH_METHODS = [
   {
     id: 'mock-terminal-auth',
@@ -174,11 +175,114 @@ function requestClient(turn, method, params) {
     return Promise.resolve({ outcome: { outcome: 'cancelled' } })
   }
   const id = nextAgentRequestId++
-  return new Promise((resolve) => {
-    pendingClientCallbacks.set(id, { resolve, turn })
+  return new Promise((resolve, reject) => {
+    pendingClientCallbacks.set(id, { resolve, reject, turn })
     turn.callbackIds.add(id)
     writeFrame({ jsonrpc: '2.0', id, method, params })
   })
+}
+
+function turnIsActive(turn) {
+  return !turn.cancelled && !turn.settled && !shuttingDown
+}
+
+function errorText(error) {
+  if (error && typeof error.message === 'string' && error.message) return error.message
+  return String(error || 'unknown error')
+}
+
+async function requestTerminalClient(turn, method, params) {
+  let response
+  try {
+    response = await requestClient(turn, method, params)
+  } catch (error) {
+    throw new Error(`${method} failed: ${errorText(error)}`)
+  }
+  if (response && response.error) {
+    throw new Error(`${method} failed: ${errorText(response.error)}`)
+  }
+  return response
+}
+
+async function runTerminalRoundTrip(turn) {
+  const toolCallId = 'term-tool-1'
+  if (!sessionUpdate(turn, {
+    sessionUpdate: 'tool_call',
+    toolCallId,
+    title: 'Run fixture command',
+    kind: 'execute',
+    status: 'in_progress',
+  })) return false
+
+  try {
+    const createResp = await requestTerminalClient(turn, 'terminal/create', {
+      sessionId: turn.sessionId,
+      command: '/bin/echo',
+      args: ['acp-terminal-roundtrip'],
+      cwd: null,
+      outputByteLimit: 65536,
+    })
+    if (!turnIsActive(turn)) return false
+    const terminalId = createResp && createResp.terminalId
+    if (typeof terminalId !== 'string' || !terminalId) {
+      throw new Error('terminal/create failed: missing terminalId')
+    }
+
+    if (!sessionUpdate(turn, {
+      sessionUpdate: 'tool_call_update',
+      toolCallId,
+      content: [{ type: 'terminal', terminalId }],
+    })) return false
+    if (!turnIsActive(turn)) return false
+
+    const waitResp = await requestTerminalClient(turn, 'terminal/wait_for_exit', {
+      sessionId: turn.sessionId,
+      terminalId,
+    })
+    if (!turnIsActive(turn)) return false
+
+    const outputResp = await requestTerminalClient(turn, 'terminal/output', {
+      sessionId: turn.sessionId,
+      terminalId,
+    })
+    if (!turnIsActive(turn)) return false
+    void outputResp
+
+    if (!sessionUpdate(turn, {
+      sessionUpdate: 'tool_call_update',
+      toolCallId,
+      status: 'completed',
+      content: [
+        { type: 'terminal', terminalId },
+        {
+          type: 'content',
+          content: {
+            type: 'text',
+            text: `terminal-exit:${JSON.stringify((waitResp && waitResp.exitStatus) || null)}`,
+          },
+        },
+      ],
+    })) return false
+    if (!turnIsActive(turn)) return false
+
+    await requestTerminalClient(turn, 'terminal/release', {
+      sessionId: turn.sessionId,
+      terminalId,
+    })
+    return turnIsActive(turn)
+  } catch (error) {
+    if (!turnIsActive(turn)) return false
+    sessionUpdate(turn, {
+      sessionUpdate: 'tool_call_update',
+      toolCallId,
+      status: 'failed',
+      content: [{
+        type: 'content',
+        content: { type: 'text', text: `terminal-error:${errorText(error)}` },
+      }],
+    })
+    return turnIsActive(turn)
+  }
 }
 
 function finishTurn(turn, stopReason, { writeResponse = true } = {}) {
@@ -292,11 +396,18 @@ async function handlePrompt(requestId, params) {
   })
   if (!await pause(turn, turn.stepDelayMs)) return
 
-  const permission = await requestClient(turn, 'session/request_permission', {
-    sessionId,
-    toolCall: permissionToolCall,
-    options: PERMISSION_OPTIONS,
-  })
+  if (MOCK_TERMINAL_ENABLED && !await runTerminalRoundTrip(turn)) return
+
+  let permission
+  try {
+    permission = await requestClient(turn, 'session/request_permission', {
+      sessionId,
+      toolCall: permissionToolCall,
+      options: PERMISSION_OPTIONS,
+    })
+  } catch {
+    permission = { outcome: { outcome: 'cancelled' } }
+  }
   if (turn.cancelled || turn.settled) return
 
   const outcome = permission && permission.outcome
@@ -335,7 +446,11 @@ function handleClientResponse(message) {
   if (!pending) return
   pendingClientCallbacks.delete(message.id)
   pending.turn.callbackIds.delete(message.id)
-  pending.resolve(message.error ? { outcome: { outcome: 'cancelled' } } : message.result)
+  if (message.error) {
+    pending.reject(new Error(message.error.message || 'Client request failed'))
+  } else {
+    pending.resolve(message.result)
+  }
 }
 
 function handleInitialize(id) {

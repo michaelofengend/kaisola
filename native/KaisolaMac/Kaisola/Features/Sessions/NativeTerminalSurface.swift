@@ -9,6 +9,8 @@ struct NativeTerminalSurface: NSViewRepresentable {
     // Input exists only for sessions the native app owns; observed sessions
     // keep the sealed read-only view whose send path is compiled away.
     var isOwned: Bool = false
+    /// Terminal font size (⌘+/⌘−/⌘0 via NativePreviewSettings).
+    var fontSize: Double = NativePreviewSettings.terminalFontDefault
     var onInput: ((String) -> Void)? = nil
     var onResize: ((_ columns: Int, _ rows: Int) -> Void)? = nil
 
@@ -17,7 +19,7 @@ struct NativeTerminalSurface: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> ReadOnlyTerminalView {
-        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         let view: ReadOnlyTerminalView = isOwned
             ? OwnedTerminalView(frame: .zero, font: font)
             : ReadOnlyTerminalView(frame: .zero, font: font)
@@ -36,6 +38,9 @@ struct NativeTerminalSurface: NSViewRepresentable {
     func updateNSView(_ view: ReadOnlyTerminalView, context: Context) {
         context.coordinator.onInput = onInput
         context.coordinator.onResize = onResize
+        if abs(view.font.pointSize - fontSize) > 0.1 {
+            view.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        }
         context.coordinator.apply(output: output, epoch: streamEpoch, endOffset: endOffset, to: view)
     }
 
@@ -120,8 +125,17 @@ struct NativeTerminalSurface: NSViewRepresentable {
         func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
         func scrolled(source: TerminalView, position: Double) {}
         func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
-            guard let url = URL(string: link), ["https", "http"].contains(url.scheme?.lowercased()) else { return }
-            NSWorkspace.shared.open(url)
+            guard let url = URL(string: link) else { return }
+            switch url.scheme?.lowercased() {
+            case "https", "http":
+                NSWorkspace.shared.open(url)
+            case "file":
+                // OSC 8 file links (agent CLIs cite files): reveal in Finder so
+                // no arbitrary file gets *executed* from terminal output.
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            default:
+                break
+            }
         }
         func bell(source: TerminalView) {}
         func clipboardCopy(source: TerminalView, content: Data) {}

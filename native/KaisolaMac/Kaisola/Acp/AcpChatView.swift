@@ -62,6 +62,26 @@ struct AcpChatView: View {
                 .labelsHidden()
                 .frame(maxWidth: 180)
             }
+            if !conversation.configOptions.isEmpty {
+                Menu {
+                    ForEach(conversation.configOptions) { option in
+                        Picker(option.name, selection: Binding(
+                            get: { option.currentValue ?? option.choices.first?.value ?? "" },
+                            set: { conversation.selectConfigOption(option.id, value: $0) }
+                        )) {
+                            ForEach(option.choices) { choice in
+                                Text(choice.name).tag(choice.value)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Agent options (effort, presets)")
+            }
             if let usage = conversation.usage {
                 Text("\(usage.used / 1000)k / \(usage.max / 1000)k")
                     .font(.caption.monospacedDigit())
@@ -82,7 +102,12 @@ struct AcpChatView: View {
                             .foregroundStyle(.secondary)
                     }
                     ForEach(conversation.rows) { row in
-                        TranscriptRowView(row: row).id(row.id)
+                        TranscriptRowView(
+                            row: row,
+                            retry: { conversation.retryFailed($0) },
+                            terminalSnapshot: { [weak conversation] id in await conversation?.terminalSnapshot(id) }
+                        )
+                        .id(row.id)
                     }
                 }
                 .padding(16)
@@ -96,8 +121,40 @@ struct AcpChatView: View {
         }
     }
 
+    /// Slash commands matching the draft's leading "/query", ranked by FuzzyMatch.
+    private var matchingCommands: [AcpCommand] {
+        guard draft.hasPrefix("/"), !conversation.commands.isEmpty else { return [] }
+        let query = String(draft.dropFirst()).trimmingCharacters(in: .whitespaces)
+        if query.isEmpty { return conversation.commands }
+        return conversation.commands
+            .compactMap { command -> (AcpCommand, Int)? in
+                FuzzyMatch.score(query: query, candidate: command.name).map { (command, $0) }
+            }
+            .sorted { $0.1 > $1.1 }
+            .map(\.0)
+    }
+
     private var composer: some View {
         VStack(spacing: 6) {
+            if !matchingCommands.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(matchingCommands.prefix(6)) { command in
+                        Button {
+                            draft = "/\(command.name) "
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text("/\(command.name)").font(.caption.monospaced().weight(.semibold))
+                                Text(command.description).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                Spacer()
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                    }
+                }
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+            }
             if !conversation.queued.isEmpty {
                 queuedStrip
             }
@@ -135,6 +192,14 @@ struct AcpChatView: View {
                     Text(message.text).font(.caption).lineLimit(1)
                     Spacer()
                     Button {
+                        conversation.steerQueued(message.id)
+                    } label: {
+                        Image(systemName: "bolt.fill").font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.orange)
+                    .help("Steer: interrupt the current turn and send this now")
+                    Button {
                         conversation.removeQueued(message.id)
                     } label: {
                         Image(systemName: "xmark.circle.fill").font(.caption2)
@@ -159,15 +224,36 @@ struct AcpChatView: View {
 
 private struct TranscriptRowView: View {
     let row: AcpTranscriptRow
+    var retry: ((String) -> Void)?
+    var terminalSnapshot: (@Sendable (String) async -> AcpTerminalHost.Snapshot?)?
 
     var body: some View {
         switch row {
-        case let .user(_, text):
-            HStack {
+        case let .user(_, text, failed):
+            HStack(spacing: 8) {
                 Spacer(minLength: 40)
+                if failed {
+                    Button {
+                        retry?(row.id)
+                    } label: {
+                        Label("Retry", systemImage: "arrow.clockwise")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .help("This message failed to send — try again")
+                }
                 Text(text)
                     .padding(10)
-                    .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
+                    .background(
+                        failed ? Color.red.opacity(0.12) : Color.accentColor.opacity(0.15),
+                        in: RoundedRectangle(cornerRadius: 10)
+                    )
+                    .overlay {
+                        if failed {
+                            RoundedRectangle(cornerRadius: 10).strokeBorder(.red.opacity(0.5))
+                        }
+                    }
                     .textSelection(.enabled)
             }
         case let .message(_, text):
@@ -186,7 +272,7 @@ private struct TranscriptRowView: View {
                     .foregroundStyle(.secondary)
             }
         case let .tool(call):
-            ToolCallCard(call: call)
+            ToolCallCard(call: call, terminalSnapshot: terminalSnapshot)
         case let .plan(_, entries):
             PlanCard(entries: entries)
         }
@@ -195,6 +281,7 @@ private struct TranscriptRowView: View {
 
 private struct ToolCallCard: View {
     let call: AcpToolCall
+    var terminalSnapshot: (@Sendable (String) async -> AcpTerminalHost.Snapshot?)?
     @State private var expanded = false
 
     private var hasArtifacts: Bool { !call.content.isEmpty }
@@ -237,6 +324,8 @@ private struct ToolCallCard: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(8)
                             .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 6))
+                    case let .terminal(id):
+                        TerminalContentView(terminalID: id, snapshot: terminalSnapshot)
                     }
                 }
             }
@@ -258,6 +347,52 @@ private struct ToolCallCard: View {
         case .pending, .inProgress: .secondary
         case .completed: .green
         case .failed: .red
+        }
+    }
+}
+
+/// Live output of an agent-spawned terminal inside a tool card: polls the
+/// AcpTerminalHost snapshot until the process exits.
+private struct TerminalContentView: View {
+    let terminalID: String
+    var snapshot: (@Sendable (String) async -> AcpTerminalHost.Snapshot?)?
+    @State private var output = ""
+    @State private var exitText: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "terminal").font(.caption2)
+                Text(exitText ?? "Running…").font(.caption2)
+                Spacer()
+            }
+            .foregroundStyle(exitText == nil ? Color.orange : .secondary)
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(.quaternary.opacity(0.6))
+            ScrollView {
+                Text(output.isEmpty ? " " : output)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            }
+            .frame(maxHeight: 180)
+            .background(.black.opacity(0.18))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary))
+        .task(id: terminalID) {
+            while !Task.isCancelled {
+                guard let snap = await snapshot?(terminalID) else { break }
+                output = snap.output
+                if let status = snap.exitStatus {
+                    exitText = status.exitCode.map { "Exited (\($0))" }
+                        ?? status.signal.map { "Killed (\($0))" }
+                        ?? "Exited"
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 700_000_000)
+            }
         }
     }
 }

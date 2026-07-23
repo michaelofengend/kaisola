@@ -22,6 +22,10 @@ final class AcpClientTests: XCTestCase {
         // Nested SessionModeState parses; current mode carried through.
         XCTAssertEqual(info.modes.map(\.id), ["default", "plan"])
         XCTAssertEqual(info.currentModeID, "default")
+        // Config options (effort levels) parse with their choices.
+        XCTAssertEqual(info.configOptions.map(\.id), ["reasoning_effort"])
+        XCTAssertEqual(info.configOptions.first?.currentValue, "low")
+        XCTAssertEqual(info.configOptions.first?.choices.map(\.value), ["low", "high"])
 
         // The scripted transport streams a thought, a plan, two message chunks,
         // a tool call + completion, and a usage update when it sees the prompt.
@@ -34,6 +38,18 @@ final class AcpClientTests: XCTestCase {
         XCTAssertTrue(events.contains { if case let .toolCallUpdate(id, status, _, _) = $0 { return id == "t1" && status == .completed } else { return false } })
         XCTAssertTrue(events.contains { if case let .usage(u) = $0 { return u.used == 5000 } else { return false } })
         XCTAssertTrue(events.contains { if case .turnEnded = $0 { return true } else { return false } })
+        // Slash commands stream in via available_commands_update.
+        XCTAssertTrue(events.contains { event in
+            if case let .commands(list) = event { return list.map(\.name) == ["compact", "review"] }
+            return false
+        })
+
+        // set_config_option round-trips the adapter's normalized option set.
+        await client.setConfigOption(id: "reasoning_effort", value: "high")
+        XCTAssertTrue(collector.events.contains { event in
+            if case let .configOptions(options) = event { return options.first?.currentValue == "high" }
+            return false
+        })
     }
 
     @MainActor
@@ -92,10 +108,41 @@ final class AcpClientTests: XCTestCase {
         }
 
         let userTexts = conversation.rows.compactMap { row -> String? in
-            if case let .user(_, text) = row { return text } else { return nil }
+            if case let .user(_, text, _) = row { return text } else { return nil }
         }
         XCTAssertEqual(userTexts, ["first", "second"])
         XCTAssertTrue(conversation.queued.isEmpty)
+    }
+
+    @MainActor
+    func testSteerPromotesQueuedMessageToFront() async throws {
+        let transport = ScriptedAcpTransport()
+        let client = AcpClient(transport: transport)
+        let conversation = AcpConversation(
+            title: "Test", command: "mock", arguments: [], environment: [:],
+            cwd: "/tmp", client: client
+        )
+        await conversation.start()
+        conversation.send("first")
+        conversation.send("second")
+        conversation.send("third")
+        XCTAssertEqual(conversation.queued.map(\.text), ["second", "third"])
+
+        // Steering "third" promotes it ahead of "second" and interrupts the
+        // current turn; the flush then dispatches in promoted order.
+        let steerID = try XCTUnwrap(conversation.queued.last?.id)
+        conversation.steerQueued(steerID)
+        XCTAssertEqual(conversation.queued.first?.text, "third")
+
+        let deadline = Date().addingTimeInterval(5)
+        while conversation.isRunning || !conversation.queued.isEmpty {
+            if Date() > deadline { XCTFail("steered queue did not drain"); break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let userTexts = conversation.rows.compactMap { row -> String? in
+            if case let .user(_, text, _) = row { return text } else { return nil }
+        }
+        XCTAssertEqual(userTexts, ["first", "third", "second"])
     }
 
     @MainActor
@@ -161,6 +208,32 @@ private actor ScriptedAcpTransport: AcpByteTransport {
                         .object(["id": .string("plan"), "name": .string("Plan")]),
                     ]),
                 ]),
+                "configOptions": .array([
+                    .object([
+                        "id": .string("reasoning_effort"),
+                        "name": .string("Reasoning effort"),
+                        "type": .string("select"),
+                        "currentValue": .string("low"),
+                        "options": .array([
+                            .object(["value": .string("low"), "name": .string("Low")]),
+                            .object(["value": .string("high"), "name": .string("High")]),
+                        ]),
+                    ]),
+                ]),
+            ]))
+        case "session/set_config_option":
+            reply(id: id, result: .object([
+                "configOptions": .array([
+                    .object([
+                        "id": .string("reasoning_effort"),
+                        "name": .string("Reasoning effort"),
+                        "currentValue": .string("high"),
+                        "options": .array([
+                            .object(["value": .string("low"), "name": .string("Low")]),
+                            .object(["value": .string("high"), "name": .string("High")]),
+                        ]),
+                    ]),
+                ]),
             ]))
         case "session/prompt":
             streamTurn()
@@ -179,6 +252,10 @@ private actor ScriptedAcpTransport: AcpByteTransport {
         notify(update: .object(["sessionUpdate": .string("agent_message_chunk"), "content": .object(["type": .string("text"), "text": .string(" world")])]))
         notify(update: .object(["sessionUpdate": .string("tool_call"), "toolCallId": .string("t1"), "title": .string("run echo"), "kind": .string("execute"), "status": .string("pending")]))
         notify(update: .object(["sessionUpdate": .string("tool_call_update"), "toolCallId": .string("t1"), "status": .string("completed")]))
+        notify(update: .object(["sessionUpdate": .string("available_commands_update"), "availableCommands": .array([
+            .object(["name": .string("compact"), "description": .string("Compact the conversation")]),
+            .object(["name": .string("review"), "description": .string("Review changes")]),
+        ])]))
         notify(update: .object(["sessionUpdate": .string("usage_update"), "usedTokens": .integer(5000), "maxTokens": .integer(200000)]))
     }
 

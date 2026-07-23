@@ -161,10 +161,14 @@ struct RootShellView: View {
         SessionRow(
             session: session,
             owned: model.isOwned(session.id),
-            agent: model.agentProfile(for: session.id)
+            agent: model.agentProfile(for: session.id),
+            branch: model.branch(for: session.id)
         )
         .tag(Optional(session.id))
         .contextMenu {
+            Button("Open in New Window") {
+                KaisolaMacAppDelegate.popOut(sessionID: session.id)
+            }
             if model.isOwned(session.id) {
                 Button("Rename…") { renameTarget = session.id }
                 if let dir = model.directory(for: session.id) {
@@ -318,6 +322,7 @@ struct RootShellView: View {
                     streamEpoch: model.terminalDocument.cursor?.streamEpoch,
                     endOffset: model.terminalDocument.cursor?.offset,
                     isOwned: owned,
+                    fontSize: settings.terminalFontSize,
                     onInput: owned ? { data in
                         guard let sessionID else { return }
                         model.sendInput(data, to: sessionID)
@@ -516,6 +521,7 @@ private struct SessionRow: View {
     let session: BrokerTerminalRecord
     let owned: Bool
     let agent: AgentProfile?
+    var branch: String?
 
     var body: some View {
         HStack(spacing: 9) {
@@ -555,16 +561,21 @@ private struct SessionRow: View {
     }
 
     private var sessionDetail: String {
-        if session.exited { return "Finished" }
-        if agent != nil {
+        var detail: String
+        if session.exited {
+            detail = "Finished"
+        } else if agent != nil {
             switch session.agentActivity {
-            case .working: return "Working…"
-            case .responded: return "Responded"
-            case .idle: return owned ? "Ready" : "Ready · observed"
+            case .working: detail = "Working…"
+            case .responded: detail = "Responded"
+            case .idle: detail = owned ? "Ready" : "Ready · observed"
             }
+        } else {
+            let liveDetail = "Live · PID \(session.pid.map(String.init) ?? "—")"
+            detail = owned ? liveDetail : "\(liveDetail) · observed"
         }
-        let liveDetail = "Live · PID \(session.pid.map(String.init) ?? "—")"
-        return owned ? liveDetail : "\(liveDetail) · observed"
+        if let branch, !session.exited { detail += " · ⎇ \(branch)" }
+        return detail
     }
 
     private var statusColor: Color {

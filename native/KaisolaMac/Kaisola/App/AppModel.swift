@@ -427,6 +427,10 @@ final class AppModel: ObservableObject {
     func endSession(_ terminalID: String) async {
         guard isOwned(terminalID),
               let record = sessions.first(where: { $0.id == terminalID }) else { return }
+        // Remember enough to recreate it (⌘⌥T) before the registry forgets.
+        if let stored = sessionStore.sessions().first(where: { $0.id == terminalID }) {
+            sessionStore.pushClosedSession(ClosedSession(cwd: stored.cwd, agentID: stored.agentID, title: stored.title))
+        }
         try? await controlClient.kill(projectID: record.projectID, terminalID: terminalID)
         sessionStore.remove(terminalID: terminalID)
         ownedTerminalIDs.remove(terminalID)
@@ -437,6 +441,18 @@ final class AppModel: ObservableObject {
         await refreshInventory()
     }
 
+    /// Recreate the most recently ended session (⌘⌥T): a fresh shell (and agent
+    /// CLI, if it had one) in the same folder. The old PTY is gone — this is a
+    /// new session with the old identity.
+    func reopenLastClosedSession() async {
+        guard let closed = sessionStore.popClosedSession() else { return }
+        let directory = URL(fileURLWithPath: closed.cwd)
+        let agent = closed.agentID.flatMap { AgentRegistry.profile(id: $0) }
+        await createOwnedSession(inDirectory: directory, agent: agent)
+    }
+
+    var hasClosedSessions: Bool { !sessionStore.closedSessions().isEmpty }
+
     /// Refresh the session list from the broker without disturbing streams.
     /// The `list()` rows carry agent busy/completed fields, so this keeps every
     /// row's agent status current, not just the subscribed one.
@@ -444,6 +460,44 @@ final class AppModel: ObservableObject {
         guard connectionState.isConnected else { return }
         if let status = try? await client.inventory() {
             sessions = status.terminals
+        }
+        refreshBranches()
+    }
+
+    /// Git branch per owned-session folder (session-row meta), refreshed on a
+    /// TTL so the inventory tick doesn't spawn a git process per 2.5s.
+    @Published private(set) var branchesByCwd: [String: String] = [:]
+    private var lastBranchScan = Date.distantPast
+
+    func branch(for terminalID: String) -> String? {
+        guard let cwd = sessionStore.sessions().first(where: { $0.id == terminalID })?.cwd else { return nil }
+        return branchesByCwd[cwd]
+    }
+
+    private func refreshBranches() {
+        guard Date().timeIntervalSince(lastBranchScan) > 10 else { return }
+        lastBranchScan = Date()
+        let cwds = Set(sessionStore.sessions().map(\.cwd))
+        guard !cwds.isEmpty else { return }
+        Task.detached(priority: .utility) { [weak self] in
+            var result: [String: String] = [:]
+            for cwd in cwds {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+                process.arguments = ["rev-parse", "--abbrev-ref", "HEAD"]
+                process.currentDirectoryURL = URL(fileURLWithPath: cwd, isDirectory: true)
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = FileHandle.nullDevice
+                guard (try? process.run()) != nil else { continue }
+                process.waitUntilExit()
+                guard process.terminationStatus == 0 else { continue }
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let branch = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !branch.isEmpty { result[cwd] = branch }
+            }
+            let branches = result
+            await MainActor.run { [weak self] in self?.branchesByCwd = branches }
         }
     }
 

@@ -45,17 +45,18 @@ struct AcpToolCall: Equatable, Sendable, Identifiable {
 }
 
 /// A single artifact inside a tool call. Mirrors ACP `ToolCallContent`:
-/// a file diff, or a generic text/output content block. Terminal references
-/// are folded into `.text` with a placeholder since the native chat doesn't
-/// embed a live PTY inside a card.
+/// a file diff, a generic text/output content block, or a reference to an
+/// agent-spawned terminal (rendered live from `AcpTerminalHost`).
 enum AcpToolContent: Equatable, Sendable, Identifiable {
     case diff(path: String, oldText: String?, newText: String)
     case text(String)
+    case terminal(id: String)
 
     var id: String {
         switch self {
         case let .diff(path, _, newText): "diff-\(path)-\(newText.count)"
         case let .text(text): "text-\(text.hashValue)"
+        case let .terminal(id): "terminal-\(id)"
         }
     }
 }
@@ -102,6 +103,8 @@ struct AcpSessionInfo: Equatable, Sendable {
     /// or an adapter's own set), and the one currently selected.
     var modes: [Mode] = []
     var currentModeID: String?
+    /// Adapter configuration options (effort levels etc.).
+    var configOptions: [AcpConfigOption] = []
 
     struct Model: Equatable, Sendable, Identifiable {
         let id: String
@@ -111,6 +114,28 @@ struct AcpSessionInfo: Equatable, Sendable {
     struct Mode: Equatable, Sendable, Identifiable {
         let id: String
         let name: String
+    }
+}
+
+/// A slash command the agent advertises via `available_commands_update`.
+struct AcpCommand: Equatable, Sendable, Identifiable {
+    let name: String
+    let description: String
+    var id: String { name }
+}
+
+/// An adapter configuration option (reasoning effort, approval preset, …) from
+/// `session/new`'s `configOptions` and `session/set_config_option` responses.
+struct AcpConfigOption: Equatable, Sendable, Identifiable {
+    let id: String
+    let name: String
+    var currentValue: String?
+    let choices: [Choice]
+
+    struct Choice: Equatable, Sendable, Identifiable {
+        let value: String
+        let name: String
+        var id: String { value }
     }
 }
 

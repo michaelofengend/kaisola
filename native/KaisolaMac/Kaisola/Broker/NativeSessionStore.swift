@@ -33,6 +33,15 @@ struct OpenProject: Codable, Equatable, Identifiable, Sendable {
     let createdAt: Int64
 }
 
+/// What Reopen Closed Session (⌘⌥T) needs to recreate an ended session: the
+/// folder, the agent (if any), and the title it had. The PTY itself is gone —
+/// reopening starts a fresh shell in the same place.
+struct ClosedSession: Codable, Equatable, Sendable {
+    let cwd: String
+    let agentID: String?
+    let title: String
+}
+
 /// Persists the app's broker owner identity and its owned-terminal registry in
 /// the native application-support directory (never Electron's). Writes are
 /// atomic; a corrupt file degrades to an empty registry rather than a crash.
@@ -44,6 +53,9 @@ struct NativeSessionStore: Sendable {
         /// Recently closed project tabs, newest last, bounded — powers
         /// Reopen Closed Project (⌘⇧T).
         var closedProjects: [OpenProject]?
+        /// Recently ended sessions, newest last, bounded — powers
+        /// Reopen Closed Session (⌘⌥T).
+        var closedSessions: [ClosedSession]?
     }
 
     private let closedStackCap = 10
@@ -140,6 +152,30 @@ struct NativeSessionStore: Sendable {
 
     func closedProjects() -> [OpenProject] {
         read()?.closedProjects ?? []
+    }
+
+    // MARK: - Closed sessions (⌘⌥T)
+
+    /// Record an ended session so it can be recreated.
+    func pushClosedSession(_ closed: ClosedSession) {
+        var payload = read() ?? Payload(ownerID: ownerID(), sessions: [])
+        var stack = payload.closedSessions ?? []
+        stack.append(closed)
+        if stack.count > closedStackCap { stack.removeFirst(stack.count - closedStackCap) }
+        payload.closedSessions = stack
+        write(payload)
+    }
+
+    /// Pop the most recently ended session for recreation.
+    func popClosedSession() -> ClosedSession? {
+        guard var payload = read(), var stack = payload.closedSessions, let last = stack.popLast() else { return nil }
+        payload.closedSessions = stack
+        write(payload)
+        return last
+    }
+
+    func closedSessions() -> [ClosedSession] {
+        read()?.closedSessions ?? []
     }
 
     func owns(terminalID: String) -> Bool {

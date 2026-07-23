@@ -103,6 +103,24 @@ final class NativeSessionStoreTests: XCTestCase {
         XCTAssertTrue(store.closedProjects().isEmpty)
     }
 
+    func testClosedSessionStackPushesAndPopsNewestFirst() {
+        store.pushClosedSession(ClosedSession(cwd: "/tmp/one", agentID: nil, title: "one"))
+        store.pushClosedSession(ClosedSession(cwd: "/tmp/two", agentID: "claude-code", title: "two"))
+        let first = store.popClosedSession()
+        XCTAssertEqual(first?.cwd, "/tmp/two")
+        XCTAssertEqual(first?.agentID, "claude-code")
+        XCTAssertEqual(store.popClosedSession()?.cwd, "/tmp/one")
+        XCTAssertNil(store.popClosedSession())
+    }
+
+    func testClosedSessionStackIsBounded() {
+        for index in 0..<15 {
+            store.pushClosedSession(ClosedSession(cwd: "/tmp/s\(index)", agentID: nil, title: "s\(index)"))
+        }
+        XCTAssertEqual(store.closedSessions().count, 10)
+        XCTAssertEqual(store.closedSessions().first?.cwd, "/tmp/s5")   // oldest dropped
+    }
+
     func testOpenProjectDoesNotDisturbOwnedSessions() {
         let session = NativeOwnedSession(
             id: "term-1",

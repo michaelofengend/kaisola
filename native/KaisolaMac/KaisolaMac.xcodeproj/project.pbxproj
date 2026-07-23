@@ -47,7 +47,9 @@
 		798DE8FD51B9FFE7D6F9706F /* BrokerLaunchConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58663742F2D4497A3D234BF7 /* BrokerLaunchConfiguration.swift */; };
 		7B168B0E70A7503AD02FF74D /* DetachedBrokerProcess.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C8F92A50B6817748440EAE /* DetachedBrokerProcess.swift */; };
 		7D477D2931DFC68EAB18253B /* BrokerBootstrapClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 455D0FF2F635A75069247811 /* BrokerBootstrapClient.swift */; };
+		7F379E964C61CBE180BA4EF9 /* AcpTerminalHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = A85A5A6E3A5EC404CB81A0BD /* AcpTerminalHost.swift */; };
 		81F28501570678EDE2D42B52 /* AcpProcessTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32406CFD933CD31D2751A8AF /* AcpProcessTransport.swift */; };
+		877EEA77C8AE068966E94814 /* AcpTerminalHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F25711B7E71707CD583039 /* AcpTerminalHostTests.swift */; };
 		8E3E6D65DEA019947D7C0257 /* BrokerLaunchConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F9EDBEF947F0725DF51BDA4 /* BrokerLaunchConfigurationTests.swift */; };
 		965405BD43BA9C3BBEF15AD7 /* AcpPermissionRulesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 757C6A4EEAF0C23D949EF4A5 /* AcpPermissionRulesTests.swift */; };
 		970B14F97569D7C4D1267587 /* NativeTerminalInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C89B154EE5DAF4AFF41692D /* NativeTerminalInteractionTests.swift */; };
@@ -106,6 +108,7 @@
 /* Begin PBXFileReference section */
 		03184EF0234187AC455C546D /* BrokerStartupCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerStartupCoordinator.swift; sourceTree = "<group>"; };
 		07063F75FCF57994E572B99C /* AppModelProjectContextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelProjectContextTests.swift; sourceTree = "<group>"; };
+		07F25711B7E71707CD583039 /* AcpTerminalHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcpTerminalHostTests.swift; sourceTree = "<group>"; };
 		081788CB50A2F8085E0929CE /* NativePreviewSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePreviewSettings.swift; sourceTree = "<group>"; };
 		0A75F9D9A2E3D4F6821B1F0A /* AcpToolArtifactsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcpToolArtifactsTests.swift; sourceTree = "<group>"; };
 		0B4786B001B694E8168114CB /* KaisolaBrokerBootstrap */ = {isa = PBXFileReference; includeInIndex = 0; path = KaisolaBrokerBootstrap; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -156,6 +159,7 @@
 		9FAD1CF1DFF4378CF3677E4A /* AcpProcessIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcpProcessIntegrationTests.swift; sourceTree = "<group>"; };
 		A451FC25E152BC8B61FB5702 /* BrokerReconnectBackoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerReconnectBackoffTests.swift; sourceTree = "<group>"; };
 		A7E57351BA3A72C99024DAEC /* BrokerStartupCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerStartupCoordinatorTests.swift; sourceTree = "<group>"; };
+		A85A5A6E3A5EC404CB81A0BD /* AcpTerminalHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcpTerminalHost.swift; sourceTree = "<group>"; };
 		A8C8F92A50B6817748440EAE /* DetachedBrokerProcess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetachedBrokerProcess.swift; sourceTree = "<group>"; };
 		AF52791E7FB87F94AF30DBD2 /* NoBoardBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoBoardBoundaryTests.swift; sourceTree = "<group>"; };
 		BC20168C86DDDBA7D70222F3 /* AcpAdapterResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcpAdapterResolver.swift; sourceTree = "<group>"; };
@@ -338,6 +342,7 @@
 				87E8CB81899E1EDA02B677F9 /* AcpClientTests.swift */,
 				757C6A4EEAF0C23D949EF4A5 /* AcpPermissionRulesTests.swift */,
 				9FAD1CF1DFF4378CF3677E4A /* AcpProcessIntegrationTests.swift */,
+				07F25711B7E71707CD583039 /* AcpTerminalHostTests.swift */,
 				0A75F9D9A2E3D4F6821B1F0A /* AcpToolArtifactsTests.swift */,
 				07063F75FCF57994E572B99C /* AppModelProjectContextTests.swift */,
 				9971B075277E2DD1494755BE /* AppModelReconnectTests.swift */,
@@ -395,6 +400,7 @@
 				F979524745D6648E34835DF3 /* AcpModels.swift */,
 				DA6828DB9339AA4CAEDA765D /* AcpPermissionRules.swift */,
 				32406CFD933CD31D2751A8AF /* AcpProcessTransport.swift */,
+				A85A5A6E3A5EC404CB81A0BD /* AcpTerminalHost.swift */,
 				3D06ED8A6604C6BD4447869A /* PermissionRuleStore.swift */,
 			);
 			path = Acp;
@@ -570,6 +576,7 @@
 				2F5F162DFE9B71CA2549FEE7 /* AcpModels.swift in Sources */,
 				B03BEF624A05606381F25A07 /* AcpPermissionRules.swift in Sources */,
 				81F28501570678EDE2D42B52 /* AcpProcessTransport.swift in Sources */,
+				7F379E964C61CBE180BA4EF9 /* AcpTerminalHost.swift in Sources */,
 				6F112F55B8EA5E9F777175F0 /* AgentRegistry.swift in Sources */,
 				ACC0996E20F391DC8E473C42 /* AppModel.swift in Sources */,
 				7D477D2931DFC68EAB18253B /* BrokerBootstrapClient.swift in Sources */,
@@ -610,6 +617,7 @@
 				D1A6765808A570660500E109 /* AcpClientTests.swift in Sources */,
 				965405BD43BA9C3BBEF15AD7 /* AcpPermissionRulesTests.swift in Sources */,
 				E6654BD397157414CD77460C /* AcpProcessIntegrationTests.swift in Sources */,
+				877EEA77C8AE068966E94814 /* AcpTerminalHostTests.swift in Sources */,
 				C490492DC4C65C9BCA0842C0 /* AcpToolArtifactsTests.swift in Sources */,
 				640841FC93C7BCB00DFFA219 /* AppModelProjectContextTests.swift in Sources */,
 				F0340491DE4B839A15E2B447 /* AppModelReconnectTests.swift in Sources */,

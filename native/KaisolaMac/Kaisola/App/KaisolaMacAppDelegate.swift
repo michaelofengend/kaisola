@@ -130,6 +130,31 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         keyModel()?.reopenLastClosedProject()
     }
 
+    @objc private func reopenClosedSession(_ sender: Any?) {
+        guard let model = keyModel() else { return }
+        Task { await model.reopenLastClosedSession() }
+    }
+
+    /// Open a session in its own fresh window (the native "pop out"): the new
+    /// window's independent AppModel selects the same broker session.
+    static func popOut(sessionID: String) {
+        guard let delegate = NSApp.delegate as? KaisolaMacAppDelegate else { return }
+        let window = delegate.makeWindow()
+        guard let model = delegate.windowModels[ObjectIdentifier(window)] else { return }
+        Task {
+            // Wait for the fresh model's broker connection before selecting.
+            for _ in 0..<50 where !model.connectionState.isConnected {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            model.selectedSessionID = sessionID
+            await model.select(sessionID)
+        }
+    }
+
+    @objc private func increaseTerminalFont(_ sender: Any?) { settings.adjustTerminalFont(by: 1) }
+    @objc private func decreaseTerminalFont(_ sender: Any?) { settings.adjustTerminalFont(by: -1) }
+    @objc private func resetTerminalFont(_ sender: Any?) { settings.resetTerminalFont() }
+
     @objc private func checkForUpdates(_ sender: Any?) {
         updateController.checkForUpdates(sender)
     }
@@ -190,6 +215,8 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
             openFolderAction: #selector(openFolder(_:)),
             reopenClosedProjectTarget: self,
             reopenClosedProjectAction: #selector(reopenClosedProject(_:)),
+            reopenClosedSessionTarget: self,
+            reopenClosedSessionAction: #selector(reopenClosedSession(_:)),
             newTerminalTarget: self,
             newTerminalAction: #selector(newTerminalSession(_:)),
             newAgentTarget: self,
@@ -199,9 +226,15 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
             viewTarget: self,
             layoutAction: #selector(setNavigationLayout(_:)),
             appearanceAction: #selector(setAppearanceMode(_:)),
+            fontTarget: self,
+            fontIncreaseAction: #selector(increaseTerminalFont(_:)),
+            fontDecreaseAction: #selector(decreaseTerminalFont(_:)),
+            fontResetAction: #selector(resetTerminalFont(_:)),
             currentLayout: settings.navigationLayout.rawValue,
             currentAppearance: settings.appearance.rawValue
         )
+        NSApp.windowsMenu = NSApp.mainMenu?.item(withTitle: "Window")?.submenu
+        NSApp.helpMenu = NSApp.mainMenu?.item(withTitle: "Help")?.submenu
     }
 
     /// Pure menu construction so tests can assert the exact edit/find wiring.
@@ -218,6 +251,8 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         openFolderAction: Selector? = nil,
         reopenClosedProjectTarget: AnyObject? = nil,
         reopenClosedProjectAction: Selector? = nil,
+        reopenClosedSessionTarget: AnyObject? = nil,
+        reopenClosedSessionAction: Selector? = nil,
         newTerminalTarget: AnyObject? = nil,
         newTerminalAction: Selector? = nil,
         newAgentTarget: AnyObject? = nil,
@@ -227,6 +262,10 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         viewTarget: AnyObject? = nil,
         layoutAction: Selector? = nil,
         appearanceAction: Selector? = nil,
+        fontTarget: AnyObject? = nil,
+        fontIncreaseAction: Selector? = nil,
+        fontDecreaseAction: Selector? = nil,
+        fontResetAction: Selector? = nil,
         currentLayout: String = NavigationLayout.leftTree.rawValue,
         currentAppearance: String = AppearanceMode.system.rawValue
     ) -> NSMenu {
@@ -280,7 +319,12 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
             item.keyEquivalentModifierMask = [.command, .shift]
             item.target = reopenClosedProjectTarget
         }
-        if openFolderAction != nil || reopenClosedProjectAction != nil {
+        if let reopenClosedSessionAction {
+            let item = fileMenu.addItem(withTitle: "Reopen Closed Session", action: reopenClosedSessionAction, keyEquivalent: "t")
+            item.keyEquivalentModifierMask = [.command, .option]
+            item.target = reopenClosedSessionTarget
+        }
+        if openFolderAction != nil || reopenClosedProjectAction != nil || reopenClosedSessionAction != nil {
             fileMenu.addItem(.separator())
         }
         if let newChatAction {
@@ -352,10 +396,47 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
                 item.representedObject = mode.rawValue
                 item.state = mode.rawValue == currentAppearance ? .on : .off
             }
+            if let fontIncreaseAction, let fontDecreaseAction, let fontResetAction {
+                viewMenu.addItem(.separator())
+                viewMenu.addItem(sectionHeader("Terminal Font"))
+                let bigger = viewMenu.addItem(withTitle: "Bigger", action: fontIncreaseAction, keyEquivalent: "+")
+                bigger.target = fontTarget
+                let smaller = viewMenu.addItem(withTitle: "Smaller", action: fontDecreaseAction, keyEquivalent: "-")
+                smaller.target = fontTarget
+                let reset = viewMenu.addItem(withTitle: "Reset Size", action: fontResetAction, keyEquivalent: "0")
+                reset.target = fontTarget
+            }
             viewItem.submenu = viewMenu
             mainMenu.addItem(viewItem)
         }
+
+        // Standard Window menu (NSApp.windowsMenu appends the live window list).
+        let windowItem = NSMenuItem()
+        windowItem.title = "Window"
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        windowItem.submenu = windowMenu
+        mainMenu.addItem(windowItem)
+
+        // Help menu: the native preview's roadmap doubles as its manual.
+        let helpItem = NSMenuItem()
+        helpItem.title = "Help"
+        let helpMenu = NSMenu(title: "Help")
+        let help = helpMenu.addItem(withTitle: "Kaisola Native Preview Help", action: #selector(KaisolaMacAppDelegate.openHelp(_:)), keyEquivalent: "?")
+        help.target = nil   // first responder → the app delegate
+        helpItem.submenu = helpMenu
+        mainMenu.addItem(helpItem)
+
         return mainMenu
+    }
+
+    @objc func openHelp(_ sender: Any?) {
+        if let url = URL(string: "https://github.com/michaelofengenden/kaisola/blob/main/docs/native-migration-roadmap.md") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     private static func sectionHeader(_ title: String) -> NSMenuItem {

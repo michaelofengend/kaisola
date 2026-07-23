@@ -12,6 +12,8 @@ enum AcpEvent: Sendable {
     case usage(AcpUsage)
     case modelChanged(id: String)
     case modeChanged(id: String)
+    case commands([AcpCommand])
+    case configOptions([AcpConfigOption])
     case permission(AcpPermissionRequest)
     case turnEnded
     case error(String)
@@ -35,6 +37,15 @@ actor AcpClient {
     private var capabilities = AcpAgentCapabilities()
     private var permissionCounter = 0
     private var permissionWaiters: [Int: CheckedContinuation<String, Never>] = [:]
+    /// Host for agent-requested terminals (`terminal/create` …).
+    private let terminalHost = AcpTerminalHost()
+    /// The session workspace; fs/terminal callbacks are confined inside it.
+    private var workspaceRoot: String?
+    /// Sensitive globs the fs bridge refuses to read or write (set by the
+    /// conversation from the user's guardrails; defaults applied otherwise).
+    private var fsSensitiveGlobs = AcpPermissionRules.defaultSensitiveGlobs
+    /// Mirrors Electron's MAX_TEXT_FILE_BYTES ACP fs limit.
+    static let maxTextFileBytes = 8 * 1024 * 1024
 
     init(transport: any AcpByteTransport = AcpProcessTransport()) {
         self.transport = transport
@@ -42,6 +53,15 @@ actor AcpClient {
 
     func setEventHandler(_ handler: EventHandler?) {
         eventHandler = handler
+    }
+
+    func configureFsGuard(sensitiveGlobs: [String]) {
+        fsSensitiveGlobs = sensitiveGlobs
+    }
+
+    /// Live output snapshot for an agent-spawned terminal (tool-card rendering).
+    func terminalSnapshot(_ id: String) async -> AcpTerminalHost.Snapshot? {
+        await terminalHost.output(id)
     }
 
     /// Spawn the adapter and complete the ACP handshake, returning the new
@@ -53,6 +73,7 @@ actor AcpClient {
         cwd: String,
         mcpServers: [JSONValue]
     ) async throws -> AcpSessionInfo {
+        workspaceRoot = (cwd as NSString).standardizingPath
         try await transport.start(command: command, arguments: arguments, environment: environment, cwd: cwd)
         readerTask = Task { await readLoop() }
 
@@ -97,7 +118,8 @@ actor AcpClient {
             models: models,
             currentModelID: modelsNode?["currentModelId"]?.stringValue ?? object["currentModelId"]?.stringValue,
             modes: modes,
-            currentModeID: modesNode?["currentModeId"]?.stringValue ?? object["currentModeId"]?.stringValue
+            currentModeID: modesNode?["currentModeId"]?.stringValue ?? object["currentModeId"]?.stringValue,
+            configOptions: Self.parseConfigOptions(object["configOptions"])
         )
     }
 
@@ -133,6 +155,21 @@ actor AcpClient {
         ]))
     }
 
+    /// Set an adapter config option (e.g. reasoning effort). The response echoes
+    /// the full option set, which is re-emitted so the UI reflects adapter-side
+    /// normalization.
+    func setConfigOption(id: String, value: String) async {
+        guard let sessionID else { return }
+        let result = try? await request("session/set_config_option", params: .object([
+            "sessionId": .string(sessionID),
+            "configId": .string(id),
+            "value": .string(value),
+        ]))
+        if let options = result?.objectValue?["configOptions"] {
+            eventHandler?(.configOptions(Self.parseConfigOptions(options)))
+        }
+    }
+
     /// Resolve a pending permission request with the user's chosen option.
     func resolvePermission(id: Int, optionID: String) {
         permissionWaiters.removeValue(forKey: id)?.resume(returning: optionID)
@@ -142,6 +179,7 @@ actor AcpClient {
         readerTask?.cancel()
         readerTask = nil
         await transport.terminate()
+        await terminalHost.releaseAll()
         for waiter in permissionWaiters.values { waiter.resume(returning: "cancel") }
         permissionWaiters.removeAll()
         for continuation in pending.values { continuation.resume(throwing: AcpClientError.notRunning) }
@@ -208,6 +246,15 @@ actor AcpClient {
         Task { try? await transport.send(frame) }
     }
 
+    private func respondError(id: JSONValue, code: Int, message: String) {
+        guard let frame = try? encode(.object([
+            "jsonrpc": .string("2.0"),
+            "id": id,
+            "error": .object(["code": .integer(Int64(code)), "message": .string(message)]),
+        ])) else { return }
+        Task { try? await transport.send(frame) }
+    }
+
     private func encode(_ value: JSONValue) throws -> Data {
         var data = try JSONEncoder().encode(value)
         data.append(0x0A)
@@ -266,11 +313,109 @@ actor AcpClient {
         case "session/request_permission":
             handlePermissionRequest(id: object["id"], params: object["params"])
         case "fs/read_text_file":
-            // Read-only helper: return the file the agent asked for.
             handleReadTextFile(id: object["id"], params: object["params"])
+        case "fs/write_text_file":
+            handleWriteTextFile(id: object["id"], params: object["params"])
+        case "terminal/create", "terminal/output", "terminal/wait_for_exit", "terminal/kill", "terminal/release":
+            handleTerminalMethod(method, id: object["id"], params: object["params"])
         default:
-            break
+            // An unanswered request would hang the agent — fail it explicitly.
+            if let id = object["id"] {
+                respondError(id: id, code: -32601, message: "Method not handled: \(method)")
+            }
         }
+    }
+
+    // MARK: - Agent-requested terminals
+
+    private func handleTerminalMethod(_ method: String, id: JSONValue?, params: JSONValue?) {
+        guard let id else { return }
+        let object = params?.objectValue ?? [:]
+        Task {
+            do {
+                switch method {
+                case "terminal/create":
+                    guard let command = object["command"]?.stringValue, !command.isEmpty else {
+                        throw AcpClientError.requestFailed("terminal/create requires a command")
+                    }
+                    let args = (object["args"]?.arrayValue ?? []).compactMap(\.stringValue)
+                    let env = Dictionary(
+                        (object["env"]?.arrayValue ?? []).compactMap { pair -> (String, String)? in
+                            guard let p = pair.objectValue, let name = p["name"]?.stringValue else { return nil }
+                            return (name, p["value"]?.stringValue ?? "")
+                        },
+                        uniquingKeysWith: { _, last in last }
+                    )
+                    let cwd = try workspacePath(object["cwd"]?.stringValue, mustExist: true)
+                    let limit = object["outputByteLimit"]?.intValue.map { Int($0) }
+                    let terminalID = try await terminalHost.create(
+                        command: command, args: args, env: env, cwd: cwd, outputByteLimit: limit
+                    )
+                    respond(id: id, result: .object(["terminalId": .string(terminalID)]))
+                case "terminal/output":
+                    guard let terminalID = object["terminalId"]?.stringValue,
+                          let snapshot = await terminalHost.output(terminalID) else {
+                        throw AcpClientError.requestFailed("unknown terminal")
+                    }
+                    var result: [String: JSONValue] = [
+                        "output": .string(snapshot.output),
+                        "truncated": .bool(snapshot.truncated),
+                    ]
+                    if let status = snapshot.exitStatus { result["exitStatus"] = Self.encode(status) }
+                    respond(id: id, result: .object(result))
+                case "terminal/wait_for_exit":
+                    guard let terminalID = object["terminalId"]?.stringValue,
+                          let status = await terminalHost.waitForExit(terminalID) else {
+                        throw AcpClientError.requestFailed("unknown terminal")
+                    }
+                    respond(id: id, result: .object(["exitStatus": Self.encode(status)]))
+                case "terminal/kill":
+                    guard let terminalID = object["terminalId"]?.stringValue else {
+                        throw AcpClientError.requestFailed("terminal/kill requires terminalId")
+                    }
+                    await terminalHost.kill(terminalID)
+                    respond(id: id, result: .object([:]))
+                case "terminal/release":
+                    guard let terminalID = object["terminalId"]?.stringValue else {
+                        throw AcpClientError.requestFailed("terminal/release requires terminalId")
+                    }
+                    await terminalHost.release(terminalID)
+                    respond(id: id, result: .object([:]))
+                default:
+                    respondError(id: id, code: -32601, message: "Method not handled: \(method)")
+                }
+            } catch {
+                respondError(id: id, code: -32000, message: errorText(error))
+            }
+        }
+    }
+
+    private static func encode(_ status: AcpTerminalHost.ExitStatus) -> JSONValue {
+        var fields: [String: JSONValue] = [:]
+        if let code = status.exitCode { fields["exitCode"] = .integer(Int64(code)) }
+        if let signal = status.signal { fields["signal"] = .string(signal) }
+        return .object(fields)
+    }
+
+    /// Resolve a path inside the session workspace, refusing escapes — the
+    /// same confinement Electron's `_workspacePath` applies.
+    private func workspacePath(_ path: String?, mustExist: Bool = false) throws -> String {
+        guard let root = workspaceRoot else { throw AcpClientError.notRunning }
+        let raw = path?.isEmpty == false ? path! : root
+        let resolved = raw.hasPrefix("/")
+            ? (raw as NSString).standardizingPath
+            : ((root as NSString).appendingPathComponent(raw) as NSString).standardizingPath
+        guard resolved == root || resolved.hasPrefix(root + "/") else {
+            throw AcpClientError.requestFailed("Path escapes the session workspace")
+        }
+        if mustExist, !FileManager.default.fileExists(atPath: resolved) {
+            throw AcpClientError.requestFailed("No such path: \(resolved)")
+        }
+        return resolved
+    }
+
+    private func errorText(_ error: any Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? String(describing: error)
     }
 
     private func handleSessionUpdate(_ update: JSONValue) {
@@ -319,6 +464,16 @@ actor AcpClient {
             if let id = (object["currentModeId"] ?? object["modeId"])?.stringValue {
                 eventHandler?(.modeChanged(id: id))
             }
+        case "available_commands_update":
+            let commands = (object["availableCommands"]?.arrayValue ?? []).compactMap { value -> AcpCommand? in
+                guard let c = value.objectValue, let name = c["name"]?.stringValue else { return nil }
+                return AcpCommand(name: name, description: c["description"]?.stringValue ?? "")
+            }
+            eventHandler?(.commands(commands))
+        case "config_option_update":
+            if let options = object["configOptions"] {
+                eventHandler?(.configOptions(Self.parseConfigOptions(options)))
+            }
         default:
             break
         }
@@ -361,9 +516,42 @@ actor AcpClient {
 
     private func handleReadTextFile(id: JSONValue?, params: JSONValue?) {
         guard let id else { return }
-        let path = params?.objectValue?["path"]?.stringValue
-        let content = path.flatMap { try? String(contentsOfFile: $0, encoding: .utf8) } ?? ""
-        respond(id: id, result: .object(["content": .string(content)]))
+        do {
+            let path = try workspacePath(params?.objectValue?["path"]?.stringValue, mustExist: true)
+            guard !AcpPermissionRules.pathIsSensitive(globs: fsSensitiveGlobs, pathish: path) else {
+                throw AcpClientError.requestFailed("Blocked: sensitive file (Kaisola guardrails)")
+            }
+            let attributes = try FileManager.default.attributesOfItem(atPath: path)
+            if let size = attributes[.size] as? Int, size > Self.maxTextFileBytes {
+                throw AcpClientError.requestFailed("Text file exceeds the \(Self.maxTextFileBytes)-byte ACP limit")
+            }
+            let content = try String(contentsOfFile: path, encoding: .utf8)
+            respond(id: id, result: .object(["content": .string(content)]))
+        } catch {
+            respondError(id: id, code: -32000, message: errorText(error))
+        }
+    }
+
+    private func handleWriteTextFile(id: JSONValue?, params: JSONValue?) {
+        guard let id else { return }
+        do {
+            let content = params?.objectValue?["content"]?.stringValue ?? ""
+            guard content.utf8.count <= Self.maxTextFileBytes else {
+                throw AcpClientError.requestFailed("Text file exceeds the \(Self.maxTextFileBytes)-byte ACP limit")
+            }
+            let path = try workspacePath(params?.objectValue?["path"]?.stringValue)
+            guard !AcpPermissionRules.pathIsSensitive(globs: fsSensitiveGlobs, pathish: path) else {
+                throw AcpClientError.requestFailed("Blocked: sensitive file (Kaisola guardrails)")
+            }
+            try FileManager.default.createDirectory(
+                at: URL(fileURLWithPath: path).deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try content.write(toFile: path, atomically: true, encoding: .utf8)
+            respond(id: id, result: .object([:]))
+        } catch {
+            respondError(id: id, code: -32000, message: errorText(error))
+        }
     }
 
     // MARK: - Parsing helpers
@@ -395,6 +583,24 @@ actor AcpClient {
         )
     }
 
+    /// Parse the adapter's `configOptions` array (select-type options only —
+    /// the only kind current adapters emit).
+    static func parseConfigOptions(_ value: JSONValue?) -> [AcpConfigOption] {
+        (value?.arrayValue ?? []).compactMap { item -> AcpConfigOption? in
+            guard let o = item.objectValue, let id = o["id"]?.stringValue else { return nil }
+            let choices = (o["options"]?.arrayValue ?? []).compactMap { choice -> AcpConfigOption.Choice? in
+                guard let c = choice.objectValue, let value = c["value"]?.stringValue else { return nil }
+                return AcpConfigOption.Choice(value: value, name: c["name"]?.stringValue ?? value)
+            }
+            return AcpConfigOption(
+                id: id,
+                name: o["name"]?.stringValue ?? id,
+                currentValue: o["currentValue"]?.stringValue,
+                choices: choices
+            )
+        }
+    }
+
     /// Parse an ACP `ToolCallContent[]` into our display artifacts. Recognizes
     /// `{type:"diff", path, oldText, newText}` and `{type:"content", content:{...}}`
     /// (text / resource blocks); a `{type:"terminal"}` reference degrades to a
@@ -415,8 +621,8 @@ actor AcpClient {
                 if block?["type"]?.stringValue == "image" { return .text("[image]") }
                 return nil
             case "terminal":
-                let terminalID = object["terminalId"]?.stringValue ?? ""
-                return .text("[terminal \(terminalID)]")
+                guard let terminalID = object["terminalId"]?.stringValue else { return nil }
+                return .terminal(id: terminalID)
             default:
                 // Bare content block (no wrapper type) with inline text.
                 if let text = object["text"]?.stringValue { return .text(text) }

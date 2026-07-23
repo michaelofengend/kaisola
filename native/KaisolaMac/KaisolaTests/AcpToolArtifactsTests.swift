@@ -78,12 +78,12 @@ final class AcpToolArtifactsTests: XCTestCase {
         XCTAssertEqual(content, [.text("output line")])
     }
 
-    func testTerminalReferenceDegradesToText() {
+    func testTerminalReferenceParsesToLiveTerminalContent() {
         let value = JSONValue.array([
             .object(["type": .string("terminal"), "terminalId": .string("term-9")]),
         ])
         let content = AcpClient.parseToolContent(value)
-        XCTAssertEqual(content, [.text("[terminal term-9]")])
+        XCTAssertEqual(content, [.terminal(id: "term-9")])
     }
 
     func testNilOrEmptyContentYieldsNoArtifacts() {

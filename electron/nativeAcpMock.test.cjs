@@ -11,18 +11,22 @@ const REQUEST_TIMEOUT_MS = 2_000
 class InboxTimeoutError extends Error {}
 
 class MockAcpClient {
-  constructor() {
+  constructor({ mockTerminal = false } = {}) {
     this.nextId = 1
     this.pending = new Map()
     this.inbox = []
     this.waiters = []
+    this.agentRequests = []
     this.stdoutBuffer = ''
     this.stderr = ''
     this.protocolError = null
     this.closed = false
+    const childEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+    delete childEnv.KAISOLA_MOCK_TERMINAL
+    if (mockTerminal) childEnv.KAISOLA_MOCK_TERMINAL = '1'
     this.child = spawn(process.execPath, [MOCK_PATH], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      env: childEnv,
     })
     this.exitPromise = new Promise((resolve) => {
       this.child.once('exit', (code, signal) => resolve({ code, signal }))
@@ -74,6 +78,9 @@ class MockAcpClient {
       return
     }
 
+    if (message.id != null && typeof message.method === 'string') {
+      this.agentRequests.push(message)
+    }
     const waiterIndex = this.waiters.findIndex((waiter) => waiter.predicate(message))
     if (waiterIndex >= 0) {
       const [waiter] = this.waiters.splice(waiterIndex, 1)
@@ -169,8 +176,8 @@ class MockAcpClient {
   }
 }
 
-async function clientFor(t) {
-  const client = new MockAcpClient()
+async function clientFor(t, options) {
+  const client = new MockAcpClient(options)
   t.after(async () => client.close())
   return client
 }
@@ -374,6 +381,136 @@ test('completed tool calls include deterministic diff and text content', async (
     assertUpdateFrame(await client.take(), created.sessionId)
   }
   assert.deepEqual(await promptPromise, { stopReason: 'end_turn' })
+})
+
+test('the optional terminal bridge completes a deterministic client round trip', async (t) => {
+  const client = await clientFor(t, { mockTerminal: true })
+  const { created } = await initializeAndCreateSession(client)
+  const promptPromise = client.request('session/prompt', {
+    sessionId: created.sessionId,
+    prompt: [{ type: 'text', text: 'exercise the terminal bridge' }],
+  })
+
+  for (let index = 0; index < 6; index += 1) {
+    assertUpdateFrame(await client.take(), created.sessionId)
+  }
+
+  assert.deepEqual(assertUpdateFrame(await client.take(), created.sessionId), {
+    sessionUpdate: 'tool_call',
+    toolCallId: 'term-tool-1',
+    title: 'Run fixture command',
+    kind: 'execute',
+    status: 'in_progress',
+  })
+
+  const create = await client.take()
+  assert.equal(create.method, 'terminal/create')
+  assert.deepEqual(create.params, {
+    sessionId: created.sessionId,
+    command: '/bin/echo',
+    args: ['acp-terminal-roundtrip'],
+    cwd: null,
+    outputByteLimit: 65536,
+  })
+  client.respond(create.id, { terminalId: 'jt-1' })
+
+  assert.deepEqual(assertUpdateFrame(await client.take(), created.sessionId), {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'term-tool-1',
+    content: [{ type: 'terminal', terminalId: 'jt-1' }],
+  })
+
+  const waitForExit = await client.take()
+  assert.equal(waitForExit.method, 'terminal/wait_for_exit')
+  assert.deepEqual(waitForExit.params, {
+    sessionId: created.sessionId,
+    terminalId: 'jt-1',
+  })
+  client.respond(waitForExit.id, {
+    exitStatus: { exitCode: 0, signal: null },
+  })
+
+  const output = await client.take()
+  assert.equal(output.method, 'terminal/output')
+  assert.deepEqual(output.params, {
+    sessionId: created.sessionId,
+    terminalId: 'jt-1',
+  })
+  client.respond(output.id, {
+    output: 'acp-terminal-roundtrip\n',
+    truncated: false,
+    exitStatus: { exitCode: 0, signal: null },
+  })
+
+  const completed = assertUpdateFrame(await client.take(), created.sessionId)
+  assert.deepEqual(completed, {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'term-tool-1',
+    status: 'completed',
+    content: [
+      { type: 'terminal', terminalId: 'jt-1' },
+      {
+        type: 'content',
+        content: {
+          type: 'text',
+          text: 'terminal-exit:{"exitCode":0,"signal":null}',
+        },
+      },
+    ],
+  })
+
+  const release = await client.take()
+  assert.equal(release.method, 'terminal/release')
+  assert.deepEqual(release.params, {
+    sessionId: created.sessionId,
+    terminalId: 'jt-1',
+  })
+  client.respond(release.id, {})
+
+  const permission = await client.take()
+  assert.equal(permission.method, 'session/request_permission')
+  client.respond(permission.id, {
+    outcome: { outcome: 'selected', optionId: 'allow-once' },
+  })
+  for (let index = 0; index < 3; index += 1) {
+    assertUpdateFrame(await client.take(), created.sessionId)
+  }
+
+  assert.deepEqual(
+    client.agentRequests
+      .filter((request) => request.method.startsWith('terminal/'))
+      .map((request) => request.method),
+    [
+      'terminal/create',
+      'terminal/wait_for_exit',
+      'terminal/output',
+      'terminal/release',
+    ],
+  )
+  assert.deepEqual(await promptPromise, { stopReason: 'end_turn' })
+})
+
+test('the default mock never issues terminal client requests', async (t) => {
+  const client = await clientFor(t)
+  const { created } = await initializeAndCreateSession(client)
+  const promptPromise = client.request('session/prompt', {
+    sessionId: created.sessionId,
+    prompt: [{ type: 'text', text: 'keep the terminal bridge disabled' }],
+  })
+
+  const { permission } = await readThroughPermission(client, created.sessionId)
+  client.respond(permission.id, {
+    outcome: { outcome: 'selected', optionId: 'allow-once' },
+  })
+  for (let index = 0; index < 3; index += 1) {
+    assertUpdateFrame(await client.take(), created.sessionId)
+  }
+
+  assert.deepEqual(await promptPromise, { stopReason: 'end_turn' })
+  assert.deepEqual(
+    client.agentRequests.filter((request) => request.method.startsWith('terminal/')),
+    [],
+  )
 })
 
 test('the selected permission option controls the prompt result', async (t) => {
