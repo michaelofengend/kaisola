@@ -22,6 +22,9 @@ optional pending a scope decision.
 - Terminal **observation** — `broker.status`/`terminal.list`/`subscribe`/`diagnostics` (`ObserveOnlyBrokerClient.swift`).
 - Native terminal **ownership**: create/type/resize/kill, durable across quit/update/crash, reattach on relaunch (`BrokerControlClient.swift`, `NativeTerminalSurface.swift`, `NativeSessionStore.swift`).
 - **Agent CLI sessions**: one-click Claude/Codex/OpenCode/Gemini owned terminals with live working/idle status (`AgentRegistry.swift`, agent-activity via `terminal:observer-activity`).
+- **ACP chat surface**: native conversational Claude/Codex over the Agent Client Protocol — streaming messages, thinking blocks, tool-call cards, live plan, usage, model picker, inline permission prompts (`Kaisola/Acp/*`: AcpClient/AcpConversation/AcpChatView). Adapters spawned via `npx @latest`. Proven end-to-end against a real spawned mock agent.
+- **MCP**: per-workspace server registry producing the `session/new` mcpServers array with correct stdio/http/sse shapes, capability-filtered (`scripts/native-mcp-registry.cjs`).
+- **Adapter/MCP version currency**: adapters + MCP packages resolved to latest and continuously updated (`scripts/agent-adapter-versions.cjs`, `agent-adapter-update.cjs`).
 - **Terminal theming** matched to the Electron xterm palette (`TerminalTheme.swift`).
 - Detached-broker **reconnect/backoff**, wake/foreground recovery (`BrokerStartupCoordinator.swift`, `BrokerReconnectBackoff.swift`).
 - Distribution: Developer ID signing, notarization, stapling, Sparkle updates from a signed appcast (`NativeUpdateController.swift`, release pipeline).
@@ -76,11 +79,15 @@ optional pending a scope decision.
 | Feature | Status | Pri | Notes |
 |---|---|---|---|
 | Agent CLI sessions (prepared terminal: Claude/Codex/…) | DONE | P0 | owned terminal booting the CLI + activity status |
-| ACP chat threads (structured, resumable) | NEW | P0 | `acpHandler.cjs`; the richer chat surface beyond terminal agents |
-| Tool-call cards / artifacts (diff/terminal/content) | NEW | P0 | |
-| Thinking / thought blocks (elapsed time) | NEW | P0 | |
-| Permissions / gates (allow/reject/always; rules; sensitive globs) | NEW | P0 | safety-critical |
-| Model + effort selection (Claude/Codex effort, per-thread) | NEW | P0 | |
+| ACP chat threads (structured, streaming) | DONE | P0 | `Kaisola/Acp/*`; adapter spawned via npx @latest; app-scoped session |
+| Tool-call cards / artifacts | PARTIAL | P0 | tool-call cards done; rich diff/content artifacts still to add |
+| Thinking / thought blocks | DONE | P0 | streaming thought disclosure |
+| Live plan (todo list) | DONE | P1 | ACP `plan` rendered as a checklist card |
+| Context-window usage | DONE | P1 | `usage_update` shown in the chat header |
+| Model selection (per-session picker) | DONE | P1 | `current_model_update` + session/set_model; effort levels still to add |
+| Permissions / gates (inline allow/reject) | PARTIAL | P0 | inline permission bar done; rules + sensitive globs + always-allow to add |
+| MCP servers carried into sessions | DONE | P1 | `native-mcp-registry.cjs` → session/new mcpServers |
+| Adapter/MCP version currency + continuous update | DONE | P1 | `agent-adapter-versions/update.cjs`; npx @latest |
 | Permission mode / autonomy dial (plan/default/acceptEdits/bypass) | NEW | P0 | |
 | Steering + queued follow-ups | NEW | P1 | |
 | Agent plan (todo list) | NEW | P1 | ACP `plan` |
