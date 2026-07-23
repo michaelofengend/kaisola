@@ -62,6 +62,57 @@ final class AcpClientTests: XCTestCase {
         XCTAssertTrue(conversation.rows.contains { if case .user = $0 { return true } else { return false } })
         XCTAssertTrue(conversation.rows.contains { if case .tool = $0 { return true } else { return false } })
     }
+
+    @MainActor
+    func testFollowUpQueuedWhileRunningDispatchesAfterTurn() async throws {
+        let transport = ScriptedAcpTransport()
+        let client = AcpClient(transport: transport)
+        let ruleFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kaisola-q-\(UUID().uuidString.prefix(8))")
+            .appendingPathComponent("rules.json")
+        let conversation = AcpConversation(
+            title: "Test", command: "mock", arguments: [], environment: [:],
+            cwd: "/tmp", client: client, ruleStore: PermissionRuleStore(fileURL: ruleFile)
+        )
+        defer { try? FileManager.default.removeItem(at: ruleFile.deletingLastPathComponent()) }
+        await conversation.start()
+
+        conversation.send("first")
+        conversation.send("second")   // a turn is running → this queues
+        XCTAssertTrue(conversation.isRunning)
+        XCTAssertEqual(conversation.queued.map(\.text), ["second"])
+
+        // Both turns complete: "second" dispatches when "first" ends, and the
+        // queue drains.
+        let deadline = Date().addingTimeInterval(5)
+        while conversation.isRunning || !conversation.queued.isEmpty
+            || conversation.rows.filter({ if case .user = $0 { return true } else { return false } }).count < 2 {
+            if Date() > deadline { XCTFail("queued follow-up did not dispatch"); break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        let userTexts = conversation.rows.compactMap { row -> String? in
+            if case let .user(_, text) = row { return text } else { return nil }
+        }
+        XCTAssertEqual(userTexts, ["first", "second"])
+        XCTAssertTrue(conversation.queued.isEmpty)
+    }
+
+    @MainActor
+    func testRemoveQueuedDropsPendingFollowUp() async throws {
+        let transport = ScriptedAcpTransport()
+        let client = AcpClient(transport: transport)
+        let conversation = AcpConversation(
+            title: "Test", command: "mock", arguments: [], environment: [:],
+            cwd: "/tmp", client: client
+        )
+        await conversation.start()
+        conversation.send("first")
+        conversation.send("drop me")
+        let id = try XCTUnwrap(conversation.queued.first?.id)
+        conversation.removeQueued(id)
+        XCTAssertTrue(conversation.queued.isEmpty)
+    }
 }
 
 private final class EventCollector: @unchecked Sendable {

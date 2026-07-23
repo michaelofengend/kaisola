@@ -271,11 +271,24 @@ test('mock initializes, creates a session, and streams the exact happy path', as
       title: 'Inspect deterministic fixture',
       kind: 'read',
       status: 'pending',
+      locations: [{ path: 'fixture/notes.txt' }],
     },
     {
       sessionUpdate: 'tool_call_update',
       toolCallId: 'native-mock-tool-1',
       status: 'completed',
+      content: [
+        {
+          type: 'diff',
+          path: 'fixture/notes.txt',
+          oldText: 'alpha\nbeta\n',
+          newText: 'alpha\nBETA\ngamma\n',
+        },
+        {
+          type: 'content',
+          content: { type: 'text', text: 'wrote fixture/notes.txt' },
+        },
+      ],
     },
   ])
   assert.deepEqual(permission, {
@@ -328,6 +341,38 @@ test('mock initializes, creates a session, and streams the exact happy path', as
     },
     { sessionUpdate: 'usage_update', usedTokens: 128, maxTokens: 4096 },
   ])
+  assert.deepEqual(await promptPromise, { stopReason: 'end_turn' })
+})
+
+test('completed tool calls include deterministic diff and text content', async (t) => {
+  const client = await clientFor(t)
+  const { created } = await initializeAndCreateSession(client)
+  const promptPromise = client.request('session/prompt', {
+    sessionId: created.sessionId,
+    prompt: [{ type: 'text', text: 'exercise rich tool call content' }],
+  })
+
+  const { updates, permission } = await readThroughPermission(client, created.sessionId)
+  const toolCallUpdate = updates.find((update) => update.sessionUpdate === 'tool_call_update')
+  assert.deepEqual(toolCallUpdate.content, [
+    {
+      type: 'diff',
+      path: 'fixture/notes.txt',
+      oldText: 'alpha\nbeta\n',
+      newText: 'alpha\nBETA\ngamma\n',
+    },
+    {
+      type: 'content',
+      content: { type: 'text', text: 'wrote fixture/notes.txt' },
+    },
+  ])
+
+  client.respond(permission.id, {
+    outcome: { outcome: 'selected', optionId: 'allow-once' },
+  })
+  for (let index = 0; index < 3; index += 1) {
+    assertUpdateFrame(await client.take(), created.sessionId)
+  }
   assert.deepEqual(await promptPromise, { stopReason: 'end_turn' })
 })
 

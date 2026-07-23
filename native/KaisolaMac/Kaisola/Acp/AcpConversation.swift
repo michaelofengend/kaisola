@@ -36,6 +36,14 @@ final class AcpConversation: ObservableObject {
     @Published private(set) var currentModeID: String?
     @Published var pendingPermission: AcpPermissionRequest?
     @Published private(set) var statusMessage: String?
+    /// Follow-up messages typed while a turn was running; each dispatches when
+    /// the preceding turn ends.
+    @Published private(set) var queued: [QueuedMessage] = []
+
+    struct QueuedMessage: Identifiable, Equatable, Sendable {
+        let id: String
+        let text: String
+    }
 
     let title: String
     private let client: AcpClient
@@ -47,6 +55,7 @@ final class AcpConversation: ObservableObject {
     private let ruleStore: PermissionRuleStore
     private let sensitiveGlobs: [String]
     private var turnCounter = 0
+    private var queueCounter = 0
 
     init(
         title: String,
@@ -94,9 +103,25 @@ final class AcpConversation: ObservableObject {
         }
     }
 
+    /// Send a message, or — if a turn is already running — queue it as a
+    /// follow-up that dispatches automatically when the current turn ends.
     func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard isConnected, !trimmed.isEmpty, !isRunning else { return }
+        guard isConnected, !trimmed.isEmpty else { return }
+        if isRunning {
+            queueCounter += 1
+            queued.append(QueuedMessage(id: "q\(queueCounter)", text: trimmed))
+            return
+        }
+        dispatch(trimmed)
+    }
+
+    /// Drop a still-pending queued follow-up before it dispatches.
+    func removeQueued(_ id: String) {
+        queued.removeAll { $0.id == id }
+    }
+
+    private func dispatch(_ trimmed: String) {
         turnCounter += 1
         rows.append(.user(id: "\(turnCounter)", text: trimmed))
         isRunning = true
@@ -207,14 +232,25 @@ final class AcpConversation: ObservableObject {
             handlePermission(request)
         case .turnEnded:
             isRunning = false
+            flushQueue()
         case let .error(message):
             statusMessage = message
             isRunning = false
+            // Leave the queue intact on error — auto-dispatching into a failing
+            // agent would loop; the user can retry or clear it.
         case let .exited(code):
             isConnected = false
             isRunning = false
+            queued.removeAll()   // the agent is gone; nothing can dispatch
             statusMessage = code == 0 ? "The agent ended." : "The agent exited (code \(code))."
         }
+    }
+
+    /// Dispatch the next queued follow-up after a turn ends.
+    private func flushQueue() {
+        guard !isRunning, isConnected, !queued.isEmpty else { return }
+        let next = queued.removeFirst()
+        dispatch(next.text)
     }
 
     /// Streaming chunks accumulate into the current agent message/thought so the

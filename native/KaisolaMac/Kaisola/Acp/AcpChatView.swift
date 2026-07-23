@@ -97,29 +97,57 @@ struct AcpChatView: View {
     }
 
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("Message the agent…", text: $draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...6)
-                .padding(8)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                .onSubmit(sendDraft)
-            if conversation.isRunning {
-                Button(action: conversation.cancel) {
-                    Image(systemName: "stop.circle.fill")
+        VStack(spacing: 6) {
+            if !conversation.queued.isEmpty {
+                queuedStrip
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField(conversation.isRunning ? "Queue a follow-up…" : "Message the agent…", text: $draft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...6)
+                    .padding(8)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    .onSubmit(sendDraft)
+                if conversation.isRunning {
+                    Button(action: conversation.cancel) {
+                        Image(systemName: "stop.circle.fill")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Stop the current turn")
                 }
-                .buttonStyle(.borderless)
-                .help("Stop the current turn")
-            } else {
                 Button(action: sendDraft) {
-                    Image(systemName: "arrow.up.circle.fill")
+                    Image(systemName: conversation.isRunning ? "text.badge.plus" : "arrow.up.circle.fill")
                 }
                 .buttonStyle(.borderless)
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !conversation.isConnected)
+                .help(conversation.isRunning ? "Queue this as a follow-up" : "Send")
             }
         }
         .padding(12)
         .background(.bar)
+    }
+
+    private var queuedStrip: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(conversation.queued) { message in
+                HStack(spacing: 6) {
+                    Image(systemName: "clock").font(.caption2).foregroundStyle(.secondary)
+                    Text(message.text).font(.caption).lineLimit(1)
+                    Spacer()
+                    Button {
+                        conversation.removeQueued(message.id)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Remove this queued follow-up")
+                }
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func sendDraft() {

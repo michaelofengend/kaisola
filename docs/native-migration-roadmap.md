@@ -89,7 +89,7 @@ optional pending a scope decision.
 | MCP servers carried into sessions | DONE | P1 | `native-mcp-registry.cjs` → session/new mcpServers |
 | Adapter/MCP version currency + continuous update | DONE | P1 | `agent-adapter-versions/update.cjs`; npx @latest |
 | Permission mode / autonomy dial (plan/default/acceptEdits/bypass) | DONE | P0 | native ACP session modes: header picker → `session/set_mode`, `current_mode_update` handled, `SessionModeState` parsed from session/new (also fixed models parse to accept the nested `{availableModels,currentModelId}` shape real adapters use) |
-| Steering + queued follow-ups | NEW | P1 | |
+| Steering + queued follow-ups | PARTIAL | P1 | typing while a turn runs queues follow-ups that auto-dispatch on turn end (drain in order, removable chips, cleared on exit); `AcpConversation.queued`; true mid-turn steering (interrupt+inject) still to add |
 | Optimistic dispatch + rollback | NEW | P1 | |
 | Turn checkpoints / restore (pre-turn git snapshot) | NEW | P1 | |
 | Slash commands / available commands | NEW | P1 | |

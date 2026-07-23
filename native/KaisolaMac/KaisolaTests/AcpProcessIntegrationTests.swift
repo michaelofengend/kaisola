@@ -51,6 +51,17 @@ final class AcpProcessIntegrationTests: XCTestCase {
                       "expected the permission callback")
         XCTAssertTrue(events.contains { if case .turnEnded = $0 { return true } else { return false } },
                       "expected the turn to end")
+
+        // The mock attaches a diff artifact to its tool_call_update; assert it
+        // streams through as parsed content (end-to-end proof of the inline-diff path).
+        let diffArrived = events.contains { event in
+            guard case let .toolCallUpdate(_, _, content, _) = event, let content else { return false }
+            return content.contains { artifact in
+                if case let .diff(path, _, _) = artifact { return path == "fixture/notes.txt" }
+                return false
+            }
+        }
+        XCTAssertTrue(diffArrived, "expected the tool_call_update's diff artifact to parse through")
     }
 
     private static func resolveNode() -> String? {

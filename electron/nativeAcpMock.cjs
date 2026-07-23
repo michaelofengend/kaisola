@@ -26,6 +26,21 @@ const AVAILABLE_COMMANDS = [
     input: { hint: 'optional text' },
   },
 ]
+const TOOL_CALL_LOCATIONS = [
+  { path: 'fixture/notes.txt' },
+]
+const TOOL_CALL_CONTENT = [
+  {
+    type: 'diff',
+    path: 'fixture/notes.txt',
+    oldText: 'alpha\nbeta\n',
+    newText: 'alpha\nBETA\ngamma\n',
+  },
+  {
+    type: 'content',
+    content: { type: 'text', text: 'wrote fixture/notes.txt' },
+  },
+]
 const PERMISSION_OPTIONS = [
   { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
   { optionId: 'reject-once', name: 'Reject once', kind: 'reject_once' },
@@ -265,6 +280,7 @@ async function handlePrompt(requestId, params) {
     title: 'Inspect deterministic fixture',
     kind: 'read',
     status: 'pending',
+    locations: TOOL_CALL_LOCATIONS,
   })
   if (!await pause(turn, turn.stepDelayMs)) return
 
@@ -272,6 +288,7 @@ async function handlePrompt(requestId, params) {
     sessionUpdate: 'tool_call_update',
     toolCallId,
     status: 'completed',
+    content: TOOL_CALL_CONTENT,
   })
   if (!await pause(turn, turn.stepDelayMs)) return
 
@@ -435,4 +452,3 @@ function shutdown() {
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
 input.on('line', handleLine)
 input.on('close', shutdown)
-
