@@ -36,24 +36,34 @@ final class MeshSession: ObservableObject, Identifiable {
     /// git repo.
     func start(agents: [AgentProfile], environment: [String: String] = ProcessInfo.processInfo.environment) async {
         let service = GitService(repoRoot: baseDirectory)
+        // A git workspace promises isolation; a plain folder never had it.
+        // Distinguish the two so a worktree FAILURE in a repo fails closed
+        // instead of silently fanning agents into one shared writable tree.
+        let baseIsRepo = await Task.detached(priority: .userInitiated) {
+            (try? service.status()) != nil
+        }.value
         for agent in agents {
             guard let adapter = AcpAdapter.forAgent(agent.id) else { continue }
             var worktree: String?
             var branch: String?
-            let candidateBranch = "\(GitService.meshBranchPrefix)\(id.suffix(6))-\(agent.id)"
-            let candidatePath = fileManager.temporaryDirectory
-                .appendingPathComponent("kaisola-mesh", isDirectory: true)
-                .appendingPathComponent("\(id)-\(agent.id)", isDirectory: true).path
-            do {
-                try await Task.detached(priority: .userInitiated) {
-                    try service.worktreeAdd(path: candidatePath, branch: candidateBranch)
-                }.value
-                worktree = candidatePath
-                branch = candidateBranch
-            } catch {
-                if isolationNote == nil {
-                    isolationNote = "Worktree isolation unavailable — columns share the workspace."
+            if baseIsRepo {
+                let candidateBranch = "\(GitService.meshBranchPrefix)\(id.suffix(6))-\(agent.id)"
+                let candidatePath = fileManager.temporaryDirectory
+                    .appendingPathComponent("kaisola-mesh", isDirectory: true)
+                    .appendingPathComponent("\(id)-\(agent.id)", isDirectory: true).path
+                do {
+                    try await Task.detached(priority: .userInitiated) {
+                        try service.worktreeAdd(path: candidatePath, branch: candidateBranch)
+                    }.value
+                    worktree = candidatePath
+                    branch = candidateBranch
+                } catch {
+                    // Fail closed: no isolated column, no column at all.
+                    isolationNote = "Could not create a worktree for \(agent.name) — column skipped."
+                    continue
                 }
+            } else if isolationNote == nil {
+                isolationNote = "Not a git repo — columns share the workspace (no isolation)."
             }
             let cwd = worktree ?? baseDirectory.path
             let conversation = AcpConversation(
@@ -75,6 +85,20 @@ final class MeshSession: ObservableObject, Identifiable {
         for column in columns {
             await column.conversation.start()
         }
+    }
+
+    /// How many worktree columns hold uncommitted changes — the Close guard
+    /// asks before destroying them.
+    func dirtyColumnCount() async -> Int {
+        let paths = columns.compactMap(\.worktreePath)
+        guard !paths.isEmpty else { return 0 }
+        return await Task.detached(priority: .userInitiated) {
+            paths.filter { path in
+                let service = GitService(repoRoot: URL(fileURLWithPath: path, isDirectory: true))
+                guard let status = try? service.status() else { return false }
+                return !status.isClean
+            }.count
+        }.value
     }
 
     /// Fan the prompt out to every connected column (each queues if busy).

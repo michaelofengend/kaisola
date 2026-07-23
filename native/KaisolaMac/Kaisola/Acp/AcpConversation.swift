@@ -170,10 +170,13 @@ final class AcpConversation: ObservableObject {
     private func dispatch(_ trimmed: String) {
         turnCounter += 1
         let rowID = "\(turnCounter)"
+        let turn = turnCounter
         rows.append(.user(id: rowID, text: trimmed, failed: false))
         isRunning = true
-        recordCheckpoint(turn: turnCounter)
         Task {
+            // The snapshot must complete BEFORE the agent starts, or it could
+            // capture partial agent edits instead of the pre-turn tree.
+            await recordCheckpoint(turn: turn)
             do { try await client.prompt(trimmed) }
             catch {
                 statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -278,20 +281,30 @@ final class AcpConversation: ObservableObject {
 
     // MARK: - Pre-turn checkpoints
 
-    /// Snapshot the working tree before the agent's turn starts. Off-main; a
-    /// non-repo or clean tree is silently skipped.
-    private func recordCheckpoint(turn: Int) {
+    /// Snapshot the working tree before the agent's turn starts (awaited by
+    /// the dispatch path so the agent cannot race the snapshot). A non-repo or
+    /// clean tree is silently skipped — a clean tree's restore point is HEAD.
+    /// Snapshots cover TRACKED files (git stash create semantics).
+    private func recordCheckpoint(turn: Int) async {
         let workspace = cwd
-        Task.detached(priority: .utility) { [weak self] in
+        let hash = await Task.detached(priority: .userInitiated) { () -> String? in
             let service = GitService(repoRoot: URL(fileURLWithPath: workspace, isDirectory: true))
-            guard let hash = try? service.checkpoint() else { return }
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.checkpoints.append(TurnCheckpoint(id: hash, turn: turn, at: Date()))
-                if self.checkpoints.count > 20 {
-                    self.checkpoints.removeFirst(self.checkpoints.count - 20)
-                }
-            }
+            return try? service.checkpoint()
+        }.value
+        guard let hash else { return }
+        checkpoints.append(TurnCheckpoint(id: hash, turn: turn, at: Date()))
+        if checkpoints.count > 20 {
+            let dropped = checkpoints.removeFirst()
+            dropCheckpointRef(dropped.id)
+        }
+    }
+
+    /// Release a checkpoint's keep-alive ref once it ages out of the menu.
+    private func dropCheckpointRef(_ hash: String) {
+        let workspace = cwd
+        Task.detached(priority: .utility) {
+            let service = GitService(repoRoot: URL(fileURLWithPath: workspace, isDirectory: true))
+            try? service.dropCheckpoint(hash)
         }
     }
 

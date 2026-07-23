@@ -411,17 +411,33 @@ actor AcpClient {
         guard Self.isContained(resolved, in: root) || Self.isContained(resolved, in: realRoot) else {
             throw AcpClientError.requestFailed("Path escapes the session workspace")
         }
-        // A symlinked component inside the workspace must not escape either.
-        if FileManager.default.fileExists(atPath: resolved) {
-            let real = URL(fileURLWithPath: resolved).resolvingSymlinksInPath().path
-            guard Self.isContained(real, in: realRoot) else {
-                throw AcpClientError.requestFailed("Path escapes the session workspace")
-            }
+        // Resolve symlinks through the NEAREST EXISTING ancestor, so neither an
+        // existing symlinked file nor a not-yet-created file under a symlinked
+        // parent (write path) can escape the workspace.
+        let real = Self.realPathViaNearestExistingAncestor(resolved)
+        guard Self.isContained(real, in: realRoot) else {
+            throw AcpClientError.requestFailed("Path escapes the session workspace")
         }
         if mustExist, !FileManager.default.fileExists(atPath: resolved) {
             throw AcpClientError.requestFailed("No such path: \(resolved)")
         }
         return resolved
+    }
+
+    /// Resolve symlinks in the deepest existing ancestor and re-append the
+    /// not-yet-existing suffix, mirroring Electron's real-parent check.
+    static func realPathViaNearestExistingAncestor(_ path: String) -> String {
+        var existing = path
+        var suffix: [String] = []
+        while !FileManager.default.fileExists(atPath: existing), existing != "/" {
+            suffix.append((existing as NSString).lastPathComponent)
+            existing = (existing as NSString).deletingLastPathComponent
+        }
+        var real = URL(fileURLWithPath: existing).resolvingSymlinksInPath().path
+        for component in suffix.reversed() {
+            real = (real as NSString).appendingPathComponent(component)
+        }
+        return real
     }
 
     private static func isContained(_ path: String, in root: String) -> Bool {

@@ -103,14 +103,22 @@ struct GitService: Sendable {
     /// Snapshot the working tree without moving HEAD or touching the index:
     /// `git stash create` writes the stash commit and returns its hash but
     /// stores nothing, so the tree is untouched. Returns nil on a clean tree.
-    /// Powers pre-turn checkpoints.
+    /// The snapshot is kept alive under a PRIVATE ref namespace
+    /// (`refs/kaisola/checkpoints/*`) — never the user's stash list.
     func checkpoint() throws -> String? {
         let hash = try run(["stash", "create", "kaisola pre-turn checkpoint"])
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !hash.isEmpty else { return nil }
-        // Keep the snapshot reachable so gc can't collect it mid-session.
-        _ = try run(["stash", "store", "-m", "kaisola checkpoint", hash])
+        _ = try run(["update-ref", "refs/kaisola/checkpoints/\(hash)", hash])
         return hash
+    }
+
+    /// Release an aged-out checkpoint's keep-alive ref.
+    func dropCheckpoint(_ hash: String) throws {
+        guard hash.range(of: "^[0-9a-f]{7,40}$", options: .regularExpression) != nil else {
+            throw GitError.commandFailed("Invalid checkpoint id")
+        }
+        _ = try run(["update-ref", "-d", "refs/kaisola/checkpoints/\(hash)"])
     }
 
     /// Restore the files recorded in a checkpoint over the current tree.

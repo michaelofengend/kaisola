@@ -18,6 +18,9 @@ actor AcpTerminalHost {
     }
 
     static let defaultOutputByteLimit = 1_048_576
+    /// Hard ceiling for adapter-requested output limits (mirrors Electron's
+    /// 8 MiB clamp) — a hostile `outputByteLimit` cannot exhaust app memory.
+    static let maxOutputByteLimit = 8 * 1_048_576
     private static let signalNames: [Int32: String] = [
         SIGHUP: "SIGHUP", SIGINT: "SIGINT", SIGQUIT: "SIGQUIT", SIGKILL: "SIGKILL",
         SIGTERM: "SIGTERM", SIGPIPE: "SIGPIPE", SIGSEGV: "SIGSEGV", SIGABRT: "SIGABRT",
@@ -29,6 +32,10 @@ actor AcpTerminalHost {
         var truncated = false
         var byteLimit: Int
         var exitStatus: ExitStatus?
+        /// Exit reported by the termination handler, held until the pipe drains
+        /// so `wait_for_exit` can never resolve ahead of the final output.
+        var pendingExit: ExitStatus?
+        var eofReached = false
         var released = false
         var waiters: [CheckedContinuation<ExitStatus, Never>] = []
 
@@ -68,22 +75,30 @@ actor AcpTerminalHost {
         process.standardError = pipe
         process.standardInput = FileHandle.nullDevice
 
-        let entry = Entry(process: process, byteLimit: max(1, outputByteLimit ?? Self.defaultOutputByteLimit))
+        let requestedLimit = outputByteLimit ?? Self.defaultOutputByteLimit
+        let entry = Entry(process: process, byteLimit: min(max(1, requestedLimit), Self.maxOutputByteLimit))
         entries[id] = entry
 
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
+                Task { await self?.markEOF(id: id) }
                 return
             }
             Task { await self?.append(id: id, data: data) }
         }
         process.terminationHandler = { [weak self] finished in
+            guard let self else { return }
             let status: ExitStatus = finished.terminationReason == .uncaughtSignal
                 ? ExitStatus(exitCode: nil, signal: Self.signalNames[finished.terminationStatus] ?? "SIG\(finished.terminationStatus)")
                 : ExitStatus(exitCode: finished.terminationStatus, signal: nil)
-            Task { await self?.finish(id: id, status: status) }
+            Task { await self.recordExit(id: id, status: status) }
+            // If a grandchild keeps the pipe open past exit, don't hold exit
+            // waiters hostage — force completion after a grace period.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                Task { await self.forceEOF(id: id) }
+            }
         }
 
         do {
@@ -154,8 +169,29 @@ actor AcpTerminalHost {
         }
     }
 
-    private func finish(id: String, status: ExitStatus) {
+    /// Exit lands here first; it only becomes visible once the pipe reached
+    /// EOF, so `terminal/output` after `wait_for_exit` always sees full output.
+    private func recordExit(id: String, status: ExitStatus) {
         guard let entry = entries[id] else { return }
+        entry.pendingExit = status
+        if entry.eofReached { finish(id: id, entry: entry) }
+    }
+
+    private func markEOF(id: String) {
+        guard let entry = entries[id] else { return }
+        entry.eofReached = true
+        if entry.pendingExit != nil { finish(id: id, entry: entry) }
+    }
+
+    /// The grace-period fallback for grandchildren that hold the pipe open.
+    private func forceEOF(id: String) {
+        guard let entry = entries[id], entry.exitStatus == nil, entry.pendingExit != nil else { return }
+        entry.eofReached = true
+        finish(id: id, entry: entry)
+    }
+
+    private func finish(id: String, entry: Entry) {
+        guard entry.exitStatus == nil, let status = entry.pendingExit else { return }
         entry.exitStatus = status
         for waiter in entry.waiters { waiter.resume(returning: status) }
         entry.waiters.removeAll()

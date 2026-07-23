@@ -9,6 +9,21 @@ struct RootShellView: View {
     @State private var renameText: String = ""
     @State private var gitRepo: URL?
     @State private var showPalette = false
+    /// A Close Mesh request whose worktrees still hold uncommitted changes.
+    @State private var meshCloseConfirm: (id: String, dirty: Int)?
+
+    /// Close immediately when every column is clean; confirm when closing
+    /// would destroy uncommitted agent work in the worktrees.
+    private func requestCloseMesh(_ mesh: MeshSession) {
+        Task {
+            let dirty = await mesh.dirtyColumnCount()
+            if dirty == 0 {
+                model.closeMesh(mesh.id)
+            } else {
+                meshCloseConfirm = (mesh.id, dirty)
+            }
+        }
+    }
 
     private var sidebarSelection: Binding<String?> {
         Binding(
@@ -83,6 +98,18 @@ struct RootShellView: View {
                 .transition(.opacity)
             }
         }
+        .confirmationDialog(
+            "Close Mesh?",
+            isPresented: Binding(get: { meshCloseConfirm != nil }, set: { if !$0 { meshCloseConfirm = nil } })
+        ) {
+            Button("Discard and Close", role: .destructive) {
+                if let confirm = meshCloseConfirm { model.closeMesh(confirm.id) }
+                meshCloseConfirm = nil
+            }
+            Button("Cancel", role: .cancel) { meshCloseConfirm = nil }
+        } message: {
+            Text("\(meshCloseConfirm?.dirty ?? 0) column(s) have uncommitted changes in their worktrees. Closing discards that work permanently — integrate what you want to keep first (Diff → apply/commit).")
+        }
     }
 
     // MARK: - Layouts
@@ -108,7 +135,7 @@ struct RootShellView: View {
                             Label(mesh.title, systemImage: "circle.hexagongrid.fill")
                                 .tag(Optional(mesh.id))
                                 .contextMenu {
-                                    Button("Close Mesh", role: .destructive) { model.closeMesh(mesh.id) }
+                                    Button("Close Mesh", role: .destructive) { requestCloseMesh(mesh) }
                                 }
                         }
                     }

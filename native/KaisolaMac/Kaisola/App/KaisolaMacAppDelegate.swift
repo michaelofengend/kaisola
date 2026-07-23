@@ -114,7 +114,7 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
               let model = windowModels.removeValue(forKey: ObjectIdentifier(window)) else { return }
-        Task { await model.disconnect() }
+        Task { await model.teardown() }
     }
 
     @objc private func newWindow(_ sender: Any?) {

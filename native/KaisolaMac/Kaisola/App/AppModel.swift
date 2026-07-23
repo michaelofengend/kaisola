@@ -313,6 +313,22 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Full window teardown: stop every app-scoped surface this model owns
+    /// (chat adapters and their terminal hosts, Mesh agents + worktrees), then
+    /// drop the broker connections. Closing a window must not leak child
+    /// processes or leave Mesh worktrees registered.
+    func teardown() async {
+        for chat in chats {
+            chat.conversation.stop()
+        }
+        chats.removeAll()
+        for mesh in meshes {
+            mesh.shutdown()
+        }
+        meshes.removeAll()
+        await disconnect()
+    }
+
     /// Jump from an inbox entry to its surface (chat or terminal session).
     func jumpToAttentionTarget(_ targetID: String) {
         AttentionCenter.shared.clear(targetID: targetID)

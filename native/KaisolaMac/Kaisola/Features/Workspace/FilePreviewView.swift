@@ -39,6 +39,15 @@ struct FilePreviewView: View {
     @State private var savedText = ""
     @State private var showMarkdownSource = false
     @State private var saveError: String?
+    /// The file actually shown; lags `url` while an unsaved-changes prompt is up.
+    @State private var displayedURL: URL?
+    /// A navigation/close blocked on unsaved changes, awaiting the user.
+    @State private var pendingAction: PendingAction?
+
+    private enum PendingAction: Equatable {
+        case navigate(URL)
+        case close
+    }
 
     private var isDirty: Bool { draft != savedText }
 
@@ -49,14 +58,60 @@ struct FilePreviewView: View {
             body(for: content)
         }
         .background(Color(nsColor: .textBackgroundColor))
-        .onAppear(perform: load)
-        .onChange(of: url) { _, _ in load() }
+        .onAppear { displayedURL = url; load() }
+        .onChange(of: url) { _, newURL in
+            // Never silently drop unsaved edits: block the switch behind a
+            // Save / Discard / Cancel prompt.
+            if isDirty, newURL != displayedURL {
+                pendingAction = .navigate(newURL)
+            } else {
+                displayedURL = newURL
+                load()
+            }
+        }
+        .confirmationDialog(
+            "Unsaved changes",
+            isPresented: Binding(get: { pendingAction != nil }, set: { if !$0 { pendingAction = nil } })
+        ) {
+            Button("Save") {
+                save()
+                completePendingAction()
+            }
+            Button("Discard Changes", role: .destructive) {
+                draft = savedText
+                completePendingAction()
+            }
+            Button("Cancel", role: .cancel) { pendingAction = nil }
+        } message: {
+            Text("\(displayedURL?.lastPathComponent ?? "This file") has unsaved changes.")
+        }
+    }
+
+    private func completePendingAction() {
+        switch pendingAction {
+        case let .navigate(next):
+            displayedURL = next
+            load()
+        case .close:
+            close()
+        case nil:
+            break
+        }
+        pendingAction = nil
+    }
+
+    private func requestClose() {
+        if isDirty {
+            pendingAction = .close
+        } else {
+            close()
+        }
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             Image(systemName: "doc.text")
-            Text(url.lastPathComponent).font(.subheadline.weight(.medium))
+            Text((displayedURL ?? url).lastPathComponent).font(.subheadline.weight(.medium))
             if isDirty {
                 Circle().fill(Color.accentColor).frame(width: 7, height: 7)
                     .accessibilityLabel("Unsaved changes")
@@ -78,7 +133,7 @@ struct FilePreviewView: View {
                     .disabled(!isDirty)
             }
             Button {
-                close()
+                requestClose()
             } label: {
                 Image(systemName: "xmark.circle.fill")
             }
@@ -113,7 +168,7 @@ struct FilePreviewView: View {
                 }
             }
         case .image:
-            if let image = NSImage(contentsOf: url) {
+            if let image = NSImage(contentsOf: displayedURL ?? url) {
                 ScrollView([.horizontal, .vertical]) {
                     Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
                         .frame(maxWidth: 1200)
@@ -143,7 +198,7 @@ struct FilePreviewView: View {
     }
 
     private func load() {
-        content = FilePreviewContent.load(url: url)
+        content = FilePreviewContent.load(url: displayedURL ?? url)
         switch content {
         case let .text(text), let .markdown(text):
             draft = text
@@ -157,7 +212,7 @@ struct FilePreviewView: View {
 
     private func save() {
         do {
-            try draft.write(to: url, atomically: true, encoding: .utf8)
+            try draft.write(to: displayedURL ?? url, atomically: true, encoding: .utf8)
             savedText = draft
             saveError = nil
         } catch {
@@ -166,8 +221,9 @@ struct FilePreviewView: View {
     }
 
     /// Markdown → AttributedString with a plain-text fallback so a parse
-    /// failure can never blank the preview.
-    static func renderMarkdown(_ text: String) -> AttributedString {
+    /// failure can never blank the preview. Pure, hence nonisolated (CI's
+    /// stricter inference otherwise pins View statics to the main actor).
+    nonisolated static func renderMarkdown(_ text: String) -> AttributedString {
         (try? AttributedString(
             markdown: text,
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)

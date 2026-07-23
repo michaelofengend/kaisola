@@ -19,16 +19,30 @@ final class AcpTerminalHostTests: XCTestCase {
         XCTAssertEqual(status?.exitCode, 3)
         XCTAssertNil(status?.signal)
 
-        // Output may land just after exit; poll briefly for the pipe to drain.
-        var snapshot = await host.output(id)
-        let deadline = Date().addingTimeInterval(2)
-        while snapshot?.output.contains("hello-acp") != true, Date() < deadline {
-            try await Task.sleep(nanoseconds: 30_000_000)
-            snapshot = await host.output(id)
-        }
-        XCTAssertTrue(snapshot?.output.contains("hello-acp") == true)
+        // EOF is a barrier: once wait_for_exit resolves, the snapshot must
+        // already carry the complete output — no post-exit polling allowed.
+        let snapshot = await host.output(id)
+        XCTAssertTrue(snapshot?.output.contains("hello-acp") == true,
+                      "output must be fully drained before exit resolves")
         XCTAssertEqual(snapshot?.truncated, false)
         XCTAssertEqual(snapshot?.exitStatus?.exitCode, 3)
+    }
+
+    func testAdapterProvidedLimitIsClampedToTheApplicationMaximum() async throws {
+        let host = AcpTerminalHost()
+        // A hostile outputByteLimit (Int.max) must not disable the bound; the
+        // process still runs and output is captured under the clamp.
+        let id = try await host.create(
+            command: "/bin/sh",
+            args: ["-c", "printf clamped"],
+            env: [:],
+            cwd: FileManager.default.temporaryDirectory.path,
+            outputByteLimit: Int.max
+        )
+        _ = await host.waitForExit(id)
+        let snapshot = await host.output(id)
+        XCTAssertEqual(snapshot?.output, "clamped")
+        XCTAssertEqual(snapshot?.truncated, false)
     }
 
     func testOutputByteLimitKeepsTailAndMarksTruncated() async throws {
@@ -41,12 +55,7 @@ final class AcpTerminalHostTests: XCTestCase {
             outputByteLimit: 10
         )
         _ = await host.waitForExit(id)
-        var snapshot = await host.output(id)
-        let deadline = Date().addingTimeInterval(2)
-        while snapshot?.truncated != true, Date() < deadline {
-            try await Task.sleep(nanoseconds: 30_000_000)
-            snapshot = await host.output(id)
-        }
+        let snapshot = await host.output(id)
         XCTAssertEqual(snapshot?.truncated, true)
         // The retained tail is bounded and ends with the final bytes.
         XCTAssertTrue(snapshot?.output.hasSuffix("bbbbbbbbbb") == true)

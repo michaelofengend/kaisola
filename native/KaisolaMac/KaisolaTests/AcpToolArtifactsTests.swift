@@ -90,4 +90,40 @@ final class AcpToolArtifactsTests: XCTestCase {
         XCTAssertTrue(AcpClient.parseToolContent(nil).isEmpty)
         XCTAssertTrue(AcpClient.parseToolContent(.array([])).isEmpty)
     }
+
+    // MARK: - Workspace confinement (symlink resolution)
+
+    func testNearestExistingAncestorResolvesSymlinksForUncreatedPaths() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kaisola-sym-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let outside = base.appendingPathComponent("outside", isDirectory: true)
+        let workspace = base.appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        // workspace/link → outside. A write target under the link must resolve
+        // to the OUTSIDE real path even though the file doesn't exist yet.
+        let link = workspace.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        let escape = link.appendingPathComponent("new-dir/secret.txt").path
+        let real = AcpClient.realPathViaNearestExistingAncestor(escape)
+        let realOutside = outside.resolvingSymlinksInPath().path
+        XCTAssertTrue(real.hasPrefix(realOutside + "/"),
+                      "resolution must surface the symlink's real target: \(real)")
+        let realWorkspace = workspace.resolvingSymlinksInPath().path
+        XCTAssertFalse(real.hasPrefix(realWorkspace + "/"),
+                       "the escape must not still look workspace-contained")
+    }
+
+    func testNearestExistingAncestorKeepsHonestPathsInPlace() throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kaisola-honest-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let target = workspace.appendingPathComponent("sub/new.txt").path
+        let real = AcpClient.realPathViaNearestExistingAncestor(target)
+        XCTAssertTrue(real.hasPrefix(workspace.resolvingSymlinksInPath().path + "/"))
+        XCTAssertTrue(real.hasSuffix("/sub/new.txt"))
+    }
 }
