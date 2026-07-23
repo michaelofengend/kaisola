@@ -253,7 +253,7 @@ final class AppModel: ObservableObject {
         conversation.onAttention = { [weak self] kind, detail in
             guard let self else { return }
             let appActive = NSApp?.isActive ?? true
-            if selectedChatID == chatID, appActive { return }
+            if self.selectedChatID == chatID, appActive { return }
             AttentionCenter.shared.notify(kind: kind, targetID: chatID, title: title, detail: detail)
         }
         chats.append(AcpChatHandle(id: chatID, agentID: agent.id, conversation: conversation))

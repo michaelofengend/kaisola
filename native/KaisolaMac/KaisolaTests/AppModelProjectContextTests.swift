@@ -4,7 +4,6 @@ import XCTest
 
 /// `AppModel.currentProjectDirectory` — the active-project inference that lets
 /// New Terminal/Agent/Chat skip the folder picker (matching Electron).
-@MainActor
 final class AppModelProjectContextTests: XCTestCase {
     private var storeFile: URL!
 
@@ -18,22 +17,26 @@ final class AppModelProjectContextTests: XCTestCase {
         try? FileManager.default.removeItem(at: storeFile.deletingLastPathComponent())
     }
 
+    @MainActor
     private func makeModel() -> (AppModel, NativeSessionStore) {
         let store = NativeSessionStore(fileURL: storeFile)
         return (AppModel(sessionStore: store), store)
     }
 
+    @MainActor
     func testNoProjectsReturnsNil() {
         let (model, _) = makeModel()
         XCTAssertNil(model.currentProjectDirectory)
     }
 
+    @MainActor
     func testSingleProjectIsUnambiguousContext() {
         let (model, store) = makeModel()
         _ = store.openProject(directory: "/tmp/ctx-solo")
         XCTAssertEqual(model.currentProjectDirectory?.lastPathComponent, "ctx-solo")
     }
 
+    @MainActor
     func testSelectedProjectNameWins() {
         let (model, store) = makeModel()
         _ = store.openProject(directory: "/tmp/ctx-alpha")
@@ -42,6 +45,7 @@ final class AppModelProjectContextTests: XCTestCase {
         XCTAssertEqual(model.currentProjectDirectory?.lastPathComponent, "ctx-beta")
     }
 
+    @MainActor
     func testAmbiguousWithoutSelectionReturnsNil() {
         let (model, store) = makeModel()
         _ = store.openProject(directory: "/tmp/ctx-one")

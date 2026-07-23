@@ -39,15 +39,15 @@ optional pending a scope decision.
 |---|---|---|---|
 | Multi-window (independent workspaces, ⌘⇧N) | DONE | P0 | each window its own AppModel + broker observer connection (`KaisolaMacAppDelegate.makeWindow`) |
 | Two navigation layouts (Left tree vs Top bar), live-switchable | DONE | P0 | `NativePreviewSettings.navigationLayout`; View menu; persisted |
-| Project tabs (Chrome-style, drag-reorder, rename, color, activity badges) | PARTIAL | P0 | explicit open (⌘O / "+")/rename/close persisted in `NativeSessionStore` (`OpenProject`); tabs survive with no live sessions; drag-reorder/color/activity badges still to add |
-| Session tabs / dock-grid (draggable columns, split, close, pop) | PARTIAL | P0 | top-bar layout has a session strip; dock-grid/split/pop to add |
-| Full macOS menu bar (App/File/Edit/View/Window/Help + accelerators) | PARTIAL | P0 | App/File/Edit/View done (New Window/Chat/Agent/Terminal, layout+appearance); Window/Help to add |
-| Session groups (named, tinted, collapsible; pinned) | NEW | P1 | `SessionGroup` |
-| Reopen closed session/project (⌘⇧T / ⌘⌥T, 7-day stack) | PARTIAL | P1 | Reopen Closed Project (⌘⇧T) — bounded closed-stack in `NativeSessionStore`, File menu + palette; reopen-closed-session still to add |
-| Saved windows (persist/reopen/delete named states) | NEW | P1 | `SavedWindows.tsx` |
-| Project rename / relocate / recents | PARTIAL | P1 | rename done (`AppModel.renameProject` + Rename Project sheet); relocate/recents still to add |
-| Workspace rail (file tree, ⌘B) | NEW | P1 | `WorkspaceRail.tsx` |
-| Command palette (⌘K/⌘P, fuzzy files + actions) | PARTIAL | P1 | ⌘K palette: fuzzy actions (new terminal/agent/chat, open folder), view toggles (layout/appearance), jump-to project/session/chat; arrow-nav + Enter/Esc; pure `FuzzyMatch` scorer. Fuzzy *file* search still to add |
+| Project tabs (Chrome-style, drag-reorder, rename, color, activity badges) | DONE | P0 | open/rename/close/relocate, tint colors, working-count activity badges, Move Left/Right reorder (persisted); pointer drag-reorder deferred |
+| Session tabs / dock-grid (draggable columns, split, close, pop) | PARTIAL | P0 | session strip + End Session + pop-out (Open in New Window covers side-by-side via windows); in-window dock-grid/split deferred |
+| Full macOS menu bar (App/File/Edit/View/Window/Help + accelerators) | DONE | P0 | App (Settings ⌘,)/File (Open Recent, reopen ⌘⇧T/⌘⌥T)/Edit/View (layout, appearance, font ⌘±)/Window (saved layouts, NSApp.windowsMenu)/Help |
+| Session groups (named, tinted, collapsible; pinned) | PARTIAL | P1 | projects are the grouping: named (rename), tinted (colorHex), collapsible (persisted); ad-hoc cross-project groups/pinning deferred |
+| Reopen closed session/project (⌘⇧T / ⌘⌥T, 7-day stack) | DONE | P1 | both stacks bounded in `NativeSessionStore`; ⌘⌥T recreates the shell/agent in the same folder |
+| Saved windows (persist/reopen/delete named states) | DONE | P1 | Window ▸ Save Window Layout… / Saved Windows (open/delete); `SavedWindowsStore` (frame + active project) |
+| Project rename / relocate / recents | DONE | P1 | rename sheet; Relocate… carries name+color to the new path; File ▸ Open Recent (8, deduped) |
+| Workspace rail (file tree, ⌘B) | DONE | P1 | lazy tree (ignored dirs skipped), click → preview/editor; `WorkspaceRailView` |
+| Command palette (⌘K/⌘P, fuzzy files + actions) | DONE | P1 | ⌘K: fuzzy actions + jump-to + project FILE search (bounded walk, TTL cache) opening the preview |
 | Detach project to new window / adopt | NEW | P2 | renderer-to-renderer transfer; complex |
 | Focus vs Studio layout mode | NEW | P2 | Studio is legacy research surface |
 | OmniBar (⌘L) | NEW | P2 | `OmniBar.tsx` |
@@ -60,13 +60,13 @@ optional pending a scope decision.
 |---|---|---|---|
 | PTY create/write/resize/kill/signal | DONE | P0 | |
 | Observation (list/subscribe/diagnostics) | DONE | P0 | |
-| PTY continuity across restart / detached broker | PARTIAL | P0 | broker contract done; continuity UX to port |
-| Theming (dark/light/eco, tones, cursor color) | PARTIAL | P1 | terminal palette matches Electron; app-wide light/dark/system done (`NativePreviewSettings`); eco/tones/cursor to add |
-| Fonts (family/size ⌘±/weight/line-height) | NEW | P1 | |
-| Search in scrollback | NEW | P1 | native ⌘F wired to SwiftTerm find bar |
-| Links: URLs + OSC 8 hyperlinks | NEW | P1 | (OSC 8 landed in Electron; native has the terminal find/link groundwork) |
-| Rename / auto-name / prompt title | NEW | P1 | native has manual rename for owned sessions |
-| Agent detection / meta (process, cwd, branch, ports, exit) | PARTIAL | P0 | native has agent id + activity; meta poller to add |
+| PTY continuity across restart / detached broker | DONE | P0 | broker contract + reattach-on-relaunch + selection restore; retained-tail marker in the surface |
+| Theming (dark/light/eco, tones, cursor color) | DONE | P1 | app-wide light/dark/system; terminals stay ink (product invariant), Electron palette + cursor color; eco n/a natively (no renderer cost to shed) |
+| Fonts (family/size ⌘±/weight/line-height) | PARTIAL | P1 | size ⌘+/⌘−/⌘0 persisted (View menu + Settings slider); family/weight deferred |
+| Search in scrollback | DONE | P1 | SwiftTerm ⌘F find bar (Edit ▸ Find) |
+| Links: URLs + OSC 8 hyperlinks | DONE | P1 | implicit link detection + OSC 8; http(s) → browser, file:// → reveal in Finder |
+| Rename / auto-name / prompt title | PARTIAL | P1 | manual rename + agent·folder auto-name at creation; live prompt-title tracking deferred |
+| Agent detection / meta (process, cwd, branch, ports, exit) | PARTIAL | P0 | agent id + live activity + exit + git-branch meta on rows (TTL scan); process-name/ports polling deferred |
 | Scroll pinning / bracketed paste / clipboard | NEW | P1 | |
 | File links in output → open in editor | NEW | P2 | `terminalFileLinks.ts` |
 | Browser-card on localhost dev ports | NEW | P2 | |
@@ -89,12 +89,12 @@ optional pending a scope decision.
 | MCP servers carried into sessions | DONE | P1 | `native-mcp-registry.cjs` → session/new mcpServers |
 | Adapter/MCP version currency + continuous update | DONE | P1 | `agent-adapter-versions/update.cjs`; npx @latest |
 | Permission mode / autonomy dial (plan/default/acceptEdits/bypass) | DONE | P0 | native ACP session modes: header picker → `session/set_mode`, `current_mode_update` handled, `SessionModeState` parsed from session/new (also fixed models parse to accept the nested `{availableModels,currentModelId}` shape real adapters use) |
-| Steering + queued follow-ups | PARTIAL | P1 | typing while a turn runs queues follow-ups that auto-dispatch on turn end (drain in order, removable chips, cleared on exit); `AcpConversation.queued`; true mid-turn steering (interrupt+inject) still to add |
-| Optimistic dispatch + rollback | NEW | P1 | |
-| Turn checkpoints / restore (pre-turn git snapshot) | NEW | P1 | |
-| Slash commands / available commands | NEW | P1 | |
-| ACP terminals (agent-spawned, watch/take over) | NEW | P1 | |
-| Kaisola Mesh (group agents: scout→contract→execute→review→integrate) | NEW | P1 | signature feature, large; worktrees |
+| Steering + queued follow-ups | DONE | P1 | queue chips + Steer (bolt): promote to front + interrupt the running turn; drains in order |
+| Optimistic dispatch + rollback | DONE | P1 | failed sends stay visible marked red with Retry (re-dispatch or queue) |
+| Turn checkpoints / restore (pre-turn git snapshot) | DONE | P1 | git stash create/store before each turn (clean-tree skip); header clock menu restores with confirm |
+| Slash commands / available commands | DONE | P1 | available_commands_update → '/' fuzzy autocomplete in the composer |
+| ACP terminals (agent-spawned, watch/take over) | DONE | P1 | `AcpTerminalHost`: terminal/create…release answered, bounded live output rendered in tool cards; take-over n/a (app-scoped processes) |
+| Kaisola Mesh (group agents: scout→contract→execute→review→integrate) | PARTIAL | P1 | v1: fan-out to all ACP agents, isolated kaisola-mesh-* worktrees, side-by-side streaming columns, per-column diff-vs-HEAD review; staged scout→contract pipeline + auto-integrate deferred |
 | Transcript archive / paging | NEW | P2 | |
 | @-mentions (project entities) | NEW | P2 | research-tied |
 | Reasoning providers (domain research agents) | NEW | P2 | legacy |
@@ -103,9 +103,9 @@ optional pending a scope decision.
 
 | Feature | Status | Pri | Notes |
 |---|---|---|---|
-| File tree + fuzzy search + index + watch | NEW | P1 | `fsHandler.cjs` |
-| Code editor (syntax, save, dirty, cursor restore) | NEW | P1 | `CodeEditor.tsx` |
-| Document preview (Markdown/HTML/CSV/JSON) | NEW | P1 (md) / P2 | `DocumentPreview.tsx` |
+| File tree + fuzzy search + index + watch | PARTIAL | P1 | rail tree + palette fuzzy file index (TTL cache, manual refresh); FS watching deferred |
+| Code editor (syntax, save, dirty, cursor restore) | PARTIAL | P1 | plain-text editor: ⌘S save, revert, dirty dot (strangler plan: rich editing arrives via the WKWebView phase; syntax highlighting deferred) |
+| Document preview (Markdown/HTML/CSV/JSON) | PARTIAL | P1 (md) / P2 | markdown styled (inline syntax) + Source toggle; images; HTML/CSV/JSON deferred |
 | Preview tabs (Zed-style transient) | NEW | P2 | |
 | PDF viewer + LaTeX synctex | NEW | P2 | |
 | Research/word diffs | NEW | P2 | |
@@ -118,13 +118,13 @@ optional pending a scope decision.
 
 | Section | Status | Pri | Notes |
 |---|---|---|---|
-| General (theme, updates, onboarding) | NEW | P0 (theme) / P1 | |
+| General (theme, updates, onboarding) | DONE | P0 (theme) / P1 | Settings ⌘, General tab: layout, appearance, update check; onboarding deferred (P2) |
 | Guardrails (sensitive globs, permission rules, autonomy) | DONE | P0 | sensitive globs + permission rules (`AcpPermissionRules`) + ACP session-mode picker (plan/default/acceptEdits/bypass) |
-| Terminal (font/size/weight/line-height/tone/cursor) | NEW | P1 | |
-| Agents (add custom terminal/ACP, enable presets, models) | NEW | P1 | |
+| Terminal (font/size/weight/line-height/tone/cursor) | PARTIAL | P1 | font-size slider + invariant note; family/weight deferred |
+| Agents (add custom terminal/ACP, enable presets, models) | PARTIAL | P1 | adapter roster + account-isolation fields; custom agent registration deferred |
 | Models & keys (API keys keychain, provider, base URLs) | NEW | P1 | |
-| Usage (Codex/Claude/OpenCode gauges, limits) | NEW | P1 | |
-| Interface (cost chips, inbox, diffs, drafts, nav, perf) | NEW | P1 | |
+| Usage (Codex/Claude/OpenCode gauges, limits) | PARTIAL | P1 | per-chat context usage in the header; account-level gauges deferred |
+| Interface (cost chips, inbox, diffs, drafts, nav, perf) | PARTIAL | P1 | inbox (bell + dock badge), diffs, nav layouts shipped; cost chips/drafts deferred |
 | Companion (pairing/devices) | NEW | P2 | |
 | Extensions (languages/grammars/previews/MCP) | NEW | P2 | |
 | Advanced (settings.json/keymap.json editing) | NEW | P2 | |
@@ -134,8 +134,8 @@ optional pending a scope decision.
 
 | Feature | Status | Pri | Notes |
 |---|---|---|---|
-| Claude accounts (isolated CLAUDE_CONFIG_DIR, per-project) | NEW | P1 | |
-| Codex accounts (isolated CODEX_HOME, per-project) | NEW | P1 | |
+| Claude accounts (isolated CLAUDE_CONFIG_DIR, per-project) | PARTIAL | P1 | app-wide CLAUDE_CONFIG_DIR override applied to terminals+chats; per-project scoping deferred |
+| Codex accounts (isolated CODEX_HOME, per-project) | PARTIAL | P1 | app-wide CODEX_HOME override applied to terminals+chats; per-project scoping deferred |
 | Device-code sign-in card | NEW | P1 | |
 | API keys (Anthropic/OpenAI keychain) | NEW | P1 | |
 | MCP servers (per-workspace, add/probe/import, carried into agents) | NEW | P2 | |
@@ -162,8 +162,8 @@ against the Electron host.
 |---|---|---|---|
 | Auto-updates (Sparkle) | DONE | P1 | signed appcast, real update verified |
 | Theme / dark-mode invariant (dark/light/system) | DONE | P0 | `NativePreviewSettings.appearance` drives SwiftUI colorScheme + NSApp appearance; View menu |
-| Liquid Glass / vibrancy (NSGlassEffectView + fallback) | NEW | P1 | SwiftUI materials natural fit |
-| Perf/energy mode (glass vs eco) | NEW | P1 | |
+| Liquid Glass / vibrancy (NSGlassEffectView + fallback) | PARTIAL | P1 | SwiftUI materials on bars/cards/popovers + sidebar vibrancy; dedicated glass mode deferred |
+| Perf/energy mode (glass vs eco) | PARTIAL | P1 | n/a natively at preview scale — no web renderer to throttle; revisit if profiling says otherwise |
 | Wallpaper tint sampling | NEW | P2 | |
 | Window mode / traffic lights / relaunch | PARTIAL | P1 | |
 
@@ -171,12 +171,12 @@ against the Electron host.
 
 | Feature | Status | Pri | Notes |
 |---|---|---|---|
-| Attention / notifications (dock badge, native Notification, needs-you) | NEW | P1 | |
-| Cross-project inbox (one bell across tabs) | NEW | P1 | |
-| Git panel (status/stage/commit/diff/log/restore) | PARTIAL | P1 | native backend service done (`scripts/native-git-service.cjs`, 11 tests); panel UI to add |
-| Working-tree checkpoints (pre-turn git snapshots) | NEW | P1 | |
-| Git worktree sessions (isolated checkout per agent; Mesh) | NEW | P1 | |
-| Whole-app local persistence (layouts, drafts, metadata) | PARTIAL | P0 | native has session store; broaden |
+| Attention / notifications (dock badge, native Notification, needs-you) | DONE | P1 | `AttentionCenter`: permission asks + finished turns + responded sessions land as inbox entries; dock badge; bell popover jumps + clears |
+| Cross-project inbox (one bell across tabs) | DONE | P1 | one AttentionCenter across every project/window; footer bell popover |
+| Git panel (status/stage/commit/diff/log/restore) | DONE | P1 | panel: status/stage/unstage/commit + inline tinted diffs + history + confirmed Discard (git restore) |
+| Working-tree checkpoints (pre-turn git snapshots) | DONE | P1 | per-turn stash snapshots + restore (chat header) |
+| Git worktree sessions (isolated checkout per agent; Mesh) | DONE | P1 | Mesh columns each get a kaisola-mesh-* worktree; namespace-guarded cleanup |
+| Whole-app local persistence (layouts, drafts, metadata) | DONE | P0 | layout/appearance/font/rail/globs/accounts (UserDefaults), projects/colors/order/recents/closed-stacks/selection (`NativeSessionStore`), saved windows, window frames |
 | Agent task ledger | NEW | P2 | |
 | Embedded browser cards | NEW | P2 | |
 | LaTeX mode | NEW | P2 | |
@@ -189,6 +189,8 @@ against the Electron host.
 ---
 
 ## Suggested phase ordering
+
+**Status 2026-07-23: Phases A–D are substantively COMPLETE in the native preview** (every P0 and nearly every P1 row above is DONE or PARTIAL-with-the-core-shipped; per-row notes name what remains). What's left is the P2 long tail plus the named deferrals: in-window dock-grid/split, pointer drag-reorder, staged Mesh pipeline, per-project account scoping, FS watching, syntax highlighting (WKWebView phase), device-code sign-in cards, API-key keychain.
 
 - **Phase A — shell & session spine (P0):** multi-window; project tabs; the two navigation layouts; session tabs / dock-grid; full macOS menu bar; theme (dark/light/system live); broaden persistence to whole-app state; PTY-continuity UX + terminal meta poller.
 - **Phase B — agent chat depth (P0):** ACP chat UI with tool-call cards, thinking blocks, plans, streaming; permissions/guardrails + gates; model/effort/permission-mode selection; steering + queued follow-ups; optimistic dispatch/rollback.

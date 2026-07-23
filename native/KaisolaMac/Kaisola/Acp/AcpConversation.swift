@@ -287,8 +287,10 @@ final class AcpConversation: ObservableObject {
             guard let hash = try? service.checkpoint() else { return }
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                checkpoints.append(TurnCheckpoint(id: hash, turn: turn, at: Date()))
-                if checkpoints.count > 20 { checkpoints.removeFirst(checkpoints.count - 20) }
+                self.checkpoints.append(TurnCheckpoint(id: hash, turn: turn, at: Date()))
+                if self.checkpoints.count > 20 {
+                    self.checkpoints.removeFirst(self.checkpoints.count - 20)
+                }
             }
         }
     }

@@ -398,20 +398,34 @@ actor AcpClient {
     }
 
     /// Resolve a path inside the session workspace, refusing escapes — the
-    /// same confinement Electron's `_workspacePath` applies.
+    /// same confinement Electron's `_workspacePath` applies. Symlinks are
+    /// resolved on both sides before the containment check, so a link inside
+    /// the workspace cannot smuggle reads/writes outside it.
     private func workspacePath(_ path: String?, mustExist: Bool = false) throws -> String {
         guard let root = workspaceRoot else { throw AcpClientError.notRunning }
         let raw = path?.isEmpty == false ? path! : root
         let resolved = raw.hasPrefix("/")
             ? (raw as NSString).standardizingPath
             : ((root as NSString).appendingPathComponent(raw) as NSString).standardizingPath
-        guard resolved == root || resolved.hasPrefix(root + "/") else {
+        let realRoot = URL(fileURLWithPath: root).resolvingSymlinksInPath().path
+        guard Self.isContained(resolved, in: root) || Self.isContained(resolved, in: realRoot) else {
             throw AcpClientError.requestFailed("Path escapes the session workspace")
+        }
+        // A symlinked component inside the workspace must not escape either.
+        if FileManager.default.fileExists(atPath: resolved) {
+            let real = URL(fileURLWithPath: resolved).resolvingSymlinksInPath().path
+            guard Self.isContained(real, in: realRoot) else {
+                throw AcpClientError.requestFailed("Path escapes the session workspace")
+            }
         }
         if mustExist, !FileManager.default.fileExists(atPath: resolved) {
             throw AcpClientError.requestFailed("No such path: \(resolved)")
         }
         return resolved
+    }
+
+    private static func isContained(_ path: String, in root: String) -> Bool {
+        path == root || path.hasPrefix(root + "/")
     }
 
     private func errorText(_ error: any Error) -> String {
@@ -547,7 +561,10 @@ actor AcpClient {
                 at: URL(fileURLWithPath: path).deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try content.write(toFile: path, atomically: true, encoding: .utf8)
+            // Re-check after mkdir so a concurrently swapped parent symlink
+            // cannot turn the write into an escape (mirrors acp.cjs).
+            let checked = try workspacePath(path)
+            try content.write(toFile: checked, atomically: true, encoding: .utf8)
             respond(id: id, result: .object([:]))
         } catch {
             respondError(id: id, code: -32000, message: errorText(error))
