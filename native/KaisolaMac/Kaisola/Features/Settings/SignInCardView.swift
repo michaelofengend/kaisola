@@ -21,8 +21,10 @@ struct SignInCardView: View {
     let runInTerminal: (String) -> Void
 
     /// `userInfo` key the `.kaisolaRunInTerminal` notification carries its command
-    /// under, so posters and observers agree on one string.
-    static let commandUserInfoKey = "command"
+    /// under, so posters and observers agree on one string. Nonisolated: View
+    /// statics otherwise infer MainActor and the delegate reads this from a
+    /// Sendable observer closure (CI's stricter inference rejects that).
+    nonisolated static let commandUserInfoKey = "command"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
