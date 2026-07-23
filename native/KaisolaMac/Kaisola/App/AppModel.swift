@@ -52,6 +52,9 @@ final class AppModel: ObservableObject {
     @Published var selectedChatID: String?
     /// The project tab shown in the top-bar layout. Nil means the first project.
     @Published var selectedProjectName: String?
+    /// A file opened from the workspace rail / palette; non-nil replaces the
+    /// detail pane with the preview/editor until closed.
+    @Published var previewedFileURL: URL?
 
     private let brokerPreparer: any BrokerInfoPreparing
     private let client: any ObserveOnlyBrokerServing

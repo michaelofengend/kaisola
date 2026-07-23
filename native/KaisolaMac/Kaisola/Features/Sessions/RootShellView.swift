@@ -61,9 +61,14 @@ struct RootShellView: View {
             }
         }
         .background(
-            Button(action: { showPalette.toggle() }) { EmptyView() }
-                .keyboardShortcut("k", modifiers: .command)
-                .accessibilityLabel("Command Palette")
+            Group {
+                Button(action: { showPalette.toggle() }) { EmptyView() }
+                    .keyboardShortcut("k", modifiers: .command)
+                    .accessibilityLabel("Command Palette")
+                Button(action: { settings.workspaceRailVisible.toggle() }) { EmptyView() }
+                    .keyboardShortcut("b", modifiers: .command)
+                    .accessibilityLabel("Toggle Workspace Rail")
+            }
         )
         .overlay {
             if showPalette {
@@ -241,7 +246,20 @@ struct RootShellView: View {
 
     @ViewBuilder
     private var detailPane: some View {
-        if let chat = model.chats.first(where: { $0.id == model.selectedChatID }) {
+        HStack(spacing: 0) {
+            if settings.workspaceRailVisible, let root = model.currentProjectDirectory {
+                WorkspaceRailView(root: root) { model.previewedFileURL = $0 }
+                Divider()
+            }
+            detailContent
+        }
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        if let fileURL = model.previewedFileURL {
+            FilePreviewView(url: fileURL) { model.previewedFileURL = nil }
+        } else if let chat = model.chats.first(where: { $0.id == model.selectedChatID }) {
             AcpChatView(conversation: chat.conversation)
                 .id(chat.id)
                 .background(Color(nsColor: .windowBackgroundColor))

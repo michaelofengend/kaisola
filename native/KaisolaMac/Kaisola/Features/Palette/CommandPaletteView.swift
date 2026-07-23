@@ -85,16 +85,27 @@ struct CommandPaletteView: View {
     }
 
     private var filtered: [PaletteItem] {
-        let items = allItems()
         let trimmed = query.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return items }
-        return items
+        guard !trimmed.isEmpty else { return allItems() }
+        // With a query, project files join the candidates (⌘P-style).
+        let ranked = (allItems() + fileItems())
             .compactMap { item -> (PaletteItem, Int)? in
                 guard let score = FuzzyMatch.score(query: trimmed, candidate: item.title) else { return nil }
                 return (item, score)
             }
             .sorted { $0.1 > $1.1 }
             .map(\.0)
+        return Array(ranked.prefix(40))
+    }
+
+    /// Fuzzy file candidates from the active project (bounded, TTL-cached).
+    private func fileItems() -> [PaletteItem] {
+        guard let root = model.currentProjectDirectory else { return [] }
+        return ProjectFileIndex.shared.files(for: root).map { relative in
+            PaletteItem(id: "file.\(relative)", title: relative, subtitle: "File", systemImage: "doc.text") {
+                model.previewedFileURL = root.appendingPathComponent(relative)
+            }
+        }
     }
 
     private func move(_ delta: Int) {
@@ -137,6 +148,9 @@ struct CommandPaletteView: View {
             })
         }
 
+        items.append(PaletteItem(id: "action.toggleRail", title: "Toggle Workspace Rail", subtitle: "View · ⌘B", systemImage: "sidebar.left") {
+            settings.workspaceRailVisible.toggle()
+        })
         for layout in NavigationLayout.allCases {
             items.append(PaletteItem(id: "layout.\(layout.rawValue)", title: "Layout: \(layout.title)", subtitle: "View", systemImage: "sidebar.squares.left") {
                 settings.navigationLayout = layout
