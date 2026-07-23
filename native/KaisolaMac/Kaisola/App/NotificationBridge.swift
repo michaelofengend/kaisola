@@ -116,21 +116,19 @@ final class NotificationBridge: NSObject, UNUserNotificationCenterDelegate {
         didRequestAuthorization = true
         guard let center else { return }
         center.delegate = self
-        // MUST use the async API. The completion-handler form hands
-        // UNUserNotificationCenter a closure that — because this type is
-        // @MainActor — is main-actor-isolated, but the framework invokes it on
-        // a background queue. Swift's executor-isolation check then traps
-        // (EXC_BREAKPOINT / dispatch_assert_queue) and the app dies at launch.
-        // Awaiting inside a @MainActor task suspends and resumes on the main
-        // actor with no isolated closure crossing the C boundary.
-        Task { @MainActor [weak self] in
-            guard let center = self?.center else { return }
-            do {
-                let granted = try await center.requestAuthorization(options: [.alert, .sound, .provisional])
-                self?.authorizationGranted = granted
-            } catch {
+        // The completion handler MUST be @Sendable (nonisolated). Without it the
+        // closure inherits this @MainActor type's isolation, but
+        // UNUserNotificationCenter invokes it on a background queue — Swift's
+        // executor-isolation check then traps (EXC_BREAKPOINT /
+        // dispatch_assert_queue) and the app dies at launch. @Sendable de-isolates
+        // it; the main-actor state is set via a hop. (The async API can't be used
+        // here: awaiting `center.requestAuthorization` would send the non-Sendable
+        // `center` across the isolation boundary — a data-race error.)
+        center.requestAuthorization(options: [.alert, .sound, .provisional]) { @Sendable granted, error in
+            if let error {
                 NSLog("Kaisola notifications: authorization request failed: \(error.localizedDescription)")
             }
+            Task { @MainActor in NotificationBridge.shared.authorizationGranted = granted }
         }
     }
 
