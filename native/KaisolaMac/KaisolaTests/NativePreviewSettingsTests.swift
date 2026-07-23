@@ -20,8 +20,9 @@ final class NativePreviewSettingsTests: XCTestCase {
         XCTAssertEqual(settings.navigationLayout, .leftTree)
         XCTAssertEqual(settings.appearance, .system)
         XCTAssertEqual(settings.sidebarAppearance, .glass)
-        XCTAssertEqual(settings.workspaceBackdrop, .system)
+        XCTAssertEqual(settings.workspaceBackdrop, .glass)
         XCTAssertEqual(settings.terminalPalette, .native)
+        XCTAssertTrue(settings.workspaceRailVisible)
 
         settings.navigationLayout = .topBar
         settings.appearance = .dark
@@ -41,6 +42,14 @@ final class NativePreviewSettingsTests: XCTestCase {
         XCTAssertEqual(SidebarAppearance.glass.title, "Glass")
         XCTAssertEqual(WorkspaceBackdropMode.tinted.title, "Tinted")
         XCTAssertEqual(TerminalPaletteMode.native.title, "macOS Terminal")
+    }
+
+    func testTerminalPaneGridKeepsSessionsReadable() {
+        XCTAssertEqual(TerminalPaneGrid.columns(for: []), [])
+        XCTAssertEqual(TerminalPaneGrid.columns(for: ["a"]), [["a"]])
+        XCTAssertEqual(TerminalPaneGrid.columns(for: ["a", "b"]), [["a"], ["b"]])
+        XCTAssertEqual(TerminalPaneGrid.columns(for: ["a", "b", "c"]), [["a", "b"], ["c"]])
+        XCTAssertEqual(TerminalPaneGrid.columns(for: ["a", "b", "c", "d"]), [["a", "b"], ["c", "d"]])
     }
 
     func testAppearanceMapsToColorSchemeAndNSAppearance() {

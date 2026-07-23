@@ -206,12 +206,12 @@ final class NativePreviewSettings: ObservableObject {
         navigationLayout = defaults.string(forKey: Keys.layout).flatMap(NavigationLayout.init) ?? .leftTree
         appearance = defaults.string(forKey: Keys.appearance).flatMap(AppearanceMode.init) ?? .system
         sidebarAppearance = defaults.string(forKey: Keys.sidebarAppearance).flatMap(SidebarAppearance.init) ?? .glass
-        workspaceBackdrop = defaults.string(forKey: Keys.workspaceBackdrop).flatMap(WorkspaceBackdropMode.init) ?? .system
+        workspaceBackdrop = defaults.string(forKey: Keys.workspaceBackdrop).flatMap(WorkspaceBackdropMode.init) ?? .glass
         let stored = defaults.double(forKey: Keys.terminalFontSize)
         terminalFontSize = stored > 0
             ? min(max(stored, Self.terminalFontRange.lowerBound), Self.terminalFontRange.upperBound)
             : Self.terminalFontDefault
-        workspaceRailVisible = defaults.object(forKey: Keys.workspaceRail) as? Bool ?? false
+        workspaceRailVisible = defaults.object(forKey: Keys.workspaceRail) as? Bool ?? true
         terminalFontFamily = defaults.string(forKey: Keys.terminalFontFamily) ?? TerminalFontOptions.systemMonoSentinel
         terminalFontWeight = defaults.string(forKey: Keys.terminalFontWeight) ?? "regular"
         terminalPalette = defaults.string(forKey: Keys.terminalPalette).flatMap(TerminalPaletteMode.init) ?? .native
@@ -238,16 +238,50 @@ final class NativePreviewSettings: ObservableObject {
     }
 }
 
+/// AppKit's real behind-window vibrancy. SwiftUI's Material samples only the
+/// app's own backing surface in this full-size transparent window, which made
+/// the previous "Glass" setting look indistinguishable from flat gray.
+struct NativeVisualEffectView: NSViewRepresentable {
+    let material: NSVisualEffectView.Material
+    var blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.state = .active
+        view.material = material
+        view.blendingMode = blendingMode
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        view.state = .active
+        view.material = material
+        view.blendingMode = blendingMode
+    }
+}
+
 /// Reusable material used by both the project sidebar and the workspace file
 /// rail, keeping the two left-hand navigation surfaces visually coherent.
 struct SidebarBackdropView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let appearance: SidebarAppearance
 
     @ViewBuilder
     var body: some View {
         switch appearance {
         case .glass:
-            Rectangle().fill(.ultraThinMaterial)
+            ZStack {
+                NativeVisualEffectView(material: .sidebar)
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(colorScheme == .dark ? 0.025 : 0.18),
+                        Color.accentColor.opacity(colorScheme == .dark ? 0.055 : 0.035),
+                        Color.clear,
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
         case .solid:
             Color(nsColor: .controlBackgroundColor)
         }
@@ -263,7 +297,18 @@ struct WorkspaceBackdropView: View {
         case .system:
             Color(nsColor: .windowBackgroundColor)
         case .glass:
-            Rectangle().fill(.thinMaterial)
+            ZStack {
+                NativeVisualEffectView(material: .underWindowBackground)
+                LinearGradient(
+                    colors: [
+                        Color.accentColor.opacity(0.035),
+                        Color.clear,
+                        Color.purple.opacity(0.025),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
         case .tinted:
             ZStack {
                 Color(nsColor: .windowBackgroundColor)

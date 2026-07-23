@@ -1,5 +1,11 @@
 import SwiftUI
 
+extension Notification.Name {
+    /// Bridges the in-workspace settings sheet to the delegate-owned Sparkle
+    /// controller without coupling the SwiftUI shell to update infrastructure.
+    static let kaisolaCheckForUpdates = Notification.Name("kaisolaCheckForUpdates")
+}
+
 /// The native Settings window (⌘,): General, Terminal, Guardrails, Agents.
 struct SettingsView: View {
     @ObservedObject var settings: NativePreviewSettings

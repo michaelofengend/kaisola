@@ -317,36 +317,112 @@ struct WorkspaceRailView: View {
     @EnvironmentObject private var settings: NativePreviewSettings
     let root: URL
     let openFile: (URL) -> Void
+    let close: () -> Void
 
     @State private var expanded: Set<String> = []
     @State private var refreshToken = 0
+    @State private var searchText = ""
     /// Live FSEvents watcher — agent writes refresh the tree automatically.
     @StateObject private var watcher: WorkspaceWatcher
 
-    init(root: URL, openFile: @escaping (URL) -> Void) {
+    init(root: URL, openFile: @escaping (URL) -> Void, close: @escaping () -> Void) {
         self.root = root
         self.openFile = openFile
+        self.close = close
         _watcher = StateObject(wrappedValue: WorkspaceWatcher(root: root))
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                nodeRows(for: root, depth: 0)
+        VStack(spacing: 0) {
+            VStack(spacing: 8) {
+                HStack(spacing: 7) {
+                    Image(systemName: "folder.fill")
+                        .foregroundStyle(Color.accentColor)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Files")
+                            .font(.headline)
+                        Text(root.lastPathComponent)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 6)
+                    Button(action: refresh) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Refresh files")
+                    Button(action: close) {
+                        Image(systemName: "sidebar.left")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Close file browser (Command-B)")
+                    .accessibilityLabel("Close file browser")
+                }
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search files", text: $searchText)
+                        .textFieldStyle(.plain)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 7))
             }
-            .padding(.vertical, 6)
+            .padding(10)
+            Divider()
+
+            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        nodeRows(for: root, depth: 0)
+                    }
+                    .padding(.vertical, 6)
+                }
+            } else if filteredFiles.isEmpty {
+                ContentUnavailableView.search(text: searchText)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        ForEach(filteredFiles, id: \.self) { path in
+                            Button {
+                                openFile(root.appendingPathComponent(path))
+                            } label: {
+                                HStack(spacing: 7) {
+                                    Image(systemName: "doc.text")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text(path)
+                                        .font(.callout)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 5)
+                }
+            }
         }
-        .frame(width: 230)
+        .frame(minWidth: 210, idealWidth: 260, maxWidth: 420, maxHeight: .infinity)
         .background {
             SidebarBackdropView(appearance: settings.sidebarAppearance)
+        }
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor).opacity(0.8))
+                .frame(width: 1)
+                .shadow(color: .black.opacity(0.12), radius: 2, x: 1)
         }
         .id(refreshToken)
         .onChange(of: watcher.changeToken) { _, _ in refreshToken += 1 }
         .contextMenu {
-            Button("Refresh") {
-                ProjectFileIndex.shared.invalidate()
-                refreshToken += 1
-            }
+            Button("Refresh", action: refresh)
             Button("New AGENTS.md") {
                 let target = root.appendingPathComponent("AGENTS.md")
                 if !FileManager.default.fileExists(atPath: target.path) {
@@ -358,6 +434,19 @@ struct WorkspaceRailView: View {
             }
         }
         .accessibilityLabel("Workspace files")
+    }
+
+    private var filteredFiles: [String] {
+        let needle = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return [] }
+        return Array(ProjectFileIndex.shared.files(for: root)
+            .filter { $0.localizedCaseInsensitiveContains(needle) }
+            .prefix(200))
+    }
+
+    private func refresh() {
+        ProjectFileIndex.shared.invalidate()
+        refreshToken += 1
     }
 
     /// Starter AGENTS.md dropped at the project root — the emerging convention

@@ -13,6 +13,7 @@ struct RootShellView: View {
     @State private var showPalette = false
     @State private var showOmniBar = false
     @State private var showOnboarding = false
+    @State private var showSettings = false
     /// A Close Mesh request whose worktrees still hold uncommitted changes.
     @State private var meshCloseConfirm: (id: String, dirty: Int)?
 
@@ -115,6 +116,13 @@ struct RootShellView: View {
                 GitPanelView(repoRoot: repo.url)
                     .frame(width: 520, height: 460)
             }
+        }
+        .sheet(isPresented: $showSettings) {
+            InAppSettingsSheet(
+                settings: settings,
+                workspace: model.currentProjectDirectory,
+                dismiss: { showSettings = false }
+            )
         }
     }
 
@@ -248,7 +256,16 @@ struct RootShellView: View {
                     .ignoresSafeArea()
             }
             .navigationSplitViewColumnWidth(min: 190, ideal: 235, max: 300)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                projectSidebarHeader
+            }
             .safeAreaInset(edge: .bottom) { footer }
+            .overlay(alignment: .trailing) {
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor).opacity(0.85))
+                    .frame(width: 1)
+                    .shadow(color: .black.opacity(0.14), radius: 2, x: 1)
+            }
             .accessibilityLabel("Projects, chats, and terminal sessions")
         } detail: {
             detailPane
@@ -293,6 +310,41 @@ struct RootShellView: View {
 
     private var activeProjectBinding: Binding<String?> {
         Binding(get: { activeProjectName }, set: { model.activateProject(named: $0) })
+    }
+
+    private var projectSidebarHeader: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Label("Projects", systemImage: "folder")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    RootShellView.promptForOpenFolder(model: model)
+                } label: {
+                    Image(systemName: "folder.badge.plus")
+                }
+                .buttonStyle(.borderless)
+                .help("Open project folder")
+                Button {
+                    settings.workspaceRailVisible.toggle()
+                } label: {
+                    Image(systemName: settings.workspaceRailVisible ? "sidebar.left" : "sidebar.right")
+                }
+                .buttonStyle(.borderless)
+                .help(settings.workspaceRailVisible ? "Hide file browser (Command-B)" : "Show file browser (Command-B)")
+                Button { showSettings = true } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.borderless)
+                .help("Settings")
+                .accessibilityLabel("Open in-app settings")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            Divider()
+        }
+        .background(.bar)
     }
 
     /// Collapsed project sections, persisted per project id.
@@ -350,7 +402,18 @@ struct RootShellView: View {
             owned: model.isOwned(session.id),
             agent: model.agentProfile(for: session.id),
             branch: model.branch(for: session.id),
-            meta: model.meta(for: session.id)
+            meta: model.meta(for: session.id),
+            canOpenSplit: session.id != model.selectedSessionID
+                && model.splitDocuments[session.id] == nil
+                && model.splitOrder.count < AppModel.maxSplitPanes,
+            isOpenInSplit: model.splitDocuments[session.id] != nil,
+            toggleSplit: {
+                if model.splitDocuments[session.id] != nil {
+                    Task { await model.closeSplit(session.id) }
+                } else {
+                    Task { await model.openInSplit(session.id) }
+                }
+            }
         )
         .tag(Optional(session.id))
         .contextMenu {
@@ -391,17 +454,108 @@ struct RootShellView: View {
 
     @ViewBuilder
     private var detailPane: some View {
-        HStack(spacing: 0) {
-            if settings.workspaceRailVisible, let root = model.currentProjectDirectory {
-                // .id(root) gives the rail a fresh identity per project so its
-                // @StateObject FSEvents watcher re-targets the new directory
-                // (a persisted StateObject would keep watching the old root).
-                WorkspaceRailView(root: root) { model.previewedFileURL = $0 }
+        VStack(spacing: 0) {
+            workspaceToolbar
+            Divider()
+            HSplitView {
+                if settings.workspaceRailVisible, let root = model.currentProjectDirectory {
+                    // .id(root) gives the rail a fresh identity per project so its
+                    // @StateObject FSEvents watcher re-targets the new directory
+                    // (a persisted StateObject would keep watching the old root).
+                    WorkspaceRailView(
+                        root: root,
+                        openFile: { model.previewedFileURL = $0 },
+                        close: { settings.workspaceRailVisible = false }
+                    )
                     .id(root)
-                Divider()
+                }
+                detailContent
+                    .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
             }
-            detailContent
         }
+    }
+
+    private var workspaceToolbar: some View {
+        HStack(spacing: 9) {
+            Button {
+                settings.workspaceRailVisible.toggle()
+            } label: {
+                Image(systemName: settings.workspaceRailVisible ? "sidebar.left" : "sidebar.right")
+            }
+            .buttonStyle(.borderless)
+            .help(settings.workspaceRailVisible ? "Hide file browser (Command-B)" : "Show file browser (Command-B)")
+            .accessibilityLabel(settings.workspaceRailVisible ? "Hide file browser" : "Show file browser")
+
+            Image(systemName: activeSurfaceSymbol)
+                .foregroundStyle(.secondary)
+            Text(activeSurfaceTitle)
+                .font(.callout.weight(.semibold))
+                .lineLimit(1)
+            Spacer(minLength: 8)
+
+            Menu {
+                if splitCandidates.isEmpty {
+                    Button("No other sessions available") {}
+                        .disabled(true)
+                } else {
+                    ForEach(splitCandidates) { session in
+                        Button {
+                            Task { await model.openInSplit(session.id) }
+                        } label: {
+                            Label(model.sessionTitle(for: session), systemImage: "terminal")
+                        }
+                    }
+                }
+            } label: {
+                Label("Add Pane", systemImage: "rectangle.split.2x1")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(model.terminalDocument.sessionID == nil || model.splitOrder.count >= AppModel.maxSplitPanes)
+            .help("View another live session beside this one")
+            .accessibilityLabel("Add session pane")
+
+            Button { showPalette = true } label: {
+                Image(systemName: "command.square")
+            }
+            .buttonStyle(.borderless)
+            .help("Command palette (Command-K)")
+
+            Button { showSettings = true } label: {
+                Image(systemName: "gearshape")
+            }
+            .buttonStyle(.borderless)
+            .help("Settings")
+            .accessibilityLabel("Open in-app settings")
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 12)
+        .frame(height: 38)
+        .background(.bar)
+    }
+
+    private var splitCandidates: [BrokerTerminalRecord] {
+        let primaryID = model.terminalDocument.sessionID
+        let sessions = model.projects.first(where: { $0.name == activeProjectName })?.sessions ?? model.sessions
+        return sessions.filter {
+            !$0.exited && $0.id != primaryID && model.splitDocuments[$0.id] == nil
+        }
+    }
+
+    private var activeSurfaceTitle: String {
+        if let file = model.previewedFileURL { return file.lastPathComponent }
+        if let mesh = model.meshes.first(where: { $0.id == model.selectedMeshID }) { return mesh.title }
+        if let chat = model.chats.first(where: { $0.id == model.selectedChatID }) { return chat.conversation.title }
+        if let id = model.terminalDocument.sessionID { return model.sessionTitle(for: id) }
+        return activeProjectName ?? "Workspace"
+    }
+
+    private var activeSurfaceSymbol: String {
+        if model.previewedFileURL != nil { return "doc.text" }
+        if model.selectedMeshID != nil { return "circle.hexagongrid.fill" }
+        if model.selectedChatID != nil { return "bubble.left.and.text.bubble.right" }
+        if model.terminalDocument.sessionID != nil { return "terminal" }
+        return "square.grid.2x2"
     }
 
     @ViewBuilder
@@ -550,67 +704,95 @@ struct RootShellView: View {
                 )
             }
         } else {
-            VStack(spacing: 0) {
-                if !model.splitOrder.isEmpty {
-                    sessionTabsBar
-                    Divider()
-                }
-                HStack(spacing: 0) {
-                    primaryPane
-                    ForEach(model.splitOrder, id: \.self) { splitID in
-                        Divider()
-                        splitPane(splitID)
+            terminalPaneGrid
+        }
+    }
+
+    private var paneIDs: [String] {
+        guard let primaryID = model.terminalDocument.sessionID else { return [] }
+        return [primaryID] + model.splitOrder
+    }
+
+    /// One session stays completely clean. Two sessions split side-by-side;
+    /// three or four balance into a resizable two-column grid instead of
+    /// squeezing every terminal into an unreadable horizontal strip.
+    private var terminalPaneGrid: some View {
+        let columns = TerminalPaneGrid.columns(for: paneIDs)
+        return HSplitView {
+            ForEach(columns.indices, id: \.self) { columnIndex in
+                let column = columns[columnIndex]
+                if column.count == 1, let id = column.first {
+                    terminalPane(id)
+                } else {
+                    VSplitView {
+                        ForEach(column, id: \.self) { id in
+                            terminalPane(id)
+                        }
                     }
                 }
             }
         }
     }
 
-    /// Tabs for every open pane: the primary plus each split. Clicking a split
-    /// promotes it to primary; × closes it.
-    private var sessionTabsBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                if let primaryID = model.terminalDocument.sessionID {
-                    tabChip(id: primaryID, isPrimary: true)
+    private func terminalPane(_ id: String) -> some View {
+        let isPrimary = id == model.terminalDocument.sessionID
+        return VStack(spacing: 0) {
+            if paneIDs.count > 1 {
+                HStack(spacing: 7) {
+                    Image(systemName: model.agentProfile(for: id)?.symbol ?? "terminal")
+                        .foregroundStyle(isPrimary ? Color.accentColor : .secondary)
+                    Text(model.sessionTitle(for: id))
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    if model.isOwned(id) {
+                        Text("LIVE")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.green)
+                    } else {
+                        Text("VIEW")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    Button {
+                        KaisolaMacAppDelegate.popOut(sessionID: id)
+                    } label: {
+                        Image(systemName: "macwindow.badge.plus")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Open this session in a new window")
+                    if !isPrimary {
+                        Button {
+                            Task { await model.promoteSplit(id) }
+                        } label: {
+                            Image(systemName: "arrow.up.left")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Make this the primary session")
+                        Button {
+                            Task { await model.closeSplit(id) }
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Close pane; keep the session running")
+                        .accessibilityLabel("Close \(model.sessionTitle(for: id)) pane")
+                    }
                 }
-                ForEach(model.splitOrder, id: \.self) { splitID in
-                    tabChip(id: splitID, isPrimary: false)
+                .padding(.horizontal, 9)
+                .frame(height: 30)
+                .background(.bar)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Color(nsColor: .separatorColor).opacity(0.7)).frame(height: 1)
                 }
-                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
-        }
-        .frame(height: 34)
-    }
-
-    private func tabChip(id: String, isPrimary: Bool) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: "terminal").font(.caption2)
-            Text(model.sessionTitle(for: id))
-                .font(.caption.weight(isPrimary ? .semibold : .regular))
-                .lineLimit(1)
-            if !isPrimary {
-                Button {
-                    Task { await model.closeSplit(id) }
-                } label: {
-                    Image(systemName: "xmark").font(.caption2)
-                }
-                .buttonStyle(.borderless)
-                .help("Close this split (the session keeps running)")
+            if isPrimary {
+                primaryPane
+            } else {
+                splitPane(id)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(
-            isPrimary ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.quaternary.opacity(0.4)),
-            in: Capsule()
-        )
-        .contentShape(Capsule())
-        .onTapGesture {
-            if !isPrimary { Task { await model.promoteSplit(id) } }
-        }
+        .frame(minWidth: 240, idealWidth: 480, maxWidth: .infinity, minHeight: 160, maxHeight: .infinity)
     }
 
     private var primaryPane: some View {
@@ -673,6 +855,62 @@ struct RootShellView: View {
             )
             .id("split-\(splitID)-\(owned)")
         }
+    }
+}
+
+/// Settings lives inside the workspace as a sheet so discoverability no longer
+/// depends on knowing the macOS menu shortcut. The traditional Command-comma
+/// settings window remains available too.
+private struct InAppSettingsSheet: View {
+    @ObservedObject var settings: NativePreviewSettings
+    let workspace: URL?
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 9) {
+                Image(systemName: "gearshape.fill")
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Kaisola Settings")
+                        .font(.headline)
+                    Text("Workspace, terminal, agents, MCP, and guardrails")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done", action: dismiss)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 52)
+            .background(.bar)
+            Divider()
+            SettingsView(
+                settings: settings,
+                checkForUpdates: {
+                    NotificationCenter.default.post(name: .kaisolaCheckForUpdates, object: nil)
+                },
+                workspace: workspace
+            )
+        }
+        .background {
+            WorkspaceBackdropView(mode: settings.workspaceBackdrop)
+                .ignoresSafeArea()
+        }
+    }
+}
+
+/// Pure layout policy for the terminal card grid. Kept separate from SwiftUI so
+/// pane balancing stays deterministic and directly testable.
+enum TerminalPaneGrid {
+    static func columns(for ids: [String]) -> [[String]] {
+        guard ids.count > 2 else { return ids.map { [$0] } }
+        let midpoint = (ids.count + 1) / 2
+        return [
+            Array(ids[..<midpoint]),
+            Array(ids[midpoint...]),
+        ]
     }
 }
 
@@ -893,31 +1131,47 @@ private struct SessionRow: View {
     let agent: AgentProfile?
     var branch: String?
     var meta: TerminalMeta?
+    let canOpenSplit: Bool
+    let isOpenInSplit: Bool
+    let toggleSplit: () -> Void
 
     var body: some View {
         HStack(spacing: 9) {
-            ZStack(alignment: .bottomTrailing) {
-                Image(systemName: rowSymbol)
-                    .foregroundStyle(iconColor)
-                if case .working = session.agentActivity, !session.exited {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .scaleEffect(0.6)
-                        .offset(x: 4, y: 4)
+            HStack(spacing: 9) {
+                ZStack(alignment: .bottomTrailing) {
+                    Image(systemName: rowSymbol)
+                        .foregroundStyle(iconColor)
+                    if case .working = session.agentActivity, !session.exited {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .scaleEffect(0.6)
+                            .offset(x: 4, y: 4)
+                    }
+                }
+                .frame(width: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .lineLimit(1)
+                    Text(sessionDetail)
+                        .font(.caption)
+                        .foregroundStyle(statusColor)
                 }
             }
-            .frame(width: 18)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .lineLimit(1)
-                Text(sessionDetail)
-                    .font(.caption)
-                    .foregroundStyle(statusColor)
+            .accessibilityElement(children: .combine)
+            .accessibilityValue(sessionDetail)
+            Spacer(minLength: 4)
+            if canOpenSplit || isOpenInSplit {
+                Button(action: toggleSplit) {
+                    Image(systemName: isOpenInSplit ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+                        .font(.caption)
+                        .foregroundStyle(isOpenInSplit ? Color.accentColor : .secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(isOpenInSplit ? "Close this pane; keep the session running" : "Open beside the current session")
+                .accessibilityLabel(isOpenInSplit ? "Close \(title) pane" : "Open \(title) in another pane")
             }
         }
         .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
-        .accessibilityValue(sessionDetail)
     }
 
     private var rowSymbol: String {

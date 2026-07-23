@@ -34,6 +34,7 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
     private var wakeObserver: NSObjectProtocol?
     private var agentsObserver: NSObjectProtocol?
     private var runInTerminalObserver: NSObjectProtocol?
+    private var checkForUpdatesObserver: NSObjectProtocol?
     private let runtimeSmoke = ProcessInfo.processInfo.environment["KAISOLA_NATIVE_RUNTIME_SMOKE"] == "1"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -61,6 +62,11 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
                 guard let command, let model = self?.keyModel() else { return }
                 await model.runCommandInNewTerminal(command)
             }
+        }
+        checkForUpdatesObserver = NotificationCenter.default.addObserver(
+            forName: .kaisolaCheckForUpdates, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.updateController.checkForUpdates(nil) }
         }
         _ = makeWindow()
         NSApp.activate(ignoringOtherApps: true)
@@ -134,7 +140,13 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
+        if let agentsObserver { NotificationCenter.default.removeObserver(agentsObserver) }
+        if let runInTerminalObserver { NotificationCenter.default.removeObserver(runInTerminalObserver) }
+        if let checkForUpdatesObserver { NotificationCenter.default.removeObserver(checkForUpdatesObserver) }
         wakeObserver = nil
+        agentsObserver = nil
+        runInTerminalObserver = nil
+        checkForUpdatesObserver = nil
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
