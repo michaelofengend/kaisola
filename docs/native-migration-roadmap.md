@@ -37,11 +37,11 @@ optional pending a scope decision.
 
 | Feature | Status | Pri | Notes / key files |
 |---|---|---|---|
-| Multi-window (independent workspaces, ⌘⇧N) | NEW | P0 | `main.cjs` createWindow; native needs NSWindow-per-workspace |
-| Project tabs (Chrome-style, drag-reorder, rename, color, activity badges) | NEW | P0 | central organizing metaphor; store `projectTabs`/`switchProject` |
-| Two navigation layouts (Left tree vs Top bar), live-switchable | NEW | P0 | headline differentiator; `TabLayout`/`setTabLayout` |
-| Session tabs / dock-grid (draggable columns, split, close, pop) | NEW | P0 | `SessionTabs.tsx`/`dockGrid` |
-| Full macOS menu bar (App/File/Edit/View/Window/Help + accelerators) | PARTIAL | P0 | native has App/File/Edit; needs View/Window/dynamic tab list |
+| Multi-window (independent workspaces, ⌘⇧N) | DONE | P0 | each window its own AppModel + broker observer connection (`KaisolaMacAppDelegate.makeWindow`) |
+| Two navigation layouts (Left tree vs Top bar), live-switchable | DONE | P0 | `NativePreviewSettings.navigationLayout`; View menu; persisted |
+| Project tabs (Chrome-style, drag-reorder, rename, color, activity badges) | PARTIAL | P0 | top-bar layout has a project tab strip; drag-reorder/rename/color still to add |
+| Session tabs / dock-grid (draggable columns, split, close, pop) | PARTIAL | P0 | top-bar layout has a session strip; dock-grid/split/pop to add |
+| Full macOS menu bar (App/File/Edit/View/Window/Help + accelerators) | PARTIAL | P0 | App/File/Edit/View done (New Window/Chat/Agent/Terminal, layout+appearance); Window/Help to add |
 | Session groups (named, tinted, collapsible; pinned) | NEW | P1 | `SessionGroup` |
 | Reopen closed session/project (⌘⇧T / ⌘⌥T, 7-day stack) | NEW | P1 | `closedStack` |
 | Saved windows (persist/reopen/delete named states) | NEW | P1 | `SavedWindows.tsx` |
@@ -61,7 +61,7 @@ optional pending a scope decision.
 | PTY create/write/resize/kill/signal | DONE | P0 | |
 | Observation (list/subscribe/diagnostics) | DONE | P0 | |
 | PTY continuity across restart / detached broker | PARTIAL | P0 | broker contract done; continuity UX to port |
-| Theming (dark/light/eco, tones, cursor color) | PARTIAL | P1 | `TerminalTheme.swift` started (dark/ink) |
+| Theming (dark/light/eco, tones, cursor color) | PARTIAL | P1 | terminal palette matches Electron; app-wide light/dark/system done (`NativePreviewSettings`); eco/tones/cursor to add |
 | Fonts (family/size ⌘±/weight/line-height) | NEW | P1 | |
 | Search in scrollback | NEW | P1 | native ⌘F wired to SwiftTerm find bar |
 | Links: URLs + OSC 8 hyperlinks | NEW | P1 | (OSC 8 landed in Electron; native has the terminal find/link groundwork) |
@@ -163,7 +163,7 @@ against the Electron host.
 | Feature | Status | Pri | Notes |
 |---|---|---|---|
 | Auto-updates (Sparkle) | DONE | P1 | signed appcast, real update verified |
-| Theme / dark-mode invariant (dark/light/system, follows macOS live) | NEW | P0 | |
+| Theme / dark-mode invariant (dark/light/system) | DONE | P0 | `NativePreviewSettings.appearance` drives SwiftUI colorScheme + NSApp appearance; View menu |
 | Liquid Glass / vibrancy (NSGlassEffectView + fallback) | NEW | P1 | SwiftUI materials natural fit |
 | Perf/energy mode (glass vs eco) | NEW | P1 | |
 | Wallpaper tint sampling | NEW | P2 | |
@@ -175,7 +175,7 @@ against the Electron host.
 |---|---|---|---|
 | Attention / notifications (dock badge, native Notification, needs-you) | NEW | P1 | |
 | Cross-project inbox (one bell across tabs) | NEW | P1 | |
-| Git panel (status/stage/commit/diff/log/restore) | NEW | P1 | `gitHandler.cjs` |
+| Git panel (status/stage/commit/diff/log/restore) | PARTIAL | P1 | native backend service done (`scripts/native-git-service.cjs`, 11 tests); panel UI to add |
 | Working-tree checkpoints (pre-turn git snapshots) | NEW | P1 | |
 | Git worktree sessions (isolated checkout per agent; Mesh) | NEW | P1 | |
 | Whole-app local persistence (layouts, drafts, metadata) | PARTIAL | P0 | native has session store; broaden |
