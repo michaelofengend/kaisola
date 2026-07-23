@@ -187,12 +187,21 @@ struct GitPanelView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
+            // An error shows as a banner ABOVE the content — it must never
+            // replace the staged/unstaged lists, commit box, and PR section
+            // (a transient op failure would otherwise blank the whole panel
+            // until a manual refresh).
             if let error = model.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(.secondary).padding(12)
-            } else if let status = model.status {
+                    .font(.caption).foregroundStyle(.red)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.red.opacity(0.08))
+                Divider()
+            }
+            if let status = model.status {
                 content(status)
-            } else {
+            } else if model.errorMessage == nil {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -385,10 +394,16 @@ struct GitPanelView: View {
                                 .buttonStyle(.borderless)
                                 .font(.caption)
                                 .foregroundStyle(.red)
+                                .disabled(model.isBusy)
                         }
                         Button(action) { perform(path) }
                             .buttonStyle(.borderless)
                             .font(.caption)
+                            // Gate every mutating op on isBusy: a fast stage
+                            // finishing mid-PR would otherwise clear isBusy,
+                            // re-enable Push & Create PR (double-submit), and
+                            // clobber status with a stale snapshot.
+                            .disabled(model.isBusy)
                     }
                     if let patch = model.diffs[path] {
                         PatchText(patch: patch)

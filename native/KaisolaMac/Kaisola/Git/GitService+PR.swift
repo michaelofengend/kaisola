@@ -80,8 +80,7 @@ extension GitService {
         process.standardOutput = out
         process.standardError = err
         do { try process.run() } catch { throw GitError.commandFailed(error.localizedDescription) }
-        let outData = out.fileHandleForReading.readDataToEndOfFile()
-        let errData = err.fileHandleForReading.readDataToEndOfFile()
+        let (outData, errData) = Self.drain(out: out, err: err)
         process.waitUntilExit()
         if process.terminationStatus != 0 {
             let message = String(data: errData, encoding: .utf8) ?? "gh pr create failed"
@@ -222,8 +221,7 @@ extension GitService {
         process.standardOutput = out
         process.standardError = err
         do { try process.run() } catch { throw GitError.commandFailed(error.localizedDescription) }
-        let outData = out.fileHandleForReading.readDataToEndOfFile()
-        let errData = err.fileHandleForReading.readDataToEndOfFile()
+        let (outData, errData) = Self.drain(out: out, err: err)
         process.waitUntilExit()
         if process.terminationStatus != 0 {
             let message = String(data: errData, encoding: .utf8) ?? "git failed"
@@ -231,5 +229,23 @@ extension GitService {
             throw GitError.commandFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         return String(data: outData, encoding: .utf8) ?? ""
+    }
+
+    /// Drain stdout and stderr concurrently. Reading one pipe fully before the
+    /// other deadlocks when a child fills the unread pipe's ~64 KB buffer (a
+    /// verbose `gh`/`git` failure) and blocks writing while we block reading the
+    /// other — so stderr is drained on a background queue while stdout is read
+    /// here, and both finish before `waitUntilExit`.
+    private static func drain(out: Pipe, err: Pipe) -> (out: Data, err: Data) {
+        var errData = Data()
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            errData = err.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+        let outData = out.fileHandleForReading.readDataToEndOfFile()
+        group.wait()
+        return (outData, errData)
     }
 }

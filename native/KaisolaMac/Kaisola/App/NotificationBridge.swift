@@ -85,11 +85,23 @@ final class NotificationBridge: NSObject, UNUserNotificationCenterDelegate {
         set { defaults.set(newValue, forKey: Keys.enabled) }
     }
 
+    /// True when this process is an XCTest host. The unit-test host launches the
+    /// full app delegate, but its process is unsigned (CODE_SIGNING_ALLOWED=NO)
+    /// and runs on a headless CI runner with no notification session — where
+    /// `UNUserNotificationCenter.current()` / `requestAuthorization` hangs the
+    /// main thread until the test bootstrap watchdog kills it. Detected via the
+    /// env var XCTest sets in its host.
+    static let isRunningUnderXCTest =
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+
     /// The notification center, resolved lazily and only when the process is
-    /// bundled. `UNUserNotificationCenter.current()` crashes otherwise, so tests
-    /// (which never take a path that reads this) never trigger the trap.
+    /// bundled and not a test host. `UNUserNotificationCenter.current()` traps in
+    /// an unbundled process and is headless-hostile under XCTest, so both are
+    /// gated here — the one chokepoint every notification path funnels through.
     private lazy var center: UNUserNotificationCenter? = {
-        guard Bundle.main.bundleIdentifier != nil else { return nil }
+        guard Bundle.main.bundleIdentifier != nil, !Self.isRunningUnderXCTest else { return nil }
         return UNUserNotificationCenter.current()
     }()
 

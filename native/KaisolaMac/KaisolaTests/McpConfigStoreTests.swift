@@ -3,22 +3,32 @@ import KaisolaCore
 import XCTest
 @testable import KaisolaMacPreview
 
-/// Per-workspace MCP configuration: round-trip persistence under
-/// `<workspace>/.kaisola/mcp.json`, corrupt-file → empty, and `jsonValues`
-/// session shapes that mirror `scripts/native-mcp-registry.cjs`
-/// `buildSessionServers` byte-for-byte (stdio omits `type`; http/sse carry it;
-/// env/headers are arrays of `{name,value}`; disabled servers are dropped).
+/// Per-workspace MCP configuration: round-trip persistence in the USER-GLOBAL
+/// store (keyed by workspace digest — a cloned repo must never be able to seed
+/// auto-run commands), corrupt-file → empty, and `jsonValues` session shapes
+/// that mirror `scripts/native-mcp-registry.cjs` `buildSessionServers`
+/// byte-for-byte (stdio omits `type`; http/sse carry it; env/headers are
+/// arrays of `{name,value}`; disabled servers are dropped).
 final class McpConfigStoreTests: XCTestCase {
     private var workspace: URL!
+    private var root: URL!
+
+    private func store(_ workspace: URL) -> McpConfigStore {
+        McpConfigStore(workspace: workspace, rootDirectory: root)
+    }
 
     override func setUpWithError() throws {
         workspace = FileManager.default.temporaryDirectory
             .appendingPathComponent("kaisola-mcp-\(UUID().uuidString.prefix(8))", isDirectory: true)
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kaisola-mcp-root-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: workspace)
+        try? FileManager.default.removeItem(at: root)
     }
 
     // MARK: - Persistence
@@ -41,31 +51,59 @@ final class McpConfigStoreTests: XCTestCase {
                 enabled: false
             ),
         ]
-        McpConfigStore(workspace: workspace).save(servers)
+        store(workspace).save(servers)
 
-        let reopened = McpConfigStore(workspace: workspace)
+        let reopened = store(workspace)
         XCTAssertEqual(reopened.servers(), servers)
     }
 
-    func testConfigFileLivesUnderDotKaisola() {
-        McpConfigStore(workspace: workspace).save([
+    func testConfigLivesOutsideTheWorkspace() throws {
+        store(workspace).save([
             McpServerConfig(name: "x", kind: .stdio, command: "echo"),
         ])
-        let expected = workspace
+        // The store must be user-global (workspace-digest-keyed), never a file
+        // the repository itself could carry.
+        let inWorkspace = workspace
             .appendingPathComponent(".kaisola")
             .appendingPathComponent("mcp.json")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: expected.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: inWorkspace.path))
+        XCTAssertTrue(store(workspace).fileURL.path.hasPrefix(root.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store(workspace).fileURL.path))
+    }
+
+    func testRepoLocalConfigIsIgnored() throws {
+        // A malicious clone shipping .kaisola/mcp.json must not be read.
+        let directory = workspace.appendingPathComponent(".kaisola")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let hostile = """
+        {"servers":[{"name":"x","kind":"stdio","command":"bash","args":["-c","true"],\
+        "envPairs":[],"headerPairs":[],"enabled":true}]}
+        """
+        try Data(hostile.utf8).write(to: directory.appendingPathComponent("mcp.json"))
+        XCTAssertTrue(store(workspace).servers().isEmpty)
+    }
+
+    func testDistinctWorkspacesUseDistinctFiles() throws {
+        let other = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kaisola-mcp-other-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: other) }
+        store(workspace).save([McpServerConfig(name: "a", kind: .stdio, command: "echo")])
+        XCTAssertTrue(store(other).servers().isEmpty)
+        XCTAssertNotEqual(store(workspace).fileURL, store(other).fileURL)
     }
 
     func testMissingFileIsEmpty() {
-        XCTAssertTrue(McpConfigStore(workspace: workspace).servers().isEmpty)
+        XCTAssertTrue(store(workspace).servers().isEmpty)
     }
 
     func testCorruptFileDegradesToEmpty() throws {
-        let directory = workspace.appendingPathComponent(".kaisola")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try Data("not json".utf8).write(to: directory.appendingPathComponent("mcp.json"))
-        XCTAssertTrue(McpConfigStore(workspace: workspace).servers().isEmpty)
+        let target = store(workspace).fileURL
+        try FileManager.default.createDirectory(
+            at: target.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data("not json".utf8).write(to: target)
+        XCTAssertTrue(store(workspace).servers().isEmpty)
     }
 
     // MARK: - Session wire shapes

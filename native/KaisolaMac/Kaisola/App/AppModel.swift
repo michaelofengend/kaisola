@@ -502,7 +502,8 @@ final class AppModel: ObservableObject {
     // MARK: - Native terminal ownership (Phase 2)
 
     /// Creates a plain shell the native app owns in the given directory.
-    func createTerminal(inDirectory directory: URL) async {
+    @discardableResult
+    func createTerminal(inDirectory directory: URL) async -> String? {
         await createOwnedSession(inDirectory: directory, agent: nil)
     }
 
@@ -517,7 +518,11 @@ final class AppModel: ObservableObject {
     /// broker, so it survives this app quitting, updating, or crashing exactly
     /// like Electron's do. An agent session boots its CLI via a login shell so
     /// the user's PATH and CLI config apply.
-    private func createOwnedSession(inDirectory directory: URL, agent: AgentProfile?) async {
+    /// Returns the created terminal's id on success, nil on failure — so a
+    /// caller (e.g. a Quick Action) can target exactly the shell it spawned
+    /// rather than racing the shared `selectedSessionID`.
+    @discardableResult
+    private func createOwnedSession(inDirectory directory: URL, agent: AgentProfile?) async -> String? {
         guard controlAvailable else {
             // Never fail silently: say WHY sessions can't be created here.
             terminalDocument = .failure(
@@ -526,7 +531,7 @@ final class AppModel: ObservableObject {
                     ? "The connected broker doesn't accept native control (it predates the controller lane), so new sessions can't be created from this app yet. Chats and Mesh still work — they don't need the broker."
                     : "No broker connection — new sessions need a running session broker. Chats and Mesh still work without one."
             )
-            return
+            return nil
         }
         let cwd = directory.path
         let projectID = NativeSessionStore.projectID(forDirectory: cwd)
@@ -580,8 +585,10 @@ final class AppModel: ObservableObject {
             await refreshInventory()
             selectedSessionID = terminalID
             await select(terminalID)
+            return terminalID
         } catch {
             terminalDocument = .failure(sessionID: terminalID, message: error.kaisolaSafeDescription)
+            return nil
         }
     }
 

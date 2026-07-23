@@ -484,10 +484,14 @@ actor AcpClient {
         guard Self.isContained(real, in: realRoot) else {
             throw AcpClientError.requestFailed("Path escapes the session workspace")
         }
-        if mustExist, !FileManager.default.fileExists(atPath: resolved) {
+        if mustExist, !FileManager.default.fileExists(atPath: real) {
             throw AcpClientError.requestFailed("No such path: \(resolved)")
         }
-        return resolved
+        // Return the symlink-RESOLVED path: callers run the sensitive-glob
+        // guard against it and then read/write it, so an in-workspace symlink
+        // with an innocuous name (link.txt → ./.env) can't slip past the
+        // guardrail on its lexical name and be read through the link.
+        return real
     }
 
     /// Resolve symlinks in the deepest existing ancestor and re-append the

@@ -73,7 +73,11 @@ enum CsvTable {
             }
 
             switch character {
-            case "\"":
+            case "\"" where field.isEmpty:
+                // A quote opens a quoted field ONLY at field start (RFC-4180).
+                // A quote mid-field (e.g. 3"5) is a literal character — handled
+                // by `default` — so one stray quote can't swallow the rest of
+                // the file into a single never-closed field.
                 inQuotes = true
                 index += 1
             case delimiter:

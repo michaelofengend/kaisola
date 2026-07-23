@@ -376,7 +376,11 @@ struct RootShellView: View {
     private var detailPane: some View {
         HStack(spacing: 0) {
             if settings.workspaceRailVisible, let root = model.currentProjectDirectory {
+                // .id(root) gives the rail a fresh identity per project so its
+                // @StateObject FSEvents watcher re-targets the new directory
+                // (a persisted StateObject would keep watching the old root).
                 WorkspaceRailView(root: root) { model.previewedFileURL = $0 }
+                    .id(root)
                 Divider()
             }
             detailContent
@@ -650,67 +654,6 @@ struct RootShellView: View {
             )
             .id("split-\(splitID)-\(owned)")
         }
-    }
-}
-
-/// A horizontal strip of project tabs plus a Chats pill, for the top-bar
-/// layout. Clicking a tab makes it the active project.
-private struct ProjectTabStrip: View {
-    let projects: [AppModel.ProjectGroup]
-    let chatCount: Int
-    @Binding var selected: String?
-    let menu: (AppModel.ProjectGroup) -> AnyView
-    let openFolder: () -> Void
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                if chatCount > 0 {
-                    Label("\(chatCount) Chats", systemImage: "bubble.left.and.text.bubble.right")
-                        .font(.caption)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(.quaternary, in: Capsule())
-                }
-                ForEach(projects) { project in
-                    Button {
-                        selected = project.name
-                    } label: {
-                        HStack(spacing: 5) {
-                            if let tint = ProjectTint.color(project.colorHex) {
-                                Circle().fill(tint).frame(width: 7, height: 7)
-                            }
-                            Text(project.name)
-                                .font(.callout.weight(selected == project.name ? .semibold : .regular))
-                            if project.workingCount > 0 {
-                                Text("\(project.workingCount)")
-                                    .font(.caption2.weight(.bold))
-                                    .padding(.horizontal, 4)
-                                    .background(Color.accentColor.opacity(0.9), in: Capsule())
-                                    .foregroundStyle(.white)
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 5)
-                        .background(
-                            selected == project.name ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.clear),
-                            in: Capsule()
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu { menu(project) }
-                }
-                Button(action: openFolder) {
-                    Image(systemName: "plus").font(.caption)
-                }
-                .buttonStyle(.plain)
-                .help("Open a folder as a project (⌘O)")
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-        }
-        .frame(height: 40)
     }
 }
 

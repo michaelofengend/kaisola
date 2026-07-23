@@ -342,7 +342,14 @@ final class OwnedTerminalView: ReadOnlyTerminalView {
                 // Local monitors fire on the main thread; NSEvent itself must
                 // stay outside the isolation hop (it isn't Sendable).
                 let handled = MainActor.assumeIsolated { () -> Bool in
-                    guard let self, self.window?.firstResponder === self else { return false }
+                    // Only claim the keystroke when THIS view is the first
+                    // responder of the KEY window — otherwise a background
+                    // window's terminal would swallow a Shift+Enter meant for
+                    // whatever the user is actually focused on.
+                    guard let self,
+                          let window = self.window,
+                          window.isKeyWindow,
+                          window.firstResponder === self else { return false }
                     self.terminalDelegate?.send(source: self, data: ArraySlice([0x1B, 0x0D]))
                     return true
                 }

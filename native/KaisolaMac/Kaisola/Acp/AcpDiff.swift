@@ -23,6 +23,11 @@ enum AcpDiff {
         let text: String
     }
 
+    /// Beyond this many lines per side, skip the O(m×n) LCS — an agent editing a
+    /// 15k-line lockfile would otherwise allocate a ~1.8 GB DP table on the main
+    /// thread and freeze (or OOM) the UI. Mirrors Electron's diff-text cap.
+    static let lineDiffCap = 2_000
+
     /// Compute the unified line diff between `old` and `new`. When `old` is empty
     /// every line is an addition (a freshly written file), the common case for
     /// agent `write` tools.
@@ -32,6 +37,13 @@ enum AcpDiff {
 
         if oldLines.isEmpty { return newLines.map { Line(kind: .added, text: $0) } }
         if newLines.isEmpty { return oldLines.map { Line(kind: .removed, text: $0) } }
+
+        // Oversized diffs skip the quadratic LCS: show every old line removed
+        // then every new line added (a coarse but bounded, non-freezing view).
+        if oldLines.count > lineDiffCap || newLines.count > lineDiffCap {
+            return oldLines.map { Line(kind: .removed, text: $0) }
+                + newLines.map { Line(kind: .added, text: $0) }
+        }
 
         // LCS table over lines.
         let m = oldLines.count, n = newLines.count

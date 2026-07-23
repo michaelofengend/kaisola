@@ -51,11 +51,17 @@ struct McpServerConfig: Codable, Equatable, Identifiable {
     }
 }
 
-/// Persists a workspace's MCP servers to `<workspace>/.kaisola/mcp.json` with the
-/// same atomic-write discipline as `PermissionRuleStore` (0700 dir / 0600 file,
-/// temp-file + `replaceItemAt`, corrupt file → empty). The on-disk format is the
-/// native app's own concern; the wire shapes handed to `session/new` are produced
-/// by `jsonValues` and mirror `scripts/native-mcp-registry.cjs` exactly.
+/// Persists a workspace's MCP servers USER-GLOBALLY, keyed by the workspace's
+/// stable project digest — never inside the workspace itself. A repo-local
+/// config file would let any cloned repository ship `.kaisola/mcp.json` whose
+/// stdio `command` auto-runs when a chat or Mesh opens there (the agent spawns
+/// MCP servers at session start, before any permission prompt). Electron's
+/// registry made the same call (`native-mcp-registry.cjs` keys by workspace
+/// sha256 under userData); only the user's own app-support data is trusted.
+/// Atomic-write discipline matches `PermissionRuleStore` (0700 dir / 0600 file,
+/// temp-file + `replaceItemAt`, corrupt file → empty). Wire shapes handed to
+/// `session/new` are produced by `jsonValues` and mirror
+/// `scripts/native-mcp-registry.cjs` exactly.
 struct McpConfigStore: Sendable {
     /// Wrapper so the on-disk root is an object (room for a schema field later),
     /// matching PermissionRuleStore's `{rules:[...]}` layout.
@@ -65,10 +71,16 @@ struct McpConfigStore: Sendable {
 
     let fileURL: URL
 
-    init(workspace: URL) {
-        fileURL = workspace
-            .appendingPathComponent(".kaisola", isDirectory: true)
-            .appendingPathComponent("mcp.json", isDirectory: false)
+    init(
+        workspace: URL,
+        rootDirectory: URL = NativePreviewPaths.applicationSupportDirectory
+    ) {
+        // Same digest the session store uses for project identity, so one
+        // workspace ⇒ one config file regardless of how it was opened.
+        let digest = NativeSessionStore.projectID(forDirectory: workspace.path)
+        fileURL = rootDirectory
+            .appendingPathComponent("mcp", isDirectory: true)
+            .appendingPathComponent("\(digest).json", isDirectory: false)
     }
 
     func servers() -> [McpServerConfig] {
