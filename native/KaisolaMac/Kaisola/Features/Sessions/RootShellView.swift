@@ -38,7 +38,13 @@ struct RootShellView: View {
             set: { id in
                 if let id, id.hasPrefix("chat-") { model.selectChat(id) }
                 else if let id, id.hasPrefix("mesh-") { model.selectMesh(id) }
-                else { Task { await model.select(id) } }
+                else if id != model.selectedSessionID
+                    || model.selectedChatID != nil
+                    || model.selectedMeshID != nil
+                    || model.browserCardURL != nil
+                    || model.previewedFileURL != nil {
+                    Task { await model.select(id) }
+                }
             }
         )
     }

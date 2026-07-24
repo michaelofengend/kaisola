@@ -761,6 +761,7 @@ final class AppModel: ObservableObject {
             selectedChatID = nil
             selectedMeshID = nil
             browserCardURL = nil
+            previewedFileURL = nil
             sessionStore.recordSelectedSession(next.id)
             AttentionCenter.shared.clear(targetID: next.id)
             publishPrimaryDocument(retainedDocument, touch: true)
@@ -770,6 +771,7 @@ final class AppModel: ObservableObject {
             selectedChatID = nil
             selectedMeshID = nil
             browserCardURL = nil
+            previewedFileURL = nil
             terminalDocument = .empty
         }
 
