@@ -171,14 +171,39 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
             // lazy file tree finish its first background enumeration.
             try? await Task.sleep(nanoseconds: 1_800_000_000)
             window.displayIfNeeded()
-            guard let view = window.contentView,
-                  let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            guard let view = window.contentView else {
                 print("KAISOLA_NATIVE_VISUAL_CAPTURE=FAIL no-content-view")
                 NSApp.terminate(nil)
                 return
             }
-            view.cacheDisplay(in: view.bounds, to: bitmap)
-            guard let data = bitmap.representation(using: .png, properties: [:]) else {
+
+            if let terminal = firstTerminalView(in: view) {
+                let buffer = terminal.getTerminal().getBufferAsData()
+                let hasFixtureText = String(data: buffer, encoding: .utf8)?.contains("Last login:") == true
+                print(
+                    "KAISOLA_NATIVE_VISUAL_TERMINAL="
+                        + "frame=\(NSStringFromRect(terminal.frame)) "
+                        + "buffer=\(buffer.count) fixtureText=\(hasFixtureText)"
+                )
+            }
+
+            let data: Data?
+            if let image = CGWindowListCreateImage(
+                .null,
+                .optionIncludingWindow,
+                CGWindowID(window.windowNumber),
+                [.boundsIgnoreFraming, .bestResolution]
+            ) {
+                print("KAISOLA_NATIVE_VISUAL_CAPTURE_METHOD=window-server")
+                data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+            } else if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                print("KAISOLA_NATIVE_VISUAL_CAPTURE_METHOD=view-cache-fallback")
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                data = bitmap.representation(using: .png, properties: [:])
+            } else {
+                data = nil
+            }
+            guard let data else {
                 print("KAISOLA_NATIVE_VISUAL_CAPTURE=FAIL png-encoding")
                 NSApp.terminate(nil)
                 return
@@ -197,6 +222,14 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
             }
             NSApp.terminate(nil)
         }
+    }
+
+    private func firstTerminalView(in view: NSView) -> ReadOnlyTerminalView? {
+        if let terminal = view as? ReadOnlyTerminalView { return terminal }
+        for child in view.subviews {
+            if let terminal = firstTerminalView(in: child) { return terminal }
+        }
+        return nil
     }
 
     /// The AppModel for the frontmost window (menu-command target).
