@@ -148,6 +148,18 @@ final class WorkspaceFilesTests: XCTestCase {
         XCTAssertFalse(document.blocks.contains { block in String(describing: block).contains("<") })
     }
 
+    func testHTMLPreviewPromptsForScriptOnlyAppShells() {
+        XCTAssertTrue(HTMLPreviewReadiness.requiresJavaScriptPrompt("""
+        <!doctype html><html><body><div id="root"></div><script src="app.js"></script></body></html>
+        """))
+        XCTAssertFalse(HTMLPreviewReadiness.requiresJavaScriptPrompt("""
+        <!doctype html><html><body><h1>Static report</h1><script src="enhance.js"></script></body></html>
+        """))
+        XCTAssertFalse(HTMLPreviewReadiness.requiresJavaScriptPrompt("""
+        <!doctype html><html><body><img src="chart.png"><script src="enhance.js"></script></body></html>
+        """))
+    }
+
     func testDirectorySymlinkIsNotRecursivelyIndexed() throws {
         let loop = root.appendingPathComponent("loop", isDirectory: true)
         try FileManager.default.createSymbolicLink(at: loop, withDestinationURL: root)

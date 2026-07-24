@@ -447,13 +447,14 @@ struct FilePreviewView: View {
             CsvPreview(text: text)
         case let .json(text):
             JsonPreview(text: text)
-        case .html:
+        case let .html(source):
             if isEditingText {
                 editor
             } else {
                 HtmlFilePreview(
                     fileURL: loadedURL ?? url,
                     readAccessRoot: workspaceRoot,
+                    source: source,
                     zoom: documentZoom,
                     contentRevision: previewRevision
                 )

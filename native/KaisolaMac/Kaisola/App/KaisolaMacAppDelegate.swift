@@ -133,8 +133,43 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
                     model.openFilePreview(readme)
                 }
             } else if visualSurface == "preview-html" {
-                let page = workspace.appendingPathComponent("index.html", isDirectory: false)
-                if FileManager.default.fileExists(atPath: page.path) {
+                let page = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("Kaisola visual preview.html", isDirectory: false)
+                let fixture = """
+                <!doctype html>
+                <html lang="en">
+                <head>
+                  <meta charset="utf-8">
+                  <style>
+                    * { box-sizing: border-box; }
+                    body { margin: 0; background: #f7f8fb; color: #17191d;
+                      font: 15px -apple-system, BlinkMacSystemFont, sans-serif; }
+                    main { max-width: 620px; margin: 0 auto; padding: 48px 42px; }
+                    .eyebrow { color: #5d5ce2; font-size: 12px; font-weight: 700;
+                      letter-spacing: .08em; text-transform: uppercase; }
+                    h1 { margin: 10px 0 12px; font-size: 34px; line-height: 1.08; }
+                    p { color: #595e69; line-height: 1.55; }
+                    .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 24px; }
+                    .card { background: rgba(255,255,255,.88); border: 1px solid #e5e7ee;
+                      border-radius: 14px; padding: 16px; box-shadow: 0 8px 24px rgba(31,35,48,.06); }
+                    .card strong { display: block; margin-bottom: 5px; }
+                    .card span { color: #737986; font-size: 13px; }
+                  </style>
+                </head>
+                <body>
+                  <main>
+                    <div class="eyebrow">Kaisola workspace</div>
+                    <h1>Native HTML preview</h1>
+                    <p>Inspect project pages beside live terminals, then edit the source without leaving your workspace.</p>
+                    <section class="cards">
+                      <div class="card"><strong>Confined</strong><span>Assets stay inside this project.</span></div>
+                      <div class="card"><strong>Fast</strong><span>Rendered in an ephemeral view.</span></div>
+                    </section>
+                  </main>
+                </body>
+                </html>
+                """
+                if (try? fixture.write(to: page, atomically: true, encoding: .utf8)) != nil {
                     model.openFilePreview(page)
                 }
             } else if visualSurface == "preview-docx" {

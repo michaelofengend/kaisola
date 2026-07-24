@@ -483,6 +483,69 @@ private struct JsonNodeRow: View {
 
 // MARK: - HTML
 
+/// Distinguishes a static HTML document from a JavaScript-only app shell. The
+/// preview keeps project scripts off by default, but an empty app shell should
+/// explain that choice instead of presenting a mysterious blank pane.
+enum HTMLPreviewReadiness {
+    nonisolated static func requiresJavaScriptPrompt(_ source: String) -> Bool {
+        guard contains(source, pattern: #"<script\b"#) else { return false }
+
+        let body = firstCapture(
+            in: source,
+            pattern: #"<body\b[^>]*>([\s\S]*?)</body>"#
+        ) ?? source
+        let withoutExecutableBlocks = replacing(
+            body,
+            pattern: #"<(script|style|template)\b[^>]*>[\s\S]*?</\1>"#,
+            with: ""
+        )
+        let hasStaticVisual = contains(
+            withoutExecutableBlocks,
+            pattern: #"<(img|svg|video|audio|iframe|object|embed)\b"#
+        )
+        let withoutComments = replacing(
+            withoutExecutableBlocks,
+            pattern: #"<!--[\s\S]*?-->"#,
+            with: ""
+        )
+        let visibleText = replacing(withoutComments, pattern: #"<[^>]+>"#, with: "")
+            .replacingOccurrences(of: "&nbsp;", with: " ", options: .caseInsensitive)
+            .replacingOccurrences(of: "&#160;", with: " ", options: .caseInsensitive)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return visibleText.isEmpty && !hasStaticVisual
+    }
+
+    private nonisolated static func contains(_ value: String, pattern: String) -> Bool {
+        value.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private nonisolated static func firstCapture(in value: String, pattern: String) -> String? {
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = expression.firstMatch(
+                  in: value,
+                  range: NSRange(value.startIndex..., in: value)
+              ),
+              match.numberOfRanges > 1,
+              let range = Range(match.range(at: 1), in: value) else { return nil }
+        return String(value[range])
+    }
+
+    private nonisolated static func replacing(
+        _ value: String,
+        pattern: String,
+        with replacement: String
+    ) -> String {
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return value
+        }
+        return expression.stringByReplacingMatches(
+            in: value,
+            range: NSRange(value.startIndex..., in: value),
+            withTemplate: replacement
+        )
+    }
+}
+
 /// Renders a local `.html`/`.htm` file in an ephemeral WKWebView. Project-local
 /// assets work by default, while project JavaScript requires an explicit opt-in
 /// from the preview menu. Top-level navigation remains confined to the project.
@@ -491,6 +554,7 @@ private struct JsonNodeRow: View {
 struct HtmlFilePreview: View {
     let fileURL: URL
     let readAccessRoot: URL?
+    let source: String
     let zoom: CGFloat
     let contentRevision: Int
 
@@ -507,6 +571,32 @@ struct HtmlFilePreview: View {
                 zoom: zoom
             )
             .id("\(fileURL.path)|js:\(allowsJavaScript)")
+
+            if !allowsJavaScript,
+               HTMLPreviewReadiness.requiresJavaScriptPrompt(source) {
+                VStack(spacing: 10) {
+                    Image(systemName: "curlybraces.square")
+                        .font(.system(size: 23, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+                    Text("This page needs JavaScript")
+                        .font(.headline)
+                    Text("Project scripts stay off until you allow them for this preview.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 260)
+                    HStack(spacing: 8) {
+                        Button("Allow JavaScript") { allowsJavaScript = true }
+                            .buttonStyle(.borderedProminent)
+                        Button("Open in Browser") { NSWorkspace.shared.open(fileURL) }
+                            .buttonStyle(.bordered)
+                    }
+                    .controlSize(.small)
+                }
+                .padding(22)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.regularMaterial)
+            }
 
             Menu {
                 Toggle("Allow project JavaScript", isOn: $allowsJavaScript)
@@ -526,6 +616,9 @@ struct HtmlFilePreview: View {
             .padding(8)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        // Approval is deliberately one-file-at-a-time. Navigating from a
+        // trusted document must never silently grant scripts to the next file.
+        .onChange(of: fileURL) { _, _ in allowsJavaScript = false }
     }
 }
 
