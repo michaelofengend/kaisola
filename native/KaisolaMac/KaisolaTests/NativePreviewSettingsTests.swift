@@ -45,9 +45,9 @@ final class NativePreviewSettingsTests: XCTestCase {
     }
 
     func testWorkspaceRailWidthStaysThinAndClamped() {
-        XCTAssertEqual(NativePreviewSettings.clampedWorkspaceRailWidth(100), 188)
+        XCTAssertEqual(NativePreviewSettings.clampedWorkspaceRailWidth(100), 164)
         XCTAssertEqual(NativePreviewSettings.clampedWorkspaceRailWidth(248), 248)
-        XCTAssertEqual(NativePreviewSettings.clampedWorkspaceRailWidth(900), 330)
+        XCTAssertEqual(NativePreviewSettings.clampedWorkspaceRailWidth(900), 300)
         XCTAssertEqual(NativePreviewSettings.clampedFilePreviewWidth(100), 300)
         XCTAssertEqual(NativePreviewSettings.clampedFilePreviewWidth(600), 600)
         XCTAssertEqual(NativePreviewSettings.clampedFilePreviewWidth(1_200), 920)

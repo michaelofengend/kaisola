@@ -148,6 +148,127 @@ final class WorkspaceFilesTests: XCTestCase {
         XCTAssertFalse(document.blocks.contains { block in String(describing: block).contains("<") })
     }
 
+    func testMarkdownImageImportCreatesPortableAssetsWithoutOverwriting() throws {
+        let docs = root.appendingPathComponent("docs", isDirectory: true)
+        try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+        let markdown = docs.appendingPathComponent("Design Notes.md")
+        try "# Design".write(to: markdown, atomically: true, encoding: .utf8)
+        let source = root.appendingPathComponent("My Diagram.png")
+        let bytes = Data([0x89, 0x50, 0x4E, 0x47])
+        try bytes.write(to: source)
+
+        let first = MarkdownAssetStore.importImages(
+            [.file(source)],
+            markdownURL: markdown,
+            workspaceRoot: root
+        )
+        XCTAssertTrue(first.errors.isEmpty)
+        XCTAssertEqual(first.insertions.map(\.markdown), [
+            "![my-diagram](assets/design-notes/my-diagram.png)",
+        ])
+        XCTAssertEqual(try Data(contentsOf: first.insertions[0].fileURL), bytes)
+
+        let second = MarkdownAssetStore.importImages(
+            [.file(source)],
+            markdownURL: markdown,
+            workspaceRoot: root
+        )
+        XCTAssertTrue(second.errors.isEmpty)
+        XCTAssertEqual(second.insertions.map(\.markdown), [
+            "![my-diagram](assets/design-notes/my-diagram-2.png)",
+        ])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.insertions[0].fileURL.path))
+    }
+
+    func testMarkdownImageImportRefusesDocumentsOutsideWorkspace() throws {
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kaisola-outside-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let markdown = outside.appendingPathComponent("notes.md")
+        try "notes".write(to: markdown, atomically: true, encoding: .utf8)
+
+        let batch = MarkdownAssetStore.importImages(
+            [.data(Data([1, 2, 3]), suggestedName: "paste", fileExtension: "png")],
+            markdownURL: markdown,
+            workspaceRoot: root
+        )
+
+        XCTAssertTrue(batch.insertions.isEmpty)
+        XCTAssertEqual(batch.errors.count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("assets").path))
+    }
+
+    func testMarkdownImageImportDoesNotFollowAssetSymlinkOutsideWorkspace() throws {
+        let docs = root.appendingPathComponent("docs", isDirectory: true)
+        try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+        let markdown = docs.appendingPathComponent("notes.md")
+        try "notes".write(to: markdown, atomically: true, encoding: .utf8)
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kaisola-assets-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: docs.appendingPathComponent("assets", isDirectory: true),
+            withDestinationURL: outside
+        )
+
+        let batch = MarkdownAssetStore.importImages(
+            [.data(Data([1, 2, 3]), suggestedName: "paste", fileExtension: "png")],
+            markdownURL: markdown,
+            workspaceRoot: root
+        )
+
+        XCTAssertTrue(batch.insertions.isEmpty)
+        XCTAssertEqual(batch.errors.count, 1)
+        XCTAssertTrue((try FileManager.default.contentsOfDirectory(atPath: outside.path)).isEmpty)
+    }
+
+    func testMarkdownEditingStyleFindsDocumentSemanticsWithoutRewritingSource() {
+        let source = """
+        # Heading
+
+        **bold** and *italic* with `code` and [link](https://example.com).
+
+        > quoted
+
+        ```swift
+        let answer = 42
+        ```
+        """
+        let spans = MarkdownEditingStyle.spans(in: source)
+
+        XCTAssertTrue(spans.contains { $0.role == .heading(1) })
+        XCTAssertTrue(spans.contains { $0.role == .bold })
+        XCTAssertTrue(spans.contains { $0.role == .italic })
+        XCTAssertTrue(spans.contains { $0.role == .inlineCode })
+        XCTAssertTrue(spans.contains { $0.role == .link })
+        XCTAssertTrue(spans.contains { $0.role == .quote })
+        XCTAssertTrue(spans.contains { $0.role == .codeBlock })
+        XCTAssertEqual(source, """
+        # Heading
+
+        **bold** and *italic* with `code` and [link](https://example.com).
+
+        > quoted
+
+        ```swift
+        let answer = 42
+        ```
+        """)
+    }
+
+    func testMarkdownEditingStyleCollapsesReadmeHTMLButStylesItsText() {
+        let source = #"<h1 align="center">Kaisola</h1> <strong>One workspace.</strong> <a href="https://kaisola.com">Website</a>"#
+        let spans = MarkdownEditingStyle.spans(in: source)
+
+        XCTAssertTrue(spans.contains { $0.role == .heading(1) })
+        XCTAssertTrue(spans.contains { $0.role == .bold })
+        XCTAssertTrue(spans.contains { $0.role == .link })
+        XCTAssertGreaterThanOrEqual(spans.filter { $0.role == .syntax }.count, 6)
+        XCTAssertEqual(source, #"<h1 align="center">Kaisola</h1> <strong>One workspace.</strong> <a href="https://kaisola.com">Website</a>"#)
+    }
+
     func testHTMLPreviewPromptsForScriptOnlyAppShells() {
         XCTAssertTrue(HTMLPreviewReadiness.requiresJavaScriptPrompt("""
         <!doctype html><html><body><div id="root"></div><script src="app.js"></script></body></html>

@@ -153,8 +153,8 @@ final class NativePreviewSettings: ObservableObject {
         }
     }
 
-    static let workspaceRailWidthRange: ClosedRange<Double> = 188...330
-    static let workspaceRailWidthDefault: Double = 218
+    static let workspaceRailWidthRange: ClosedRange<Double> = 164...300
+    static let workspaceRailWidthDefault: Double = 196
 
     /// Width of the document preview beside the active terminal/chat. App-owned
     /// sizing avoids HSplitView's stale autosaved dividers and gives us a broad,

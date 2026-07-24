@@ -59,6 +59,11 @@ final class AppModel: ObservableObject {
     /// independently of the broker (the adapter is a child of this app).
     @Published private(set) var chats: [AcpChatHandle] = []
     @Published var selectedChatID: String?
+    /// Project-scoped card geometry shared by terminals, ACP chats, and Mesh.
+    /// A column is horizontal; ids inside a column stack vertically.
+    @Published private(set) var paneLayouts: [String: SessionPaneLayout] = [:]
+    @Published private(set) var focusedPaneID: String?
+    @Published private(set) var maximizedPaneID: String?
     /// The project tab shown in the top-bar layout. Nil means the first project.
     @Published var selectedProjectName: String?
     /// Stable project identity used by interactive tabs/headers. Names are user
@@ -90,6 +95,8 @@ final class AppModel: ObservableObject {
     private let controlClient: any BrokerControlServing
     private let sessionStore: NativeSessionStore
     private let cursorStore: TerminalCursorStore
+    private let workspaceStateStore: NativeWorkspaceStateStore
+    private let transcriptStore: AcpTranscriptStore
     private let reconnectBackoff: BrokerReconnectBackoff
     private let sleep: @Sendable (UInt64) async throws -> Void
     private let jitter: @Sendable () -> Double
@@ -106,6 +113,9 @@ final class AppModel: ObservableObject {
     private var terminalSelectionGeneration = 0
     private var shouldReconnect = false
     private var hasStarted = false
+    private var restoredWorkspaceState = false
+    private var isRestoringWorkspaceState = false
+    private var workspaceSaveTasks: [String: Task<Void, Never>] = [:]
     private let observerOwnerID = "native-preview"
 
     /// Disk-backed navigation state is cached in memory. `projects` is read by
@@ -127,6 +137,8 @@ final class AppModel: ObservableObject {
         controlClient: any BrokerControlServing = BrokerControlClient(),
         sessionStore: NativeSessionStore = NativeSessionStore(),
         cursorStore: TerminalCursorStore = TerminalCursorStore(fileURL: NativePreviewPaths.terminalCursorStore),
+        workspaceStateStore: NativeWorkspaceStateStore = .live,
+        transcriptStore: AcpTranscriptStore = .live,
         reconnectBackoff: BrokerReconnectBackoff = BrokerReconnectBackoff(),
         sleep: @escaping @Sendable (UInt64) async throws -> Void = {
             try await Task.sleep(nanoseconds: $0)
@@ -141,6 +153,8 @@ final class AppModel: ObservableObject {
         self.controlClient = controlClient
         self.sessionStore = sessionStore
         self.cursorStore = cursorStore
+        self.workspaceStateStore = workspaceStateStore
+        self.transcriptStore = transcriptStore
         self.reconnectBackoff = reconnectBackoff
         self.sleep = sleep
         self.jitter = jitter
@@ -247,6 +261,159 @@ final class AppModel: ObservableObject {
         meshes.filter { $0.projectID == projectID }
     }
 
+    // MARK: - Unified session cards
+
+    func paneLayout(for projectID: String?) -> SessionPaneLayout {
+        guard let projectID else { return SessionPaneLayout() }
+        return paneLayouts[projectID] ?? SessionPaneLayout()
+    }
+
+    func isSurfaceVisible(_ id: String) -> Bool {
+        guard let projectID = projectID(forSurface: id) else { return false }
+        return paneLayouts[projectID]?.contains(id) == true
+    }
+
+    /// Normal navigation focuses a card already in the dock; a hidden card
+    /// replaces only the primary slot. Explicit "open beside" is separate.
+    private func focusPane(_ id: String, projectID: String) {
+        var layout = paneLayouts[projectID] ?? SessionPaneLayout()
+        layout.focus(id)
+        paneLayouts[projectID] = layout
+        focusedPaneID = id
+        maximizedPaneID = nil
+        scheduleWorkspaceStateSave(projectID: projectID)
+    }
+
+    func openSurfaceBeside(_ id: String) async {
+        guard let projectID = projectID(forSurface: id) else { return }
+        if sessions.contains(where: { $0.id == id }),
+           id != selectedSessionID,
+           splitDocuments[id] == nil {
+            await subscribeSplit(id)
+        }
+        var layout = paneLayouts[projectID] ?? SessionPaneLayout()
+        layout.add(id)
+        paneLayouts[projectID] = layout
+        focusedPaneID = id
+        maximizedPaneID = nil
+        focusSurfaceFields(id)
+        scheduleWorkspaceStateSave(projectID: projectID)
+    }
+
+    func placeSurface(_ id: String, relativeTo targetID: String, edge: SessionPaneLayout.Edge) {
+        guard let projectID = projectID(forSurface: targetID),
+              self.projectID(forSurface: id) == projectID else { return }
+        var layout = paneLayouts[projectID] ?? SessionPaneLayout()
+        layout.place(id, relativeTo: targetID, edge: edge)
+        paneLayouts[projectID] = layout
+        focusedPaneID = id
+        maximizedPaneID = nil
+        scheduleWorkspaceStateSave(projectID: projectID)
+    }
+
+    func resizePaneColumns(projectID: String, boundary: Int, delta: Double, minimumWeight: Double) {
+        guard var layout = paneLayouts[projectID] else { return }
+        layout.resizeColumns(boundary: boundary, delta: delta, minimumWeight: minimumWeight)
+        paneLayouts[projectID] = layout
+    }
+
+    func resizePaneRows(
+        projectID: String,
+        columnID: String,
+        boundary: Int,
+        delta: Double,
+        minimumWeight: Double
+    ) {
+        guard var layout = paneLayouts[projectID] else { return }
+        layout.resizeRows(
+            columnID: columnID,
+            boundary: boundary,
+            delta: delta,
+            minimumWeight: minimumWeight
+        )
+        paneLayouts[projectID] = layout
+    }
+
+    func finishPaneResize(projectID: String) {
+        scheduleWorkspaceStateSave(projectID: projectID)
+    }
+
+    func toggleMaximizeSurface(_ id: String) {
+        maximizedPaneID = maximizedPaneID == id ? nil : id
+        focusedPaneID = id
+    }
+
+    func minimizeSurface(_ id: String) async {
+        guard let projectID = projectID(forSurface: id), var layout = paneLayouts[projectID] else { return }
+        layout.remove(id)
+        paneLayouts[projectID] = layout
+        if splitDocuments[id] != nil { await unsubscribeSplit(id) }
+        if focusedPaneID == id { focusedPaneID = layout.sessionIDs.first }
+        if maximizedPaneID == id { maximizedPaneID = nil }
+        if selectedChatID == id { selectedChatID = nil }
+        if selectedMeshID == id { selectedMeshID = nil }
+        if selectedSessionID == id {
+            if let replacement = layout.sessionIDs.first(where: { candidate in
+                sessions.contains(where: { $0.id == candidate })
+            }) {
+                await focusTerminalSurface(replacement)
+            } else {
+                await select(nil)
+                if let focusedPaneID { focusSurfaceFields(focusedPaneID) }
+            }
+        }
+        scheduleWorkspaceStateSave(projectID: projectID)
+    }
+
+    private func projectID(forSurface id: String) -> String? {
+        sessions.first(where: { $0.id == id })?.projectID
+            ?? chats.first(where: { $0.id == id })?.projectID
+            ?? meshes.first(where: { $0.id == id })?.projectID
+    }
+
+    private func focusSurfaceFields(_ id: String) {
+        if chats.contains(where: { $0.id == id }) {
+            selectedChatID = id
+            selectedMeshID = nil
+        } else if meshes.contains(where: { $0.id == id }) {
+            selectedMeshID = id
+            selectedChatID = nil
+        } else if sessions.contains(where: { $0.id == id }) {
+            selectedChatID = nil
+            selectedMeshID = nil
+        }
+    }
+
+    func focusSurface(_ id: String) async {
+        if sessions.contains(where: { $0.id == id }) {
+            await focusTerminalSurface(id)
+        } else if chats.contains(where: { $0.id == id }) {
+            selectChat(id)
+        } else if meshes.contains(where: { $0.id == id }) {
+            selectMesh(id)
+        }
+    }
+
+    /// Promote a visible secondary terminal without dropping the old primary
+    /// from the live dock. The old primary is re-subscribed as a secondary only
+    /// when its card is still present in the user's layout.
+    private func focusTerminalSurface(_ id: String) async {
+        guard let record = sessions.first(where: { $0.id == id }) else { return }
+        let previousID = selectedSessionID
+        let previousProjectID = previousID.flatMap { projectID(forSurface: $0) }
+        if splitDocuments[id] != nil { await unsubscribeSplit(id) }
+        await select(id)
+        if let previousID,
+           previousID != id,
+           previousProjectID == record.projectID,
+           paneLayouts[record.projectID]?.contains(previousID) == true,
+           splitDocuments[previousID] == nil {
+            await subscribeSplit(previousID)
+        }
+        focusPane(id, projectID: record.projectID)
+        focusedPaneID = id
+    }
+
     /// Switch the top-level workspace context by stable id, then restore a real
     /// surface inside it. A project click is therefore an action, not a label
     /// highlight that leaves another project's terminal visible underneath.
@@ -254,6 +421,7 @@ final class AppModel: ObservableObject {
         guard let id, let project = projects.first(where: { $0.id == id }) else {
             selectedProjectID = nil
             selectedProjectName = nil
+            Task { try? await workspaceStateStore.setSelectedProjectID(nil) }
             return
         }
         selectedProjectID = project.id
@@ -261,6 +429,7 @@ final class AppModel: ObservableObject {
         previewedFileURL = nil
         previewedFileLine = nil
         browserCardURL = nil
+        Task { try? await workspaceStateStore.setSelectedProjectID(project.id) }
 
         let selectedChatBelongsHere = selectedChatID.flatMap { selected in
             chats.first(where: { $0.id == selected })?.projectID
@@ -272,6 +441,18 @@ final class AppModel: ObservableObject {
             sessions.first(where: { $0.id == selected })?.projectID
         } == project.id
         guard !selectedChatBelongsHere, !selectedMeshBelongsHere, !selectedTerminalBelongsHere else { return }
+
+        if let paneID = paneLayouts[project.id]?.sessionIDs.first,
+           projectID(forSurface: paneID) == project.id {
+            if chats.contains(where: { $0.id == paneID }) {
+                selectChat(paneID)
+            } else if meshes.contains(where: { $0.id == paneID }) {
+                selectMesh(paneID)
+            } else {
+                Task { await focusSurface(paneID) }
+            }
+            return
+        }
 
         if let terminal = project.sessions.first(where: { !$0.exited }) ?? project.sessions.first {
             Task { await select(terminal.id) }
@@ -436,21 +617,192 @@ final class AppModel: ObservableObject {
         return nil
     }
 
+    // MARK: - Durable workspace restoration
+
+    private func scheduleWorkspaceStateSave(projectID: String) {
+        guard !isRestoringWorkspaceState,
+              let snapshot = workspaceSnapshot(projectID: projectID) else { return }
+        workspaceSaveTasks[projectID]?.cancel()
+        let store = workspaceStateStore
+        workspaceSaveTasks[projectID] = Task {
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled else { return }
+            try? await store.saveProjectState(snapshot, makeSelected: false)
+        }
+    }
+
+    private func workspaceSnapshot(projectID: String) -> NativeProjectWorkspaceState? {
+        let layout = paneLayouts[projectID] ?? SessionPaneLayout()
+        var panes: [NativeRestorablePaneState] = []
+        var seen = Set<String>()
+
+        for terminalID in layout.sessionIDs {
+            guard let terminal = sessions.first(where: { $0.id == terminalID }),
+                  terminal.projectID == projectID,
+                  seen.insert(terminalID).inserted else { continue }
+            panes.append(NativeRestorablePaneState(
+                id: terminalID,
+                surface: NativeRestorableSurfaceState(
+                    kind: .terminal,
+                    id: terminalID,
+                    projectID: projectID,
+                    title: sessionTitle(for: terminal)
+                )
+            ))
+        }
+
+        // A hidden chat remains a restorable sidebar session; closing it is the
+        // explicit destructive action that removes transcript and descriptor.
+        for chat in chats(in: projectID) where seen.insert(chat.id).inserted {
+            let descriptor = NativeRestorableAgentChatDescriptor(
+                id: chat.id,
+                projectID: projectID,
+                agentID: chat.agentID,
+                workspacePath: chat.workspaceDirectory.path,
+                acpSessionID: chat.conversation.providerSessionID,
+                title: chat.conversation.title
+            )
+            panes.append(NativeRestorablePaneState(
+                id: chat.id,
+                surface: NativeRestorableSurfaceState(agentChat: descriptor),
+                isMinimized: !layout.contains(chat.id)
+            ))
+        }
+
+        guard !panes.isEmpty || !layout.isEmpty else { return nil }
+        let focused = focusedPaneID.flatMap { id in
+            panes.contains(where: { $0.id == id && !$0.isMinimized }) ? id : nil
+        }
+        return NativeProjectWorkspaceState(
+            projectID: projectID,
+            layout: layout,
+            arrangement: layout.columns.count > 1 ? .grid : .rows,
+            panes: panes,
+            focusedPaneID: focused
+        )
+    }
+
+    private func persistWorkspaceStateNow() async {
+        for task in workspaceSaveTasks.values { task.cancel() }
+        workspaceSaveTasks.removeAll()
+        var projectIDs = Set(paneLayouts.keys)
+        projectIDs.formUnion(chats.map(\.projectID))
+        let states = projectIDs.compactMap(workspaceSnapshot(projectID:))
+        try? await workspaceStateStore.saveRestorationState(
+            NativeWorkspaceRestorationState(
+                selectedProjectID: selectedProjectID,
+                projects: states
+            )
+        )
+        await transcriptStore.flush()
+    }
+
+    private func restoreWorkspaceStateIfNeeded() async {
+        guard !restoredWorkspaceState else { return }
+        restoredWorkspaceState = true
+        isRestoringWorkspaceState = true
+        for task in workspaceSaveTasks.values { task.cancel() }
+        workspaceSaveTasks.removeAll()
+        defer { isRestoringWorkspaceState = false }
+
+        guard let restoration = try? await workspaceStateStore.restorationState() else { return }
+        for projectState in restoration.projects {
+            for pane in projectState.panes {
+                guard let descriptor = pane.surface.agentChatDescriptor,
+                      chats.contains(where: { $0.id == descriptor.id }) == false,
+                      let agent = AgentRegistry.profile(id: descriptor.agentID) else { continue }
+                let directory = URL(fileURLWithPath: descriptor.workspacePath, isDirectory: true)
+                    .standardizedFileURL
+                var isDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+                      isDirectory.boolValue else { continue }
+                let rows = await transcriptStore.rows(for: descriptor.id)
+                let draft = try? await workspaceStateStore.draft(for: "chat|\(descriptor.id)")
+                _ = appendChat(
+                    id: descriptor.id,
+                    agent: agent,
+                    directory: directory,
+                    title: descriptor.title
+                        ?? "\(agent.name) · \(directory.lastPathComponent)",
+                    resumeSessionID: descriptor.acpSessionID,
+                    initialRows: rows,
+                    initialDraft: draft
+                )
+            }
+
+            var layout = projectState.layout
+            if connectionState.isConnected {
+                let available = Set(
+                    sessions.lazy.filter { $0.projectID == projectState.projectID }.map(\.id)
+                ).union(chats(in: projectState.projectID).map(\.id))
+                    .union(meshes(in: projectState.projectID).map(\.id))
+                layout.normalize(availableSessionIDs: available)
+            } else {
+                layout.normalize()
+            }
+            paneLayouts[projectState.projectID] = layout
+        }
+
+        if let projectID = restoration.selectedProjectID,
+           let project = projects.first(where: { $0.id == projectID }) {
+            selectedProjectID = project.id
+            selectedProjectName = project.name
+            if let state = restoration.projects.first(where: { $0.projectID == projectID }),
+               let focused = state.focusedPaneID,
+               paneLayouts[projectID]?.contains(focused) == true {
+                focusedPaneID = focused
+                if chats.contains(where: { $0.id == focused }) {
+                    selectedChatID = focused
+                    selectedMeshID = nil
+                } else if sessions.contains(where: { $0.id == focused }) {
+                    await focusTerminalSurface(focused)
+                }
+            }
+        }
+    }
+
     // MARK: - ACP chats
 
     /// Open a new ACP chat with the given agent in a directory. The adapter is
-    /// spawned as a child of this app (ACP sessions are app-scoped, unlike the
-    /// broker-durable terminals). Selecting the chat shows its conversation.
+    /// spawned as a child of this app. The provider session id, visible
+    /// transcript, layout, and draft are persisted so a capable adapter can
+    /// resume after restart; a stale provider id falls back to a fresh session.
     func openChat(_ agent: AgentProfile, inDirectory directory: URL) {
-        guard let adapter = AcpAdapter.forAgent(agent.id) else { return }
         let project = sessionStore.openProject(directory: directory.path)
         refreshPersistedNavigationState(publish: false)
         selectedProjectID = project.id
         selectedProjectName = project.name
         let chatID = "chat-\(UUID().uuidString.lowercased().prefix(8))"
+        guard appendChat(
+            id: chatID,
+            agent: agent,
+            directory: directory,
+            title: "\(agent.name) · \((directory.path as NSString).lastPathComponent)",
+            resumeSessionID: nil,
+            initialRows: [],
+            initialDraft: nil
+        ) != nil else { return }
+        focusPane(chatID, projectID: project.id)
+        focusSurfaceFields(chatID)
+        scheduleWorkspaceStateSave(projectID: project.id)
+    }
+
+    @discardableResult
+    private func appendChat(
+        id chatID: String,
+        agent: AgentProfile,
+        directory: URL,
+        title: String,
+        resumeSessionID: String?,
+        initialRows: [AcpTranscriptRow],
+        initialDraft: String?
+    ) -> AcpChatHandle? {
+        guard chats.contains(where: { $0.id == chatID }) == false,
+              let adapter = AcpAdapter.forAgent(agent.id) else { return nil }
+        let projectID = NativeSessionStore.projectID(forDirectory: directory.path)
         let mcp = McpConfigStore(workspace: directory).servers()
         let conversation = AcpConversation(
-            title: "\(agent.name) · \((directory.path as NSString).lastPathComponent)",
+            title: title,
             command: adapter.command,
             arguments: adapter.arguments,
             environment: ProcessInfo.processInfo.environment.merging(
@@ -464,16 +816,19 @@ final class AppModel: ObservableObject {
             cwd: directory.path,
             mcpServers: McpConfigStore.jsonValues(mcp),
             sensitiveGlobs: NativePreviewSettings.shared.sensitiveGlobs,
-            draftKey: "\(agent.id)|\(directory.path)"
+            draftKey: chatID,
+            resumeSessionID: resumeSessionID,
+            initialRows: initialRows,
+            initialDraft: initialDraft
         )
         // Fan this chat's live context usage into the session-wide UsageCenter.
-        let usageTitle = conversation.title
         var chatUsageObservers = Set<AnyCancellable>()
         conversation.$usage
             .compactMap { $0 }
-            .sink { usage in
+            .sink { [weak conversation] usage in
+                guard let conversation else { return }
                 UsageCenter.shared.record(
-                    chatID: chatID, title: usageTitle, agentID: agent.id,
+                    chatID: chatID, title: conversation.title, agentID: agent.id,
                     usage: usage.used, max: usage.max,
                     costAmount: usage.costAmount,
                     costCurrency: usage.costCurrency
@@ -488,36 +843,67 @@ final class AppModel: ObservableObject {
         usageObservers[chatID] = chatUsageObservers
         // Needs-you moments land in the inbox only when the chat isn't the
         // focused surface (or the app is in the background).
-        let title = conversation.title
-        conversation.onAttention = { [weak self] kind, detail in
-            guard let self else { return }
+        conversation.onAttention = { [weak self, weak conversation] kind, detail in
+            guard let self, let conversation else { return }
             let appActive = NSApp?.isActive ?? true
             if self.selectedChatID == chatID, appActive { return }
-            AttentionCenter.shared.notify(kind: kind, targetID: chatID, title: title, detail: detail)
+            AttentionCenter.shared.notify(
+                kind: kind,
+                targetID: chatID,
+                title: conversation.title,
+                detail: detail
+            )
         }
-        chats.append(AcpChatHandle(
+        let transcriptStore = transcriptStore
+        conversation.onTranscriptChanged = { rows in
+            Task { await transcriptStore.scheduleSave(rows, for: chatID) }
+        }
+        let workspaceStateStore = workspaceStateStore
+        conversation.onDraftChanged = { text in
+            Task {
+                try? await workspaceStateStore.saveDraft(
+                    text,
+                    stableKey: "chat|\(chatID)",
+                    projectID: projectID,
+                    agentID: agent.id,
+                    workspacePath: directory.path
+                )
+            }
+        }
+        conversation.onProviderSessionID = { [weak self] _ in
+            self?.scheduleWorkspaceStateSave(projectID: projectID)
+        }
+        let handle = AcpChatHandle(
             id: chatID,
             agentID: agent.id,
             workspaceDirectory: directory,
             conversation: conversation
-        ))
+        )
+        chats.append(handle)
         surfaceObservers[chatID] = conversation.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
-        selectedChatID = chatID
-        selectedMeshID = nil
-        selectedSessionID = nil
+        return handle
     }
 
     func closeChat(_ chatID: String) {
-        if let chat = chats.first(where: { $0.id == chatID }) {
-            chat.conversation.stop()
-        }
+        let closingChat = chats.first(where: { $0.id == chatID })
+        closingChat?.conversation.stop()
         chats.removeAll { $0.id == chatID }
         usageObservers.removeValue(forKey: chatID)?.forEach { $0.cancel() }
         UsageCenter.shared.remove(chatID: chatID)
         surfaceObservers.removeValue(forKey: chatID)?.cancel()
         if selectedChatID == chatID { selectedChatID = nil }
+        if let projectID = closingChat?.projectID {
+            var layout = paneLayouts[projectID] ?? SessionPaneLayout()
+            layout.remove(chatID)
+            paneLayouts[projectID] = layout
+            scheduleWorkspaceStateSave(projectID: projectID)
+        }
+        Task {
+            await transcriptStore.remove(chatID: chatID)
+            try? await workspaceStateStore.removeDraft(stableKey: "chat|\(chatID)")
+        }
     }
 
     func selectChat(_ chatID: String?) {
@@ -527,9 +913,10 @@ final class AppModel: ObservableObject {
                let project = projects.first(where: { $0.id == projectID }) {
                 selectedProjectID = project.id
                 selectedProjectName = project.name
+                focusPane(chatID, projectID: projectID)
             }
-            selectedSessionID = nil
             selectedMeshID = nil
+            focusedPaneID = chatID
             AttentionCenter.shared.clear(targetID: chatID)
         }
     }
@@ -560,7 +947,7 @@ final class AppModel: ObservableObject {
         meshes.append(mesh)
         selectedMeshID = mesh.id
         selectedChatID = nil
-        selectedSessionID = nil
+        focusPane(mesh.id, projectID: project.id)
         let environment = ProcessInfo.processInfo.environment.merging(
             ProjectAccountStore.mergedOverlay(
                 app: NativePreviewSettings.shared.agentEnvironmentOverlay,
@@ -573,10 +960,17 @@ final class AppModel: ObservableObject {
     }
 
     func closeMesh(_ meshID: String) {
-        meshes.first { $0.id == meshID }?.shutdown()
+        let closingMesh = meshes.first { $0.id == meshID }
+        closingMesh?.shutdown()
         meshes.removeAll { $0.id == meshID }
         surfaceObservers.removeValue(forKey: meshID)?.cancel()
         if selectedMeshID == meshID { selectedMeshID = nil }
+        if let projectID = closingMesh?.projectID {
+            var layout = paneLayouts[projectID] ?? SessionPaneLayout()
+            layout.remove(meshID)
+            paneLayouts[projectID] = layout
+            scheduleWorkspaceStateSave(projectID: projectID)
+        }
     }
 
     func selectMesh(_ meshID: String?) {
@@ -586,9 +980,10 @@ final class AppModel: ObservableObject {
                let project = projects.first(where: { $0.id == projectID }) {
                 selectedProjectID = project.id
                 selectedProjectName = project.name
+                focusPane(meshID, projectID: projectID)
             }
             selectedChatID = nil
-            selectedSessionID = nil
+            focusedPaneID = meshID
         }
     }
 
@@ -597,6 +992,7 @@ final class AppModel: ObservableObject {
     /// drop the broker connections. Closing a window must not leak child
     /// processes or leave Mesh worktrees registered.
     func teardown() async {
+        await persistWorkspaceStateNow()
         for chat in chats {
             chat.conversation.stop()
             UsageCenter.shared.remove(chatID: chat.id)
@@ -705,6 +1101,8 @@ final class AppModel: ObservableObject {
         terminalSurfaceOrder = [sessions[0].id]
         splitDocuments.removeAll()
         splitOrder.removeAll()
+        paneLayouts[project.id] = SessionPaneLayout(sessionID: sessions[0].id)
+        focusedPaneID = sessions[0].id
 
         if includeSplit {
             let splitOutput = [
@@ -725,6 +1123,7 @@ final class AppModel: ObservableObject {
                 errorMessage: nil
             )
             splitOrder = [sessions[1].id]
+            paneLayouts[project.id]?.add(sessions[1].id)
         }
     }
 
@@ -740,6 +1139,30 @@ final class AppModel: ObservableObject {
         selectedSessionID = nil
         selectedProjectID = mesh.projectID
         selectedProjectName = projects.first(where: { $0.id == mesh.projectID })?.name
+        paneLayouts[mesh.projectID] = SessionPaneLayout(sessionID: mesh.id)
+        focusedPaneID = mesh.id
+    }
+
+    func loadVisualMixedSessionFixture(workspace: URL) {
+        let root = workspace.standardizedFileURL
+        guard let project = projects.first(where: { $0.directory?.standardizedFileURL == root }),
+              let agent = AgentRegistry.profile(id: "codex"),
+              let chat = appendChat(
+                id: "visual-chat",
+                agent: agent,
+                directory: root,
+                title: "Codex · \(root.lastPathComponent)",
+                resumeSessionID: nil,
+                initialRows: [],
+                initialDraft: ""
+              ) else { return }
+        chat.conversation.loadVisualFixture()
+        var layout = paneLayouts[project.id] ?? SessionPaneLayout()
+        layout.add(chat.id)
+        paneLayouts[project.id] = layout
+        selectedChatID = chat.id
+        selectedMeshID = nil
+        focusedPaneID = chat.id
     }
 
     func reload() async {
@@ -755,7 +1178,9 @@ final class AppModel: ObservableObject {
         await client.disconnect()
         selectedSession = nil
 
-        if !(await connect(generation: generation, reconnectAttempt: nil)) {
+        let connected = await connect(generation: generation, reconnectAttempt: nil)
+        await restoreWorkspaceStateIfNeeded()
+        if !connected {
             scheduleReconnect(attempt: 0, generation: generation)
         }
     }
@@ -808,6 +1233,7 @@ final class AppModel: ObservableObject {
                 selectedProjectID = project.id
                 selectedProjectName = project.name
             }
+            focusPane(next.id, projectID: next.projectID)
             selectedChatID = nil
             selectedMeshID = nil
             browserCardURL = nil
@@ -1077,6 +1503,19 @@ final class AppModel: ObservableObject {
             ?? ""
     }
 
+    /// Editable title for any unified session card. Chat titles are included in
+    /// the durable workspace descriptor; Mesh titles are live for the current
+    /// run (a Mesh process itself is intentionally not resurrected after quit).
+    func editableSurfaceTitle(for id: String) -> String {
+        if let chat = chats.first(where: { $0.id == id }) {
+            return chat.conversation.title
+        }
+        if let mesh = meshes.first(where: { $0.id == id }) {
+            return mesh.title
+        }
+        return editableSessionTitle(for: id)
+    }
+
     static func sessionDisplayTitle(
         for record: BrokerTerminalRecord,
         visibleRecords: [BrokerTerminalRecord],
@@ -1124,6 +1563,22 @@ final class AppModel: ObservableObject {
             sessionStore.setSessionAlias(trimmed, for: terminalID)
         }
         refreshPersistedNavigationState()
+    }
+
+    func renameSurface(_ id: String, to title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let chat = chats.first(where: { $0.id == id }) {
+            chat.conversation.title = trimmed
+            UsageCenter.shared.rename(chatID: id, title: trimmed)
+            scheduleWorkspaceStateSave(projectID: chat.projectID)
+            return
+        }
+        if let mesh = meshes.first(where: { $0.id == id }) {
+            mesh.title = trimmed
+            return
+        }
+        renameSession(id, to: trimmed)
     }
 
     /// A live OSC title from an owned session's terminal (SwiftTerm's
@@ -1584,10 +2039,14 @@ final class AppModel: ObservableObject {
 
     /// Open a session in a split pane beside the primary one.
     func openInSplit(_ terminalID: String) async {
+        await openSurfaceBeside(terminalID)
+    }
+
+    private func subscribeSplit(_ terminalID: String) async {
         guard connectionState.isConnected,
               splitDocuments[terminalID] == nil,
               terminalID != selectedSessionID,
-              splitOrder.count < Self.maxSplitPanes,
+              splitOrder.count < SessionPaneLayout.maximumPaneCount - 1,
               let record = sessions.first(where: { $0.id == terminalID }) else { return }
         do {
             let result = try await client.subscribe(to: record, ownerID: observerOwnerID, cursor: nil)
@@ -1600,6 +2059,15 @@ final class AppModel: ObservableObject {
 
     /// Close a split pane; its session keeps running on the broker.
     func closeSplit(_ terminalID: String) async {
+        await unsubscribeSplit(terminalID)
+        if let projectID = projectID(forSurface: terminalID), var layout = paneLayouts[projectID] {
+            layout.remove(terminalID)
+            paneLayouts[projectID] = layout
+            scheduleWorkspaceStateSave(projectID: projectID)
+        }
+    }
+
+    private func unsubscribeSplit(_ terminalID: String) async {
         guard splitDocuments[terminalID] != nil else { return }
         await persistSplitCursor(terminalID)
         if connectionState.isConnected,
@@ -1615,10 +2083,7 @@ final class AppModel: ObservableObject {
     /// from that cursor — continuous scrollback, one subscription per terminal.
     func promoteSplit(_ terminalID: String) async {
         guard splitDocuments[terminalID] != nil else { return }
-        await closeSplit(terminalID)
-        selectedChatID = nil
-        selectedMeshID = nil
-        await select(terminalID)
+        await focusTerminalSurface(terminalID)
     }
 
     /// Drop every split (connection loss / reload), persisting cursors.

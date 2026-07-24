@@ -60,7 +60,7 @@ final class MeshSession: ObservableObject, Identifiable {
     }
 
     let id: String
-    let title: String
+    @Published var title: String
     let baseDirectory: URL
     let mode: MeshMode
     let purpose: MeshPurpose

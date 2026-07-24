@@ -66,6 +66,18 @@ final class UsageCenterTests: XCTestCase {
         XCTAssertTrue(center.byChat.isEmpty, "a turn without any usage does not conjure an entry")
     }
 
+    func testRenameUpdatesExistingUsageWithoutChangingCounters() {
+        let center = makeCenter()
+        center.record(chatID: "a", title: "Alpha", agentID: "codex", usage: 420, max: 1000)
+        center.recordTurn(chatID: "a")
+
+        center.rename(chatID: "a", title: "Research")
+
+        XCTAssertEqual(center.byChat["a"]?.title, "Research")
+        XCTAssertEqual(center.byChat["a"]?.peakUsed, 420)
+        XCTAssertEqual(center.byChat["a"]?.turns, 1)
+    }
+
     // MARK: - ordering
 
     func testAllOrderedByPeakDescending() {

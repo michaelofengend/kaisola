@@ -57,6 +57,13 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
     private let visualCapturePath = ProcessInfo.processInfo.environment["KAISOLA_NATIVE_VISUAL_CAPTURE_PATH"]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // XCTest injects the bundle into the real app executable. Launching a
+        // normal workspace here would connect to the user's broker, restore
+        // their projects, scan FileProvider folders, and spawn background git
+        // probes alongside otherwise hermetic unit tests. That can both disturb
+        // a live workspace and starve process-based ACP/Mesh tests. Tests create
+        // every AppModel/window they need explicitly.
+        guard !NotificationBridge.isRunningUnderXCTest else { return }
         // Preview-owned state stays separate from every historical Electron
         // profile. Broker discovery is explicitly read-only and lives elsewhere.
         try? NativePreviewPaths.prepareApplicationSupport()
@@ -66,7 +73,7 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
             settings.sidebarAppearance = .glass
             settings.workspaceBackdrop = .glass
             settings.workspaceRailVisible = visualSurface != "topbar" && visualSurface != "terminal-solo"
-            settings.workspaceRailWidth = 232
+            settings.workspaceRailWidth = 196
             OnboardingState.markSeen()
         }
         settings.applyAppearance()
@@ -127,7 +134,9 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
                 workspace: workspace,
                 includeSplit: visualSurface == "terminal"
             )
-            if visualSurface == "preview" {
+            if visualSurface == "mixed" {
+                model.loadVisualMixedSessionFixture(workspace: workspace)
+            } else if visualSurface == "preview" {
                 let readme = workspace.appendingPathComponent("README.md", isDirectory: false)
                 if FileManager.default.fileExists(atPath: readme.path) {
                     model.openFilePreview(readme)

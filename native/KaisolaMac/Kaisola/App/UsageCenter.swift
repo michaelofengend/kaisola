@@ -145,6 +145,12 @@ final class UsageCenter: ObservableObject {
         byChat.removeValue(forKey: chatID)
     }
 
+    func rename(chatID: String, title: String) {
+        guard var existing = byChat[chatID] else { return }
+        existing.title = title
+        byChat[chatID] = existing
+    }
+
     /// Clear all tracked usage (the Usage tab's Reset button).
     func reset() {
         byChat.removeAll()

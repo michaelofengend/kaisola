@@ -6,15 +6,33 @@ import UniformTypeIdentifiers
 /// tool-call cards, a plan, a live permission prompt, model picker, usage, and
 /// a composer. Mirrors the Electron Assistant transcript.
 struct AcpChatView: View {
+    /// Controls how much session chrome the chat owns. A unified session card
+    /// already renders identity and activity, so its embedded chat keeps only
+    /// the agent controls above the transcript.
+    enum Presentation: Sendable, Equatable {
+        case standard
+        case embedded
+    }
+
     @State private var restoreTarget: AcpConversation.TurnCheckpoint?
     @ObservedObject var conversation: AcpConversation
+    private let presentation: Presentation
     @State private var draft = ""
     /// Highlights the composer while an OS file drag hovers it.
     @State private var isDropTargeted = false
 
+    init(conversation: AcpConversation, presentation: Presentation = .standard) {
+        _conversation = ObservedObject(wrappedValue: conversation)
+        self.presentation = presentation
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            header
+            if presentation == .standard {
+                standardHeader
+            } else {
+                embeddedControls
+            }
             Divider()
             transcript
             if let permission = conversation.pendingPermission {
@@ -28,7 +46,10 @@ struct AcpChatView: View {
             Divider()
             composer
         }
-        .task {
+        // SwiftUI can reuse this view position when the selected chat changes.
+        // Key the startup work to the object so a new session never flashes or
+        // saves the preceding session's draft.
+        .task(id: ObjectIdentifier(conversation)) {
             draft = conversation.loadDraft()
             await conversation.start()
         }
@@ -37,7 +58,7 @@ struct AcpChatView: View {
         }
     }
 
-    private var header: some View {
+    private var standardHeader: some View {
         HStack(spacing: 10) {
             Circle()
                 .fill(conversation.isConnected ? Color.green : Color.secondary.opacity(0.6))
@@ -48,86 +69,103 @@ struct AcpChatView: View {
                 Text("Working…").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            if !conversation.modes.isEmpty {
-                Picker("Mode", selection: Binding(
-                    get: { conversation.currentModeID ?? conversation.modes.first?.id ?? "" },
-                    set: { conversation.selectMode($0) }
-                )) {
-                    ForEach(conversation.modes) { mode in
-                        Text(mode.name).tag(mode.id)
-                    }
-                }
-                .labelsHidden()
-                .frame(maxWidth: 150)
-                .help("Permission mode — how the agent asks before acting")
-            }
-            if !conversation.models.isEmpty {
-                Picker("Model", selection: Binding(
-                    get: { conversation.currentModelID ?? conversation.models.first?.id ?? "" },
-                    set: { conversation.selectModel($0) }
-                )) {
-                    ForEach(conversation.models) { model in
-                        Text(model.name).tag(model.id)
-                    }
-                }
-                .labelsHidden()
-                .frame(maxWidth: 180)
-            }
-            if !conversation.checkpoints.isEmpty {
-                Menu {
-                    Text("Restore the working tree to before a turn:")
-                    ForEach(conversation.checkpoints.reversed()) { checkpoint in
-                        Button("Turn \(checkpoint.turn) — \(checkpoint.at.formatted(date: .omitted, time: .shortened))") {
-                            restoreTarget = checkpoint
-                        }
-                    }
-                } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Pre-turn checkpoints (git snapshots)")
-                .confirmationDialog(
-                    "Restore checkpoint?",
-                    isPresented: Binding(get: { restoreTarget != nil }, set: { if !$0 { restoreTarget = nil } })
-                ) {
-                    Button("Restore Files", role: .destructive) {
-                        if let restoreTarget { conversation.restoreCheckpoint(restoreTarget.id) }
-                        restoreTarget = nil
-                    }
-                    Button("Cancel", role: .cancel) { restoreTarget = nil }
-                } message: {
-                    Text("Applies the snapshot taken before turn \(restoreTarget?.turn ?? 0) over the current working tree. Conflicts surface as git conflict markers.")
-                }
-            }
-            if !conversation.configOptions.isEmpty {
-                Menu {
-                    ForEach(conversation.configOptions) { option in
-                        Picker(option.name, selection: Binding(
-                            get: { option.currentValue ?? option.choices.first?.value ?? "" },
-                            set: { conversation.selectConfigOption(option.id, value: $0) }
-                        )) {
-                            ForEach(option.choices) { choice in
-                                Text(choice.name).tag(choice.value)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                    }
-                } label: {
-                    Image(systemName: "slider.horizontal.3")
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Agent options (effort, presets)")
-            }
-            if let usage = conversation.usage {
-                Text("\(usage.used / 1000)k / \(usage.max / 1000)k")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
+            sessionControls
         }
         .padding(.horizontal, 16)
         .frame(height: 46)
+    }
+
+    /// The containing session card supplies title, connection, and activity.
+    /// Keeping this row a fixed, quiet height prevents asynchronously-arriving
+    /// model/config metadata from pushing the transcript during startup.
+    private var embeddedControls: some View {
+        HStack(spacing: 8) {
+            Spacer(minLength: 0)
+            sessionControls
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 34)
+    }
+
+    @ViewBuilder
+    private var sessionControls: some View {
+        if !conversation.modes.isEmpty {
+            Picker("Mode", selection: Binding(
+                get: { conversation.currentModeID ?? conversation.modes.first?.id ?? "" },
+                set: { conversation.selectMode($0) }
+            )) {
+                ForEach(conversation.modes) { mode in
+                    Text(mode.name).tag(mode.id)
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: presentation == .embedded ? 128 : 150)
+            .help("Permission mode — how the agent asks before acting")
+        }
+        if !conversation.models.isEmpty {
+            Picker("Model", selection: Binding(
+                get: { conversation.currentModelID ?? conversation.models.first?.id ?? "" },
+                set: { conversation.selectModel($0) }
+            )) {
+                ForEach(conversation.models) { model in
+                    Text(model.name).tag(model.id)
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: presentation == .embedded ? 150 : 180)
+        }
+        if !conversation.checkpoints.isEmpty {
+            Menu {
+                Text("Restore the working tree to before a turn:")
+                ForEach(conversation.checkpoints.reversed()) { checkpoint in
+                    Button("Turn \(checkpoint.turn) — \(checkpoint.at.formatted(date: .omitted, time: .shortened))") {
+                        restoreTarget = checkpoint
+                    }
+                }
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Pre-turn checkpoints (git snapshots)")
+            .confirmationDialog(
+                "Restore checkpoint?",
+                isPresented: Binding(get: { restoreTarget != nil }, set: { if !$0 { restoreTarget = nil } })
+            ) {
+                Button("Restore Files", role: .destructive) {
+                    if let restoreTarget { conversation.restoreCheckpoint(restoreTarget.id) }
+                    restoreTarget = nil
+                }
+                Button("Cancel", role: .cancel) { restoreTarget = nil }
+            } message: {
+                Text("Applies the snapshot taken before turn \(restoreTarget?.turn ?? 0) over the current working tree. Conflicts surface as git conflict markers.")
+            }
+        }
+        if !conversation.configOptions.isEmpty {
+            Menu {
+                ForEach(conversation.configOptions) { option in
+                    Picker(option.name, selection: Binding(
+                        get: { option.currentValue ?? option.choices.first?.value ?? "" },
+                        set: { conversation.selectConfigOption(option.id, value: $0) }
+                    )) {
+                        ForEach(option.choices) { choice in
+                            Text(choice.name).tag(choice.value)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Agent options (effort, presets)")
+        }
+        if let usage = conversation.usage {
+            Text("\(usage.used / 1000)k / \(usage.max / 1000)k")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
     }
 
     private var transcript: some View {
@@ -165,7 +203,15 @@ struct AcpChatView: View {
             }
             .onChange(of: conversation.rows.count) { _, _ in
                 if let last = conversation.rows.last {
-                    withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                    if presentation == .standard {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
+                    } else {
+                        // A unified card can swap sessions in place. Do not
+                        // animate from the preceding session's scroll offset.
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
                 }
             }
         }

@@ -64,6 +64,10 @@ struct UsageSettingsTab: View {
         .formStyle(.grouped)
         .padding(6)
         .task(id: workspace?.standardizedFileURL.path) {
+            // Hosted/local visual fixtures are deterministic and must never
+            // replace their provider cards by probing an unsigned debug helper.
+            // Production always performs the real signed-helper refresh.
+            guard ProcessInfo.processInfo.environment["KAISOLA_NATIVE_VISUAL_FIXTURE"] != "1" else { return }
             usage.refreshPlanUsage(workspace: workspace)
         }
     }

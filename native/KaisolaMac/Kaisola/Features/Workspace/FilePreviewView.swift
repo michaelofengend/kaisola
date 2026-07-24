@@ -104,6 +104,221 @@ enum FilePreviewDiskState {
     }
 }
 
+/// A paste/drop payload already reduced to Sendable filesystem bytes. AppKit
+/// objects never cross the actor boundary: clipboard images become PNG data on
+/// the main actor, while file drops carry only their URL.
+enum MarkdownImageImport: Sendable {
+    case file(URL)
+    case data(Data, suggestedName: String, fileExtension: String)
+}
+
+struct MarkdownAssetInsertion: Equatable, Sendable {
+    let fileURL: URL
+    let markdown: String
+}
+
+struct MarkdownAssetImportBatch: Sendable {
+    let insertions: [MarkdownAssetInsertion]
+    let errors: [String]
+}
+
+/// Copies pasted/dropped images into a portable folder beside the Markdown
+/// document: `assets/<document-name>/image.png`. Keeping assets relative to the
+/// document makes the inserted links work in GitHub, static-site generators,
+/// and the Electron app without an app-specific URL scheme.
+enum MarkdownAssetStore {
+    static let maxImageBytes = 25 * 1_048_576
+    private static let rasterExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "heic", "webp", "bmp", "tif", "tiff",
+    ]
+
+    nonisolated static func importImages(
+        _ imports: [MarkdownImageImport],
+        markdownURL: URL,
+        workspaceRoot: URL?
+    ) -> MarkdownAssetImportBatch {
+        var insertions: [MarkdownAssetInsertion] = []
+        var errors: [String] = []
+        for item in imports.prefix(20) {
+            do {
+                insertions.append(try importImage(
+                    item,
+                    markdownURL: markdownURL,
+                    workspaceRoot: workspaceRoot
+                ))
+            } catch {
+                errors.append(error.localizedDescription)
+            }
+        }
+        if imports.count > 20 {
+            errors.append("Paste or drop at most 20 images at a time.")
+        }
+        return MarkdownAssetImportBatch(insertions: insertions, errors: errors)
+    }
+
+    private nonisolated static func importImage(
+        _ item: MarkdownImageImport,
+        markdownURL: URL,
+        workspaceRoot: URL?
+    ) throws -> MarkdownAssetInsertion {
+        let document = markdownURL.standardizedFileURL
+        let documentDirectory = document.deletingLastPathComponent()
+        if let workspaceRoot {
+            guard isContained(document, in: workspaceRoot) else {
+                throw MarkdownAssetError.documentOutsideWorkspace
+            }
+        }
+
+        let documentName = sanitizedName(
+            document.deletingPathExtension().lastPathComponent,
+            fallback: "document"
+        )
+        let assetDirectory = documentDirectory
+            .appendingPathComponent("assets", isDirectory: true)
+            .appendingPathComponent(documentName, isDirectory: true)
+        // An existing `assets` symlink must not turn an innocent paste into a
+        // write outside the open project.
+        if let workspaceRoot {
+            guard isContained(assetDirectory, in: workspaceRoot) else {
+                throw MarkdownAssetError.assetDirectoryOutsideWorkspace
+            }
+        }
+        try FileManager.default.createDirectory(
+            at: assetDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let data: Data
+        let sourceName: String
+        let fileExtension: String
+        switch item {
+        case let .file(source):
+            let ext = source.pathExtension.lowercased()
+            guard rasterExtensions.contains(ext) else {
+                throw MarkdownAssetError.unsupportedImage(source.lastPathComponent)
+            }
+            let byteCount = (try? source.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            guard byteCount <= maxImageBytes else {
+                throw MarkdownAssetError.imageTooLarge(source.lastPathComponent)
+            }
+            data = try Data(contentsOf: source, options: .mappedIfSafe)
+            guard data.count <= maxImageBytes else {
+                throw MarkdownAssetError.imageTooLarge(source.lastPathComponent)
+            }
+            sourceName = source.deletingPathExtension().lastPathComponent
+            fileExtension = ext
+        case let .data(bytes, suggestedName, ext):
+            guard bytes.count <= maxImageBytes else {
+                throw MarkdownAssetError.imageTooLarge(suggestedName)
+            }
+            let normalizedExtension = ext.lowercased()
+            guard rasterExtensions.contains(normalizedExtension) else {
+                throw MarkdownAssetError.unsupportedImage(suggestedName)
+            }
+            data = bytes
+            sourceName = suggestedName
+            fileExtension = normalizedExtension
+        }
+
+        guard !data.isEmpty else { throw MarkdownAssetError.emptyImage(sourceName) }
+        let baseName = sanitizedName(sourceName, fallback: "image")
+        let destination = uniqueDestination(
+            directory: assetDirectory,
+            baseName: baseName,
+            fileExtension: fileExtension
+        )
+        // `Data` deliberately forbids combining `.atomic` with
+        // `.withoutOverwriting`; exclusive creation is the important property
+        // here because a paste must never replace an existing project asset.
+        try data.write(to: destination, options: .withoutOverwriting)
+
+        let relativePath = "assets/\(documentName)/\(destination.lastPathComponent)"
+        let alt = baseName.replacingOccurrences(of: "]", with: "\\]")
+        return MarkdownAssetInsertion(
+            fileURL: destination,
+            markdown: "![\(alt)](\(relativePath))"
+        )
+    }
+
+    private nonisolated static func uniqueDestination(
+        directory: URL,
+        baseName: String,
+        fileExtension: String
+    ) -> URL {
+        let manager = FileManager.default
+        for suffix in 0..<10_000 {
+            let name = suffix == 0 ? baseName : "\(baseName)-\(suffix + 1)"
+            let candidate = directory
+                .appendingPathComponent(name, isDirectory: false)
+                .appendingPathExtension(fileExtension)
+            if !manager.fileExists(atPath: candidate.path) { return candidate }
+        }
+        return directory
+            .appendingPathComponent("\(baseName)-\(UUID().uuidString.lowercased())")
+            .appendingPathExtension(fileExtension)
+    }
+
+    private nonisolated static func sanitizedName(_ raw: String, fallback: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let scalars = raw.lowercased().unicodeScalars.map { scalar -> Character in
+            allowed.contains(scalar) ? Character(String(scalar)) : "-"
+        }
+        let collapsed = String(scalars)
+            .split(separator: "-", omittingEmptySubsequences: true)
+            .joined(separator: "-")
+        return String((collapsed.isEmpty ? fallback : collapsed).prefix(64))
+    }
+
+    private nonisolated static func isContained(_ url: URL, in directory: URL) -> Bool {
+        let base = resolvedURLIncludingExistingAncestors(directory).path
+        let candidate = resolvedURLIncludingExistingAncestors(url).path
+        return candidate == base || candidate.hasPrefix(base + "/")
+    }
+
+    /// `resolvingSymlinksInPath()` does not reliably resolve an existing
+    /// symlink when a later path component has not been created yet. Resolve
+    /// the closest existing ancestor first, then restore the missing suffix.
+    private nonisolated static func resolvedURLIncludingExistingAncestors(_ url: URL) -> URL {
+        let manager = FileManager.default
+        var existing = url.standardizedFileURL
+        var missingComponents: [String] = []
+        while !manager.fileExists(atPath: existing.path) {
+            let parent = existing.deletingLastPathComponent()
+            guard parent.path != existing.path else { break }
+            missingComponents.insert(existing.lastPathComponent, at: 0)
+            existing = parent
+        }
+        var resolved = existing.resolvingSymlinksInPath()
+        for component in missingComponents {
+            resolved.appendPathComponent(component)
+        }
+        return resolved.standardizedFileURL
+    }
+
+    private enum MarkdownAssetError: LocalizedError {
+        case documentOutsideWorkspace
+        case assetDirectoryOutsideWorkspace
+        case unsupportedImage(String)
+        case imageTooLarge(String)
+        case emptyImage(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .documentOutsideWorkspace:
+                "Images can only be added to Markdown files inside the open project."
+            case .assetDirectoryOutsideWorkspace:
+                "The Markdown asset folder resolves outside the open project."
+            case let .unsupportedImage(name):
+                "\(name) is not a supported raster image."
+            case let .imageTooLarge(name):
+                "\(name) is larger than \(maxImageBytes / 1_048_576) MB."
+            case let .emptyImage(name):
+                "\(name) contains no image data."
+            }
+        }
+    }
+}
+
 /// NSAttributedString's DOCX importer/exporter is synchronous. A dedicated
 /// actor serializes rich-document work off the MainActor, so rapid file switches
 /// cannot pile up AppKit parses or freeze terminal rendering.
@@ -179,6 +394,7 @@ struct FilePreviewView: View {
     @State private var isSaving = false
     @State private var loadTask: Task<Void, Never>?
     @State private var saveTask: Task<Void, Never>?
+    @State private var markdownAutosaveTask: Task<Void, Never>?
     @State private var highlightTask: Task<Void, Never>?
     @State private var documentZoom: CGFloat = 1
     @State private var previewRevision = 0
@@ -239,10 +455,14 @@ struct FilePreviewView: View {
         // never pays the highlight cost.
         .onChange(of: colorScheme) { _, _ in refreshHighlight() }
         .onChange(of: isEditingText) { _, editing in if !editing { refreshHighlight() } }
-        .onChange(of: draft) { _, _ in if !isEditingText { refreshHighlight() } }
+        .onChange(of: draft) { _, _ in
+            if !isEditingText { refreshHighlight() }
+            scheduleMarkdownAutosave()
+        }
         .onDisappear {
             loadTask?.cancel()
             saveTask?.cancel()
+            markdownAutosaveTask?.cancel()
             highlightTask?.cancel()
         }
         .confirmationDialog(
@@ -430,7 +650,15 @@ struct FilePreviewView: View {
             if showMarkdownSource {
                 editor
             } else {
-                MarkdownDocumentView(source: draft, zoom: documentZoom)
+                MarkdownRenderedEditor(
+                    text: $draft,
+                    markdownURL: loadedURL ?? url,
+                    workspaceRoot: workspaceRoot,
+                    zoom: $documentZoom
+                ) { message in
+                    saveError = message
+                    ToastCenter.shared.show(message, style: .error)
+                }
             }
         case .image:
             if let image = NSImage(contentsOf: loadedURL ?? url) {
@@ -486,6 +714,7 @@ struct FilePreviewView: View {
 
     private func beginLoad(_ target: URL) {
         loadTask?.cancel()
+        markdownAutosaveTask?.cancel()
         highlightTask?.cancel()
         loadingURL = target
         isLoading = true
@@ -566,7 +795,11 @@ struct FilePreviewView: View {
     /// Save exactly the snapshot currently displayed. `loadedURL` never moves
     /// until a load finishes, eliminating the old wrong-file race during fast
     /// tree navigation. The mtime check makes concurrent agent edits explicit.
-    private func save(force: Bool = false, advancePendingAction: Bool = false) {
+    private func save(
+        force: Bool = false,
+        advancePendingAction: Bool = false,
+        silently: Bool = false
+    ) {
         guard let target = loadedURL, !isSaving else { return }
         let expectedDate = loadedModificationDate
         let textSnapshot = draft
@@ -609,13 +842,39 @@ struct FilePreviewView: View {
                 else { savedText = textSnapshot }
                 if case .html = content { previewRevision &+= 1 }
                 saveError = nil
-                ToastCenter.shared.show("Saved \(target.lastPathComponent)", style: .success)
+                if !silently {
+                    ToastCenter.shared.show("Saved \(target.lastPathComponent)", style: .success)
+                }
                 if advancePendingAction { completePendingAction() }
+                if case .markdown = content, draft != savedText {
+                    scheduleMarkdownAutosave()
+                }
             case .changedOnDisk:
                 showExternalChangePrompt = true
             case let .failed(message):
                 saveError = message
                 ToastCenter.shared.show(message, style: .error)
+            }
+        }
+    }
+
+    /// Rendered Markdown is a direct editor rather than a preview/source
+    /// toggle. Save after a short quiet period so the document behaves like a
+    /// modern notes surface while retaining the existing mtime conflict guard.
+    private func scheduleMarkdownAutosave() {
+        markdownAutosaveTask?.cancel()
+        guard case .markdown = content,
+              loadedURL != nil,
+              !isLoading,
+              draft != savedText,
+              !showExternalChangePrompt else { return }
+        markdownAutosaveTask = Task {
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled else { return }
+            if isSaving {
+                scheduleMarkdownAutosave()
+            } else {
+                save(silently: true)
             }
         }
     }
@@ -632,6 +891,566 @@ struct FilePreviewView: View {
             markdown: text,
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
         )) ?? AttributedString(text)
+    }
+}
+
+/// Lightweight syntax roles for the rendered Markdown editor. The spans are
+/// computed off the main actor and applied as TextKit temporary attributes, so
+/// the file remains exact Markdown source even though it reads like a document.
+struct MarkdownEditingStyle: Sendable {
+    enum Role: Equatable, Sendable {
+        case heading(Int)
+        case quote
+        case codeBlock
+        case bold
+        case italic
+        case inlineCode
+        case link
+        case syntax
+    }
+
+    struct Span: Equatable, Sendable {
+        let range: NSRange
+        let role: Role
+    }
+
+    nonisolated static func spans(in source: String) -> [Span] {
+        guard !source.isEmpty else { return [] }
+        let fullRange = NSRange(location: 0, length: (source as NSString).length)
+        var result: [Span] = []
+
+        func collect(
+            _ pattern: String,
+            options: NSRegularExpression.Options = [],
+            role: (NSTextCheckingResult) -> Role?,
+            contentGroup: Int = 0,
+            syntaxGroups: [Int] = []
+        ) {
+            guard let expression = try? NSRegularExpression(pattern: pattern, options: options) else { return }
+            expression.enumerateMatches(in: source, range: fullRange) { match, _, _ in
+                guard let match,
+                      let resolvedRole = role(match),
+                      contentGroup < match.numberOfRanges else { return }
+                let range = match.range(at: contentGroup)
+                if range.location != NSNotFound, range.length > 0 {
+                    result.append(Span(range: range, role: resolvedRole))
+                }
+                for group in syntaxGroups where group < match.numberOfRanges {
+                    let syntaxRange = match.range(at: group)
+                    if syntaxRange.location != NSNotFound, syntaxRange.length > 0 {
+                        result.append(Span(range: syntaxRange, role: .syntax))
+                    }
+                }
+            }
+        }
+
+        // Inline roles are applied first. Block roles that overlap them are
+        // appended later and therefore remain visually dominant.
+        collect(#"(?<!\*)(\*\*)([^*\n]+)(\*\*)(?!\*)"#, role: { _ in .bold }, contentGroup: 2, syntaxGroups: [1, 3])
+        collect(#"(?<!_)(__)([^_\n]+)(__)(?!_)"#, role: { _ in .bold }, contentGroup: 2, syntaxGroups: [1, 3])
+        collect(#"(?<!\*)(\*)([^*\n]+)(\*)(?!\*)"#, role: { _ in .italic }, contentGroup: 2, syntaxGroups: [1, 3])
+        collect(#"(?<!_)(_)([^_\n]+)(_)(?!_)"#, role: { _ in .italic }, contentGroup: 2, syntaxGroups: [1, 3])
+        collect(#"(`)([^`\n]+)(`)"#, role: { _ in .inlineCode }, contentGroup: 2, syntaxGroups: [1, 3])
+        collect(
+            #"(!?\[)([^]\r\n]+)(\]\()([^)\r\n]+)(\))"#,
+            role: { _ in .link },
+            contentGroup: 2,
+            syntaxGroups: [1, 3, 4, 5]
+        )
+        // README files commonly mix a small, presentational HTML subset into
+        // Markdown. Keep the exact source editable, but style the human text
+        // and collapse the tags just like Markdown delimiters. The raw-source
+        // toggle remains available for changing attributes/URLs explicitly.
+        collect(#"(?is)(<h([1-6])\b[^>]*>)(.*?)(</h\2\s*>)"#, role: { match in
+            let levelRange = match.range(at: 2)
+            guard levelRange.location != NSNotFound else { return nil }
+            return .heading(Int((source as NSString).substring(with: levelRange)) ?? 1)
+        }, contentGroup: 3, syntaxGroups: [1, 4])
+        collect(#"(?is)(<strong\b[^>]*>)(.*?)(</strong\s*>)"#, role: { _ in .bold }, contentGroup: 2, syntaxGroups: [1, 3])
+        collect(#"(?is)(<(?:em|i)\b[^>]*>)(.*?)(</(?:em|i)\s*>)"#, role: { _ in .italic }, contentGroup: 2, syntaxGroups: [1, 3])
+        collect(#"(?is)(<code\b[^>]*>)(.*?)(</code\s*>)"#, role: { _ in .inlineCode }, contentGroup: 2, syntaxGroups: [1, 3])
+        collect(#"(?is)(<a\b[^>]*>)(.*?)(</a\s*>)"#, role: { _ in .link }, contentGroup: 2, syntaxGroups: [1, 3])
+        collect(#"(?is)<[^>]+>"#, role: { _ in .syntax })
+        collect(#"(?m)^(#{1,6})(?:[ \t]+)(.+)$"#, role: { match in
+            .heading(min(6, match.range(at: 1).length))
+        }, contentGroup: 2, syntaxGroups: [1])
+        collect(#"(?m)^([ \t]*>[ \t]?)(.*)$"#, role: { _ in .quote }, contentGroup: 2, syntaxGroups: [1])
+        collect(#"(?m)^([ \t]*(?:[-+*]|[0-9]+\.)[ \t]+)"#, role: { _ in .syntax })
+        collect(
+            #"(?ms)^([ \t]*(?:```|~~~)[^\n]*\n).*?^([ \t]*(?:```|~~~)[ \t]*$)"#,
+            role: { _ in .codeBlock }
+        )
+        return Array(result.prefix(20_000))
+    }
+}
+
+/// Editable, styled Markdown with native selection, undo, find, contextual
+/// editing, image paste/drop, and trackpad/Command-scroll magnification.
+private struct MarkdownRenderedEditor: NSViewRepresentable {
+    @Binding var text: String
+    let markdownURL: URL
+    let workspaceRoot: URL?
+    @Binding var zoom: CGFloat
+    let onError: (String) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, zoom: $zoom)
+    }
+
+    func makeNSView(context: Context) -> MarkdownMagnifyingScrollView {
+        let scrollView = MarkdownMagnifyingScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = .textBackgroundColor
+        scrollView.allowsMagnification = true
+        scrollView.minMagnification = 0.65
+        scrollView.maxMagnification = 2
+
+        let textView = MarkdownNativeTextView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+        textView.delegate = context.coordinator
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.usesFindBar = true
+        textView.isAutomaticSpellingCorrectionEnabled = true
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.textContainer?.containerSize = NSSize(
+            width: 0,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainerInset = NSSize(width: 28, height: 24)
+        textView.backgroundColor = .textBackgroundColor
+        textView.font = .systemFont(ofSize: 15)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 3
+        paragraph.paragraphSpacing = 5
+        textView.defaultParagraphStyle = paragraph
+        textView.typingAttributes = [
+            .font: NSFont.systemFont(ofSize: 15),
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: paragraph,
+        ]
+        textView.string = text
+        textView.registerForDraggedTypes([.fileURL, .png, .tiff])
+        textView.onImageImports = { [weak coordinator = context.coordinator] imports, range in
+            coordinator?.importImages(imports, at: range)
+        }
+        textView.onChooseImages = { [weak coordinator = context.coordinator] range in
+            coordinator?.chooseImages(at: range)
+        }
+
+        scrollView.documentView = textView
+        scrollView.magnification = zoom
+        scrollView.onMagnificationChanged = { [weak coordinator = context.coordinator] value in
+            coordinator?.zoom = value
+        }
+        context.coordinator.textView = textView
+        context.coordinator.markdownURL = markdownURL
+        context.coordinator.workspaceRoot = workspaceRoot
+        context.coordinator.onError = onError
+        context.coordinator.scheduleStyling(immediately: true)
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: MarkdownMagnifyingScrollView, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.markdownURL = markdownURL
+        coordinator.workspaceRoot = workspaceRoot
+        coordinator.onError = onError
+        guard let textView = coordinator.textView else { return }
+
+        if textView.string != text {
+            let selection = textView.selectedRange()
+            coordinator.isApplyingExternalValue = true
+            textView.string = text
+            let location = min(selection.location, (text as NSString).length)
+            let length = min(selection.length, (text as NSString).length - location)
+            textView.setSelectedRange(NSRange(location: location, length: length))
+            coordinator.isApplyingExternalValue = false
+            coordinator.scheduleStyling(immediately: true)
+        }
+        if abs(scrollView.magnification - zoom) > 0.001 {
+            let center = textView.convert(
+                NSPoint(x: scrollView.contentView.bounds.midX, y: scrollView.contentView.bounds.midY),
+                from: scrollView.contentView
+            )
+            scrollView.setMagnification(zoom, centeredAt: center)
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        @Binding var text: String
+        @Binding var zoom: CGFloat
+        weak var textView: MarkdownNativeTextView?
+        var markdownURL: URL?
+        var workspaceRoot: URL?
+        var onError: ((String) -> Void)?
+        var isApplyingExternalValue = false
+        private var styleTask: Task<Void, Never>?
+        private var importTask: Task<Void, Never>?
+
+        init(text: Binding<String>, zoom: Binding<CGFloat>) {
+            _text = text
+            _zoom = zoom
+        }
+
+        deinit {
+            styleTask?.cancel()
+            importTask?.cancel()
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard !isApplyingExternalValue,
+                  let textView = notification.object as? MarkdownNativeTextView else { return }
+            text = textView.string
+            scheduleStyling(immediately: false)
+        }
+
+        func scheduleStyling(immediately: Bool) {
+            styleTask?.cancel()
+            guard let textView else { return }
+            let source = textView.string
+            styleTask = Task { [weak self, weak textView] in
+                if !immediately {
+                    try? await Task.sleep(for: .milliseconds(70))
+                }
+                guard !Task.isCancelled else { return }
+                let spans = await Task.detached(priority: .utility) {
+                    MarkdownEditingStyle.spans(in: source)
+                }.value
+                guard !Task.isCancelled,
+                      let self,
+                      let textView,
+                      textView.string == source else { return }
+                self.apply(spans, to: textView)
+            }
+        }
+
+        func importImages(_ imports: [MarkdownImageImport], at requestedRange: NSRange) {
+            guard let markdownURL else { return }
+            let workspaceRoot = workspaceRoot
+            // Preserve every paste/drop and serialize writes so rapid imports
+            // cannot race for the same unique filename.
+            let previousImport = importTask
+            importTask = Task { [weak self] in
+                if let previousImport { await previousImport.value }
+                guard !Task.isCancelled else { return }
+                let batch = await Task.detached(priority: .userInitiated) {
+                    MarkdownAssetStore.importImages(
+                        imports,
+                        markdownURL: markdownURL,
+                        workspaceRoot: workspaceRoot
+                    )
+                }.value
+                guard !Task.isCancelled, let self, let textView = self.textView else { return }
+                if !batch.insertions.isEmpty {
+                    let safeLocation = min(requestedRange.location, (textView.string as NSString).length)
+                    let safeLength = min(
+                        requestedRange.length,
+                        (textView.string as NSString).length - safeLocation
+                    )
+                    let range = NSRange(location: safeLocation, length: safeLength)
+                    let insertion = self.imageInsertionText(
+                        batch.insertions.map(\.markdown),
+                        source: textView.string,
+                        range: range
+                    )
+                    textView.insertText(insertion, replacementRange: range)
+                }
+                if !batch.errors.isEmpty {
+                    self.onError?(batch.errors.joined(separator: " "))
+                }
+            }
+        }
+
+        func chooseImages(at range: NSRange) {
+            let panel = NSOpenPanel()
+            panel.title = "Add images to Markdown"
+            panel.prompt = "Add"
+            panel.allowedContentTypes = [.image]
+            panel.allowsMultipleSelection = true
+            panel.canChooseDirectories = false
+            guard panel.runModal() == .OK else { return }
+            importImages(panel.urls.map(MarkdownImageImport.file), at: range)
+        }
+
+        private func imageInsertionText(_ snippets: [String], source: String, range: NSRange) -> String {
+            let nsSource = source as NSString
+            var insertion = snippets.joined(separator: "\n")
+            if range.location > 0,
+               nsSource.substring(with: NSRange(location: range.location - 1, length: 1)) != "\n" {
+                insertion = "\n" + insertion
+            }
+            let end = NSMaxRange(range)
+            if end < nsSource.length,
+               nsSource.substring(with: NSRange(location: end, length: 1)) != "\n" {
+                insertion += "\n"
+            }
+            return insertion
+        }
+
+        private func apply(_ spans: [MarkdownEditingStyle.Span], to textView: NSTextView) {
+            guard let layoutManager = textView.layoutManager else { return }
+            let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+            for key in [
+                NSAttributedString.Key.font,
+                .foregroundColor,
+                .backgroundColor,
+                .underlineStyle,
+                .obliqueness,
+            ] {
+                layoutManager.removeTemporaryAttribute(key, forCharacterRange: fullRange)
+            }
+
+            let bodySize: CGFloat = 15
+            for span in spans where NSMaxRange(span.range) <= fullRange.length {
+                switch span.role {
+                case let .heading(level):
+                    let sizes: [CGFloat] = [0, 30, 25, 21, 18, 16, 15]
+                    layoutManager.addTemporaryAttribute(
+                        .font,
+                        value: NSFont.systemFont(ofSize: sizes[min(6, level)], weight: level <= 2 ? .bold : .semibold),
+                        forCharacterRange: span.range
+                    )
+                case .quote:
+                    layoutManager.addTemporaryAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, forCharacterRange: span.range)
+                    layoutManager.addTemporaryAttribute(.obliqueness, value: 0.12, forCharacterRange: span.range)
+                case .codeBlock:
+                    layoutManager.addTemporaryAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), forCharacterRange: span.range)
+                    layoutManager.addTemporaryAttribute(.foregroundColor, value: NSColor.labelColor, forCharacterRange: span.range)
+                    layoutManager.addTemporaryAttribute(.backgroundColor, value: NSColor.controlBackgroundColor, forCharacterRange: span.range)
+                case .bold:
+                    layoutManager.addTemporaryAttribute(.font, value: NSFont.systemFont(ofSize: bodySize, weight: .semibold), forCharacterRange: span.range)
+                case .italic:
+                    layoutManager.addTemporaryAttribute(.obliqueness, value: 0.16, forCharacterRange: span.range)
+                case .inlineCode:
+                    layoutManager.addTemporaryAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), forCharacterRange: span.range)
+                    layoutManager.addTemporaryAttribute(.backgroundColor, value: NSColor.controlBackgroundColor, forCharacterRange: span.range)
+                case .link:
+                    layoutManager.addTemporaryAttribute(.foregroundColor, value: NSColor.linkColor, forCharacterRange: span.range)
+                    layoutManager.addTemporaryAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, forCharacterRange: span.range)
+                case .syntax:
+                    // Default mode reads like a document: syntax occupies an
+                    // effectively zero-width run while the source stays exact
+                    // underneath. The toolbar's source toggle is the explicit
+                    // escape hatch for editing delimiters and HTML attributes.
+                    layoutManager.addTemporaryAttribute(.font, value: NSFont.systemFont(ofSize: 0.1), forCharacterRange: span.range)
+                    layoutManager.addTemporaryAttribute(.foregroundColor, value: NSColor.clear, forCharacterRange: span.range)
+                }
+            }
+        }
+    }
+}
+
+private final class MarkdownMagnifyingScrollView: NSScrollView {
+    var onMagnificationChanged: ((CGFloat) -> Void)?
+
+    override func magnify(with event: NSEvent) {
+        super.magnify(with: event)
+        onMagnificationChanged?(magnification)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers.contains(.command) else {
+            super.scrollWheel(with: event)
+            return
+        }
+        let delta = event.scrollingDeltaY == 0 ? event.scrollingDeltaX : event.scrollingDeltaY
+        let target = min(maxMagnification, max(minMagnification, magnification + delta * 0.01))
+        guard abs(target - magnification) > 0.001 else { return }
+        let center = documentView?.convert(event.locationInWindow, from: nil)
+            ?? NSPoint(x: contentView.bounds.midX, y: contentView.bounds.midY)
+        setMagnification(target, centeredAt: center)
+        onMagnificationChanged?(target)
+    }
+}
+
+@MainActor
+private final class MarkdownNativeTextView: NSTextView {
+    var onImageImports: (([MarkdownImageImport], NSRange) -> Void)?
+    var onChooseImages: ((NSRange) -> Void)?
+
+    override func paste(_ sender: Any?) {
+        let imports = MarkdownPasteboardReader.imports(from: .general)
+        guard !imports.isEmpty else {
+            super.paste(sender)
+            return
+        }
+        onImageImports?(imports, selectedRange())
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        MarkdownPasteboardReader.containsImages(sender.draggingPasteboard)
+            ? .copy
+            : super.draggingEntered(sender)
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        let imports = MarkdownPasteboardReader.imports(from: sender.draggingPasteboard)
+        guard !imports.isEmpty else { return super.performDragOperation(sender) }
+        onImageImports?(imports, insertionRange(for: sender))
+        return true
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        menu.addItem(.separator())
+        addItem("Bold", action: #selector(formatBold(_:)), to: menu)
+        addItem("Italic", action: #selector(formatItalic(_:)), to: menu)
+        addItem("Inline Code", action: #selector(formatInlineCode(_:)), to: menu)
+        addItem("Link", action: #selector(formatLink(_:)), to: menu)
+        addItem("Heading", action: #selector(formatHeading(_:)), to: menu)
+        addItem("Bulleted List", action: #selector(formatBulletedList(_:)), to: menu)
+        menu.addItem(.separator())
+        addItem("Insert Image…", action: #selector(chooseImage(_:)), to: menu)
+        return menu
+    }
+
+    private func addItem(_ title: String, action: Selector, to menu: NSMenu) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+    }
+
+    @objc private func formatBold(_ sender: Any?) {
+        wrapSelection(prefix: "**", suffix: "**", placeholder: "bold text")
+    }
+
+    @objc private func formatItalic(_ sender: Any?) {
+        wrapSelection(prefix: "*", suffix: "*", placeholder: "italic text")
+    }
+
+    @objc private func formatInlineCode(_ sender: Any?) {
+        wrapSelection(prefix: "`", suffix: "`", placeholder: "code")
+    }
+
+    @objc private func formatLink(_ sender: Any?) {
+        let range = selectedRange()
+        let selected = range.length > 0 ? (string as NSString).substring(with: range) : "link text"
+        let replacement = "[\(selected)](https://)"
+        insertText(replacement, replacementRange: range)
+        if range.length == 0 {
+            setSelectedRange(NSRange(location: range.location + 1, length: selected.utf16.count))
+        } else {
+            setSelectedRange(NSRange(location: range.location + selected.utf16.count + 3, length: 8))
+        }
+    }
+
+    @objc private func formatHeading(_ sender: Any?) {
+        transformSelectedLines { line in
+            let expression = try? NSRegularExpression(pattern: #"^#{1,6}[ \t]+"#)
+            let range = NSRange(location: 0, length: (line as NSString).length)
+            if expression?.firstMatch(in: line, range: range) != nil {
+                return expression?.stringByReplacingMatches(in: line, range: range, withTemplate: "") ?? line
+            }
+            return line.isEmpty ? line : "## \(line)"
+        }
+    }
+
+    @objc private func formatBulletedList(_ sender: Any?) {
+        let paragraphRange = (string as NSString).paragraphRange(for: selectedRange())
+        let source = (string as NSString).substring(with: paragraphRange)
+        let lines = source.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let nonempty = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        let alreadyBulleted = !nonempty.isEmpty && nonempty.allSatisfy {
+            $0.trimmingCharacters(in: .whitespaces).hasPrefix("- ")
+        }
+        transformSelectedLines { line in
+            guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return line }
+            if alreadyBulleted,
+               let marker = line.range(of: "- ") {
+                return String(line[..<marker.lowerBound]) + line[marker.upperBound...]
+            }
+            return "- \(line)"
+        }
+    }
+
+    @objc private func chooseImage(_ sender: Any?) {
+        onChooseImages?(selectedRange())
+    }
+
+    private func wrapSelection(prefix: String, suffix: String, placeholder: String) {
+        let range = selectedRange()
+        let selected = range.length > 0 ? (string as NSString).substring(with: range) : placeholder
+        insertText(prefix + selected + suffix, replacementRange: range)
+        setSelectedRange(NSRange(location: range.location + prefix.utf16.count, length: selected.utf16.count))
+    }
+
+    private func transformSelectedLines(_ transform: (String) -> String) {
+        let range = (string as NSString).paragraphRange(for: selectedRange())
+        let source = (string as NSString).substring(with: range)
+        let replacement = source
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { transform(String($0)) }
+            .joined(separator: "\n")
+        insertText(replacement, replacementRange: range)
+        setSelectedRange(NSRange(location: range.location, length: replacement.utf16.count))
+    }
+
+    private func insertionRange(for sender: any NSDraggingInfo) -> NSRange {
+        guard let layoutManager, let textContainer else { return selectedRange() }
+        let local = convert(sender.draggingLocation, from: nil)
+        let point = NSPoint(
+            x: local.x - textContainerOrigin.x,
+            y: local.y - textContainerOrigin.y
+        )
+        let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
+        let character = min(
+            layoutManager.characterIndexForGlyph(at: glyph),
+            (string as NSString).length
+        )
+        return NSRange(location: character, length: 0)
+    }
+}
+
+@MainActor
+private enum MarkdownPasteboardReader {
+    static func containsImages(_ pasteboard: NSPasteboard) -> Bool {
+        let imageExtensions = Set(["png", "jpg", "jpeg", "gif", "heic", "webp", "bmp", "tif", "tiff"])
+        if let values = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL], values.contains(where: { imageExtensions.contains($0.pathExtension.lowercased()) }) {
+            return true
+        }
+        return pasteboard.availableType(from: [.png, .tiff]) != nil
+    }
+
+    static func imports(from pasteboard: NSPasteboard) -> [MarkdownImageImport] {
+        let imageExtensions = Set(["png", "jpg", "jpeg", "gif", "heic", "webp", "bmp", "tif", "tiff"])
+        if let values = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] {
+            let files = values.filter { imageExtensions.contains($0.pathExtension.lowercased()) }
+            if !files.isEmpty { return files.map(MarkdownImageImport.file) }
+        }
+
+        if let png = pasteboard.data(forType: .png), !png.isEmpty {
+            return [.data(png, suggestedName: "pasted-image", fileExtension: "png")]
+        }
+        guard let image = NSImage(pasteboard: pasteboard),
+              let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:]) else { return [] }
+        return [.data(png, suggestedName: "pasted-image", fileExtension: "png")]
     }
 }
 
@@ -1177,51 +1996,33 @@ struct WorkspaceRailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 7) {
-                Image(systemName: "folder.fill")
-                    .foregroundStyle(Color.accentColor)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Files")
-                        .font(.caption.weight(.semibold))
-                    Text(root.lastPathComponent)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Spacer(minLength: 4)
-                Button(action: refresh) { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.borderless)
-                    .help("Refresh files")
-                Button(action: close) { Image(systemName: "sidebar.right") }
-                    .buttonStyle(.borderless)
-                    .help("Close Files (Command-B)")
-                    .accessibilityLabel("Close file browser")
-            }
-            .padding(.horizontal, 9)
-            .frame(height: 28)
-            .background(.thinMaterial, in: Capsule(style: .continuous))
-            .overlay {
-                Capsule(style: .continuous)
-                    .stroke(Color.primary.opacity(0.11), lineWidth: 0.75)
-            }
-            .shadow(color: .black.opacity(0.035), radius: 2, y: 1)
-            .padding(.horizontal, 5)
-            .padding(.top, 4)
-            .padding(.bottom, 4)
-
             HStack(spacing: 6) {
+                Button(action: close) {
+                    Image(systemName: "folder.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.borderless)
+                .help("Hide \(root.lastPathComponent) files (Command-B)")
+                .accessibilityLabel("Close file browser")
                 Image(systemName: "magnifyingglass")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 TextField("Search files", text: $searchText)
                     .textFieldStyle(.plain)
+                Button(action: refresh) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help("Refresh files")
             }
             .padding(.horizontal, 8)
-            .frame(height: 27)
+            .frame(height: 30)
             .background(.quaternary.opacity(0.38), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .padding(.horizontal, 6)
-            .padding(.bottom, 5)
+            .padding(.vertical, 6)
 
             if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 ScrollView {
@@ -1268,12 +2069,18 @@ struct WorkspaceRailView: View {
                 .scrollBounceBehavior(.basedOnSize)
             }
         }
-        // The persisted preference stays at least 188 pt, but the responsive
+        // The persisted preference stays at least 164 pt, but the responsive
         // shell may temporarily compress Files to 150 pt at minimum window size.
         .frame(minWidth: 150, maxWidth: .infinity, maxHeight: .infinity)
         .background {
             SidebarBackdropView(appearance: settings.sidebarAppearance)
         }
+        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.52), lineWidth: 0.65)
+        }
+        .padding(4)
         .task { tree.load(root) }
         .onChange(of: searchText) { _, query in tree.search(query) }
         .onChange(of: watcher.changeToken) { _, _ in

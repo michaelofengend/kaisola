@@ -34,19 +34,13 @@ extension GitService {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = arguments
         process.currentDirectoryURL = repoRoot
-        let out = Pipe()
-        let err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        do { try process.run() } catch {
+        let capture: (out: Data, err: Data)
+        do { capture = try GitProcessCapture.run(process) } catch {
             throw GitError.commandFailed(error.localizedDescription)
         }
-        let outData = out.fileHandleForReading.readDataToEndOfFile()
-        let errData = err.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
         guard process.terminationStatus != 0 else { return }
-        let raw = String(data: errData, encoding: .utf8).flatMap { $0.isEmpty ? nil : $0 }
-            ?? String(data: outData, encoding: .utf8)
+        let raw = String(data: capture.err, encoding: .utf8).flatMap { $0.isEmpty ? nil : $0 }
+            ?? String(data: capture.out, encoding: .utf8)
             ?? "git apply failed"
         let message = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if message.range(of: "conflict", options: .caseInsensitive) != nil {

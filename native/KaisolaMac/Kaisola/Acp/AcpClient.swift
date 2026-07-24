@@ -93,7 +93,8 @@ actor AcpClient {
         arguments: [String],
         environment: [String: String],
         cwd: String,
-        mcpServers: [JSONValue]
+        mcpServers: [JSONValue],
+        resumeSessionID: String? = nil
     ) async throws -> AcpSessionInfo {
         workspaceRoot = (cwd as NSString).standardizingPath
         do {
@@ -120,23 +121,46 @@ actor AcpClient {
             capabilities = Self.parseCapabilities(initResult)
 
             let sessionServers = sessionMcpServers(mcpServers)
-            let newResult: JSONValue
-            do {
-                newResult = try await request("session/new", params: .object([
-                    "cwd": .string(cwd),
-                    "mcpServers": .array(sessionServers),
-                ]))
-            } catch let AcpClientError.requestFailed(message)
-                where !sessionServers.isEmpty
-                    && message.localizedCaseInsensitiveContains("invalid params") {
-                // Match Electron: one malformed/rejected tool entry must degrade
-                // to a working tool-less chat instead of killing the session.
-                newResult = try await request("session/new", params: .object([
-                    "cwd": .string(cwd),
-                    "mcpServers": .array([]),
-                ]))
+            func openSession(_ method: String, priorID: String? = nil) async throws -> JSONValue {
+                func parameters(servers: [JSONValue]) -> JSONValue {
+                    var values: [String: JSONValue] = [
+                        "cwd": .string(cwd),
+                        "mcpServers": .array(servers),
+                    ]
+                    if let priorID { values["sessionId"] = .string(priorID) }
+                    return .object(values)
+                }
+                do {
+                    return try await request(method, params: parameters(servers: sessionServers))
+                } catch let AcpClientError.requestFailed(message)
+                    where !sessionServers.isEmpty
+                        && message.localizedCaseInsensitiveContains("invalid params") {
+                    // Match Electron: one malformed/rejected tool entry must
+                    // degrade to a working tool-less chat, including resume.
+                    return try await request(method, params: parameters(servers: []))
+                }
             }
-            guard let object = newResult.objectValue, let sessionID = object["sessionId"]?.stringValue else {
+
+            var sessionResult: JSONValue?
+            var resumedID: String?
+            if let resumeSessionID {
+                if capabilities.resumeSession,
+                   let result = try? await openSession("session/resume", priorID: resumeSessionID) {
+                    sessionResult = result
+                    resumedID = resumeSessionID
+                }
+                if sessionResult == nil,
+                   capabilities.loadSession,
+                   let result = try? await openSession("session/load", priorID: resumeSessionID) {
+                    sessionResult = result
+                    resumedID = resumeSessionID
+                }
+            }
+            if sessionResult == nil {
+                sessionResult = try await openSession("session/new")
+            }
+            guard let object = sessionResult?.objectValue,
+                  let sessionID = object["sessionId"]?.stringValue ?? resumedID else {
                 throw AcpClientError.malformedResponse
             }
             self.sessionID = sessionID
@@ -747,6 +771,9 @@ actor AcpClient {
         var caps = AcpAgentCapabilities()
         guard let agent = result.objectValue?["agentCapabilities"]?.objectValue else { return caps }
         caps.loadSession = agent["loadSession"]?.boolValue ?? false
+        let session = agent["sessionCapabilities"]?.objectValue
+        caps.resumeSession = session?["resume"]?.boolValue ?? false
+        caps.closeSession = session?["close"]?.boolValue ?? false
         caps.promptQueueing = agent["_meta"]?.objectValue?["claudeCode"]?.objectValue?["promptQueueing"]?.boolValue ?? false
         let mcp = agent["mcpCapabilities"]?.objectValue
         caps.mcpHTTP = mcp?["http"]?.boolValue ?? false

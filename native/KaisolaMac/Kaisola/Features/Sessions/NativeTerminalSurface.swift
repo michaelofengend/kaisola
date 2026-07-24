@@ -408,8 +408,78 @@ class ReadOnlyTerminalView: TerminalView {
 /// path stays intact and lands in the delegate's `send`, which the surface
 /// forwards to the broker controller connection.
 final class OwnedTerminalView: ReadOnlyTerminalView {
+    private var fileDropActive = false
+
     override func send(source: Terminal, data: ArraySlice<UInt8>) {
         terminalDelegate?.send(source: self, data: data)
+    }
+
+    /// Finder/iTerm-style file drops are bracketed-pasted into the active CLI.
+    /// Claude and Codex recognize an image path as an image attachment; using
+    /// SwiftTerm's paste path (rather than a raw broker write) preserves the
+    /// terminal mode those TUIs negotiated and correctly handles spaces.
+    static func droppedFileText(_ urls: [URL]) -> String {
+        let paths = urls
+            .filter(\.isFileURL)
+            .map { shellQuote($0.standardizedFileURL.path) }
+        guard !paths.isEmpty else { return "" }
+        return paths.joined(separator: " ") + " "
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private func droppedFileURLs(from pasteboard: NSPasteboard) -> [URL] {
+        (pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL]) ?? []
+    }
+
+    private func setFileDropActive(_ active: Bool) {
+        guard fileDropActive != active else { return }
+        fileDropActive = active
+        wantsLayer = true
+        layer?.borderWidth = active ? 2 : 0
+        layer?.borderColor = active ? NSColor.controlAccentColor.withAlphaComponent(0.72).cgColor : nil
+        layer?.cornerRadius = active ? 9 : 0
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        let accepts = !droppedFileURLs(from: sender.draggingPasteboard).isEmpty
+        setFileDropActive(accepts)
+        return accepts ? .copy : []
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        let accepts = !droppedFileURLs(from: sender.draggingPasteboard).isEmpty
+        setFileDropActive(accepts)
+        return accepts ? .copy : []
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        setFileDropActive(false)
+    }
+
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        !droppedFileURLs(from: sender.draggingPasteboard).isEmpty
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        defer { setFileDropActive(false) }
+        let text = Self.droppedFileText(droppedFileURLs(from: sender.draggingPasteboard))
+        guard !text.isEmpty else { return false }
+        window?.makeFirstResponder(self)
+        let terminal = getTerminal()
+        if terminal.bracketedPasteMode {
+            send(source: terminal, data: ArraySlice(Array("\u{1B}[200~".utf8)))
+        }
+        send(source: terminal, data: ArraySlice(Array(text.utf8)))
+        if terminal.bracketedPasteMode {
+            send(source: terminal, data: ArraySlice(Array("\u{1B}[201~".utf8)))
+        }
+        return true
     }
 
     /// Shift+Enter types a newline instead of submitting — ESC CR, the mapping
@@ -423,11 +493,14 @@ final class OwnedTerminalView: ReadOnlyTerminalView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil {
+            unregisterDraggedTypes()
+            setFileDropActive(false)
             if let shiftEnterMonitor {
                 NSEvent.removeMonitor(shiftEnterMonitor)
                 self.shiftEnterMonitor = nil
             }
         } else if shiftEnterMonitor == nil {
+            registerForDraggedTypes([.fileURL])
             shiftEnterMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard event.keyCode == 36, event.modifierFlags.contains(.shift) else { return event }
                 // Local monitors fire on the main thread; NSEvent itself must

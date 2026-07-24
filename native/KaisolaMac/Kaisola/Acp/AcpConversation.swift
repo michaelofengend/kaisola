@@ -3,7 +3,7 @@ import KaisolaCore
 import SwiftUI
 
 /// One rendered row in the chat transcript.
-enum AcpTranscriptRow: Identifiable, Equatable {
+enum AcpTranscriptRow: Codable, Identifiable, Equatable {
     /// `failed` marks an optimistic send whose prompt request errored — the row
     /// stays visible with a retry affordance instead of vanishing.
     case user(id: String, text: String, failed: Bool)
@@ -28,7 +28,9 @@ enum AcpTranscriptRow: Identifiable, Equatable {
 /// so published transcript mutations are UI-safe.
 @MainActor
 final class AcpConversation: ObservableObject {
-    @Published private(set) var rows: [AcpTranscriptRow] = []
+    @Published private(set) var rows: [AcpTranscriptRow] = [] {
+        didSet { onTranscriptChanged?(rows) }
+    }
     @Published private(set) var isRunning = false
     @Published private(set) var isConnected = false
     @Published private(set) var usage: AcpUsage?
@@ -51,6 +53,10 @@ final class AcpConversation: ObservableObject {
     /// actor. Exposed so the composer can show a tiny, non-blocking progress
     /// indicator instead of freezing while Finder/iCloud materializes a file.
     @Published private(set) var preparingAttachmentCount = 0
+    /// Adapter-issued identity used as a best-effort resume candidate after a
+    /// native-preview restart. The broker remains the authority for terminal
+    /// durability; ACP capability negotiation decides whether this id can load.
+    @Published private(set) var providerSessionID: String?
 
     /// Original text + attachment blocks for failed sends, keyed by the failed
     /// row's Identifiable id, so `retryFailed` can re-send the exact payload
@@ -94,11 +100,16 @@ final class AcpConversation: ObservableObject {
         let at: Date
     }
 
-    let title: String
+    @Published var title: String
     var workspaceURL: URL { URL(fileURLWithPath: cwd, isDirectory: true) }
     /// Reports needs-you moments (permission surfaced, turn finished) so the
     /// owner can decide whether they warrant an inbox entry. Set by AppModel.
     var onAttention: ((AttentionCenter.Kind, _ detail: String) -> Void)?
+    /// Persistence hooks are injected by AppModel so this reusable conversation
+    /// stays independent of the concrete disk stores used by the native shell.
+    var onTranscriptChanged: (([AcpTranscriptRow]) -> Void)?
+    var onProviderSessionID: ((String) -> Void)?
+    var onDraftChanged: ((String) -> Void)?
     /// Stable per-chat key for persisting the composer draft across relaunches.
     /// Set by the owner (AppModel passes the chat id) or the `draftKey` init
     /// parameter. Nil disables persistence: `loadDraft` returns "" and
@@ -112,9 +123,14 @@ final class AcpConversation: ObservableObject {
     private let mcpServers: [JSONValue]
     private let ruleStore: PermissionRuleStore
     private let sensitiveGlobs: [String]
+    private let resumeSessionID: String?
+    private var restoredDraft: String?
+    private var hasStarted = false
     private var turnCounter = 0
     private var queueCounter = 0
     private var attachmentCounter = 0
+    private var draftPersistenceTask: Task<Void, Never>?
+    private var pendingDraftPersistence: String?
 
     /// Default transcript render window: only the last 120 rows paint until the
     /// user asks for more. Each "Show earlier" click reveals `expandStep` more.
@@ -136,7 +152,10 @@ final class AcpConversation: ObservableObject {
         client: AcpClient = AcpClient(),
         ruleStore: PermissionRuleStore = PermissionRuleStore(),
         sensitiveGlobs: [String] = AcpPermissionRules.defaultSensitiveGlobs,
-        draftKey: String? = nil
+        draftKey: String? = nil,
+        resumeSessionID: String? = nil,
+        initialRows: [AcpTranscriptRow] = [],
+        initialDraft: String? = nil
     ) {
         self.title = title
         self.command = command
@@ -148,9 +167,17 @@ final class AcpConversation: ObservableObject {
         self.ruleStore = ruleStore
         self.sensitiveGlobs = sensitiveGlobs
         self.draftStorageKey = draftKey
+        self.resumeSessionID = resumeSessionID
+        self.rows = initialRows
+        self.restoredDraft = initialDraft
+        self.turnCounter = initialRows.reduce(into: 0) { count, row in
+            if case .user = row { count += 1 }
+        }
     }
 
     func start() async {
+        guard !hasStarted else { return }
+        hasStarted = true
         // One ordered pipe from the client's (off-main) event handler to the
         // MainActor consumer: yields preserve order, and a single draining task
         // consumes them serially. The handler captures the continuation (not
@@ -170,8 +197,11 @@ final class AcpConversation: ObservableObject {
                 arguments: arguments,
                 environment: environment,
                 cwd: cwd,
-                mcpServers: mcpServers
+                mcpServers: mcpServers,
+                resumeSessionID: resumeSessionID
             )
+            providerSessionID = info.sessionID
+            onProviderSessionID?(info.sessionID)
             models = info.models
             currentModelID = info.currentModelID
             modes = info.modes
@@ -180,6 +210,7 @@ final class AcpConversation: ObservableObject {
             isConnected = true
             statusMessage = nil
         } catch {
+            hasStarted = false
             statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             isConnected = false
         }
@@ -448,6 +479,12 @@ final class AcpConversation: ObservableObject {
     }
 
     func stop() {
+        draftPersistenceTask?.cancel()
+        draftPersistenceTask = nil
+        if let pendingDraftPersistence {
+            onDraftChanged?(pendingDraftPersistence)
+            self.pendingDraftPersistence = nil
+        }
         eventContinuation?.finish()
         eventContinuation = nil
         eventConsumerTask?.cancel()
@@ -544,6 +581,10 @@ final class AcpConversation: ObservableObject {
     /// The composer draft persisted for this chat, or "" when none exists or the
     /// chat is unkeyed.
     func loadDraft() -> String {
+        if let restoredDraft {
+            self.restoredDraft = nil
+            return restoredDraft
+        }
         guard let key = draftDefaultsKey else { return "" }
         return UserDefaults.standard.string(forKey: key) ?? ""
     }
@@ -557,6 +598,15 @@ final class AcpConversation: ObservableObject {
         } else {
             UserDefaults.standard.set(text, forKey: key)
         }
+        pendingDraftPersistence = text
+        draftPersistenceTask?.cancel()
+        draftPersistenceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, let self,
+                  let pending = self.pendingDraftPersistence else { return }
+            self.pendingDraftPersistence = nil
+            self.onDraftChanged?(pending)
+        }
     }
 
     // MARK: - Test hooks
@@ -565,6 +615,36 @@ final class AcpConversation: ObservableObject {
     /// exercised without driving a live turn. Not called by production code.
     func seedRowsForTesting(_ newRows: [AcpTranscriptRow]) {
         rows = newRows
+    }
+
+    /// Deterministic, process-free state for hosted/local visual inspection.
+    /// Marking startup complete prevents the embedded view from launching a
+    /// real provider while the fixture is being captured.
+    func loadVisualFixture() {
+        hasStarted = true
+        isConnected = true
+        models = [
+            AcpSessionInfo.Model(id: "sonnet", name: "Sonnet 4.5"),
+            AcpSessionInfo.Model(id: "opus", name: "Opus 4.1"),
+        ]
+        currentModelID = "sonnet"
+        modes = [
+            AcpSessionInfo.Mode(id: "default", name: "Ask"),
+            AcpSessionInfo.Mode(id: "bypass", name: "Bypass permissions"),
+        ]
+        currentModeID = "default"
+        rows = [
+            .user(id: "1", text: "Make the native workspace feel calm and fast.", failed: false),
+            .message(id: "1", text: "I’ve unified terminal and agent sessions into movable cards, then tightened the project rail and persisted the layout."),
+            .tool(AcpToolCall(
+                id: "visual-tool",
+                title: "Inspect native workspace",
+                kind: "read",
+                status: .completed,
+                content: [.text("Build and focused tests passed.")]
+            )),
+        ]
+        usage = AcpUsage(used: 18_400, max: 200_000)
     }
 
     // MARK: - Stream accumulation

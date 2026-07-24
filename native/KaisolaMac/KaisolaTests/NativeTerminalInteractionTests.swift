@@ -126,6 +126,19 @@ final class NativeTerminalInteractionTests: XCTestCase {
         XCTAssertEqual(captured, ["ls -la\r"])
     }
 
+    func testTerminalFileDropQuotesPathsForCLIBracketedPaste() {
+        let urls = [
+            URL(fileURLWithPath: "/tmp/Screenshot 2026-07-24.png"),
+            URL(fileURLWithPath: "/tmp/researcher's-chart.jpg"),
+        ]
+
+        XCTAssertEqual(
+            OwnedTerminalView.droppedFileText(urls),
+            "'/tmp/Screenshot 2026-07-24.png' '/tmp/researcher'\\''s-chart.jpg' "
+        )
+        XCTAssertEqual(OwnedTerminalView.droppedFileText([URL(string: "https://example.com/a.png")!]), "")
+    }
+
     func testHistoricalTerminalQueriesNeverLeakRepliesIntoLiveShell() {
         let coordinator = NativeTerminalSurface.Coordinator()
         var captured: [String] = []

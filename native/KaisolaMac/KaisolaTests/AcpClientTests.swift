@@ -72,6 +72,41 @@ final class AcpClientTests: XCTestCase {
         XCTAssertTrue(attempts.last?.isEmpty == true)
     }
 
+    func testRestartContinuityLoadsPriorAgentSessionWhenAdvertised() async throws {
+        let transport = ScriptedAcpTransport()
+        let client = AcpClient(transport: transport)
+        let info = try await client.start(
+            command: "mock", arguments: [], environment: [:], cwd: "/tmp",
+            mcpServers: [], resumeSessionID: "sess-persisted"
+        )
+
+        XCTAssertEqual(info.sessionID, "sess-persisted")
+        let methods = await transport.receivedSessionMethods()
+        XCTAssertEqual(methods, ["session/load"])
+    }
+
+    func testRestartContinuityPrefersStableResumeThenFallsBackFresh() async throws {
+        let resumedTransport = ScriptedAcpTransport(resumeCapability: true)
+        let resumedClient = AcpClient(transport: resumedTransport)
+        let resumed = try await resumedClient.start(
+            command: "mock", arguments: [], environment: [:], cwd: "/tmp",
+            mcpServers: [], resumeSessionID: "sess-stable"
+        )
+        XCTAssertEqual(resumed.sessionID, "sess-stable")
+        let resumedMethods = await resumedTransport.receivedSessionMethods()
+        XCTAssertEqual(resumedMethods, ["session/resume"])
+
+        let staleTransport = ScriptedAcpTransport(rejectRestoration: true)
+        let staleClient = AcpClient(transport: staleTransport)
+        let fresh = try await staleClient.start(
+            command: "mock", arguments: [], environment: [:], cwd: "/tmp",
+            mcpServers: [], resumeSessionID: "sess-pruned"
+        )
+        XCTAssertEqual(fresh.sessionID, "sess-1")
+        let staleMethods = await staleTransport.receivedSessionMethods()
+        XCTAssertEqual(staleMethods, ["session/load", "session/new"])
+    }
+
     func testHandshakeAndStreamedTurn() async throws {
         let transport = ScriptedAcpTransport()
         let client = AcpClient(transport: transport)
@@ -255,24 +290,32 @@ private actor ScriptedAcpTransport: AcpByteTransport {
     private let mcpHTTP: Bool
     private let mcpSSE: Bool
     private let rejectFirstMcpSession: Bool
+    private let resumeCapability: Bool
+    private let rejectRestoration: Bool
     private var sessionMcpServers: [JSONValue] = []
     private var sessionMcpAttempts: [[JSONValue]] = []
+    private var sessionMethods: [String] = []
     private var terminations = 0
 
     init(
         protocolVersion: Int64 = 1,
         mcpHTTP: Bool = true,
         mcpSSE: Bool = false,
-        rejectFirstMcpSession: Bool = false
+        rejectFirstMcpSession: Bool = false,
+        resumeCapability: Bool = false,
+        rejectRestoration: Bool = false
     ) {
         self.protocolVersion = protocolVersion
         self.mcpHTTP = mcpHTTP
         self.mcpSSE = mcpSSE
         self.rejectFirstMcpSession = rejectFirstMcpSession
+        self.resumeCapability = resumeCapability
+        self.rejectRestoration = rejectRestoration
     }
 
     func receivedSessionMcpServers() -> [JSONValue] { sessionMcpServers }
     func receivedSessionMcpAttempts() -> [[JSONValue]] { sessionMcpAttempts }
+    func receivedSessionMethods() -> [String] { sessionMethods }
     func terminationCount() -> Int { terminations }
 
     func start(command: String, arguments: [String], environment: [String: String], cwd: String) async throws {
@@ -288,6 +331,10 @@ private actor ScriptedAcpTransport: AcpByteTransport {
                 "protocolVersion": .integer(protocolVersion),
                 "agentCapabilities": .object([
                     "loadSession": .bool(true),
+                    "sessionCapabilities": .object([
+                        "resume": .bool(resumeCapability),
+                        "close": .bool(true),
+                    ]),
                     "mcpCapabilities": .object([
                         "http": .bool(mcpHTTP),
                         "sse": .bool(mcpSSE),
@@ -295,6 +342,7 @@ private actor ScriptedAcpTransport: AcpByteTransport {
                 ]),
             ]))
         case "session/new":
+            sessionMethods.append("session/new")
             sessionMcpServers = object["params"]?.objectValue?["mcpServers"]?.arrayValue ?? []
             sessionMcpAttempts.append(sessionMcpServers)
             if rejectFirstMcpSession, sessionMcpAttempts.count == 1, !sessionMcpServers.isEmpty {
@@ -329,6 +377,15 @@ private actor ScriptedAcpTransport: AcpByteTransport {
                     ]),
                 ]),
             ]))
+        case "session/load", "session/resume":
+            let method = object["method"]?.stringValue ?? ""
+            sessionMethods.append(method)
+            if rejectRestoration {
+                replyError(id: id, message: "Unknown session")
+            } else {
+                let restoredID = object["params"]?.objectValue?["sessionId"]?.stringValue ?? "sess-restored"
+                reply(id: id, result: .object(["sessionId": .string(restoredID)]))
+            }
         case "session/set_config_option":
             reply(id: id, result: .object([
                 "configOptions": .array([

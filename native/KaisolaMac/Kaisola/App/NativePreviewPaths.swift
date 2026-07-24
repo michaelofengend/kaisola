@@ -8,6 +8,9 @@ enum NativePreviewPaths {
     static let terminalCursorStore = applicationSupportDirectory
         .appendingPathComponent("terminal-cursors-v1.json", isDirectory: false)
 
+    static let agentChatTranscriptStore = applicationSupportDirectory
+        .appendingPathComponent("agent-chat-transcripts-v1.json", isDirectory: false)
+
     static let helperRegistrationRecord = applicationSupportDirectory
         .appendingPathComponent("broker-helper-registration-v1", isDirectory: false)
 

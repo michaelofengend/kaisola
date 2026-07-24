@@ -275,4 +275,339 @@ final class NativeSessionStoreTests: XCTestCase {
         )
         XCTAssertTrue(store.sessions().isEmpty)
     }
+
+    func testWorkspaceRestorationRoundTripsPaneOrderAndAgentDescriptor() async throws {
+        let stateURL = fileURL.deletingLastPathComponent()
+            .appendingPathComponent("workspace-state-v1.json")
+        let workspaceStore = NativeWorkspaceStateStore(fileURL: stateURL)
+        let projectID = "nproj_workspace"
+        let chat = NativeRestorableAgentChatDescriptor(
+            id: "chat-1",
+            projectID: projectID,
+            agentID: "claude-code",
+            workspacePath: "/tmp/workspace",
+            acpSessionID: "acp-session-1",
+            title: "Claude · workspace"
+        )
+        let panes = [
+            NativeRestorablePaneState(
+                id: "term-live",
+                surface: NativeRestorableSurfaceState(
+                    kind: .terminal,
+                    id: "term-live",
+                    projectID: projectID,
+                    title: "Build"
+                ),
+                sizeWeight: 0.65
+            ),
+            NativeRestorablePaneState(
+                id: "chat-1",
+                surface: NativeRestorableSurfaceState(agentChat: chat),
+                sizeWeight: 0.35
+            ),
+        ]
+        let state = NativeWorkspaceRestorationState(
+            selectedProjectID: projectID,
+            projects: [
+                NativeProjectWorkspaceState(
+                    projectID: projectID,
+                    layout: SessionPaneLayout(columns: [
+                        .init(
+                            id: "main-column",
+                            sessionIDs: ["term-live", "chat-1"],
+                            rowWeights: [0.7, 0.3]
+                        ),
+                    ]),
+                    arrangement: .columns,
+                    panes: panes,
+                    focusedPaneID: "chat-1",
+                    updatedAt: 123
+                ),
+            ]
+        )
+
+        try await workspaceStore.saveRestorationState(state)
+
+        let reopened = NativeWorkspaceStateStore(fileURL: stateURL)
+        let restored = try await reopened.restorationState()
+        XCTAssertEqual(restored, state)
+        XCTAssertEqual(
+            restored.projects.first?.panes.last?.surface.agentChatDescriptor,
+            chat
+        )
+        XCTAssertEqual(
+            restored.projects.first?.layout.columns.first?.sessionIDs,
+            ["term-live", "chat-1"]
+        )
+        XCTAssertEqual(
+            restored.projects.first?.layout.columns.first?.rowWeights,
+            [0.7, 0.3]
+        )
+    }
+
+    func testWorkspaceRestorationDoesNotMutateBrokerOwnedSessions() async throws {
+        let project = store.openProject(directory: "/tmp/durable-terminal")
+        let session = NativeOwnedSession(
+            id: "term-detached",
+            projectID: project.id,
+            cwd: project.path,
+            title: "Detached",
+            createdAt: 7
+        )
+        store.upsert(session)
+
+        let workspaceStore = NativeWorkspaceStateStore(
+            fileURL: fileURL.deletingLastPathComponent()
+                .appendingPathComponent("workspace-state-v1.json")
+        )
+        try await workspaceStore.saveProjectState(
+            NativeProjectWorkspaceState(
+                projectID: project.id,
+                panes: [
+                    NativeRestorablePaneState(
+                        id: session.id,
+                        surface: NativeRestorableSurfaceState(
+                            kind: .terminal,
+                            id: session.id,
+                            projectID: project.id
+                        )
+                    ),
+                ]
+            ),
+            makeSelected: true
+        )
+
+        XCTAssertEqual(NativeSessionStore(fileURL: fileURL).sessions(), [session])
+    }
+
+    func testWorkspaceRestorationSanitizesInvalidDuplicateAndOversizedPaneState() async throws {
+        let stateURL = fileURL.deletingLastPathComponent()
+            .appendingPathComponent("workspace-state-v1.json")
+        let workspaceStore = NativeWorkspaceStateStore(fileURL: stateURL)
+        let projectID = "nproj_bounded"
+        var panes = (0..<(NativeWorkspaceStateStore.maximumPanesPerProject + 3)).map { index in
+            NativeRestorablePaneState(
+                id: "term-\(index)",
+                surface: NativeRestorableSurfaceState(
+                    kind: .terminal,
+                    id: "term-\(index)",
+                    projectID: projectID
+                ),
+                sizeWeight: index == 0 ? .infinity : 1
+            )
+        }
+        panes.insert(
+            NativeRestorablePaneState(
+                id: "term-0",
+                surface: NativeRestorableSurfaceState(
+                    kind: .terminal,
+                    id: "term-duplicate-pane",
+                    projectID: projectID
+                )
+            ),
+            at: 1
+        )
+        panes.insert(
+            NativeRestorablePaneState(
+                id: "chat-invalid",
+                surface: NativeRestorableSurfaceState(
+                    kind: .agentChat,
+                    id: "chat-invalid",
+                    projectID: projectID,
+                    agentID: "claude-code",
+                    workspacePath: "relative/path"
+                )
+            ),
+            at: 2
+        )
+
+        try await workspaceStore.saveProjectState(
+            NativeProjectWorkspaceState(
+                projectID: projectID,
+                panes: panes,
+                focusedPaneID: "missing-pane",
+                updatedAt: 1
+            )
+        )
+
+        let storedProject = try await workspaceStore.projectState(for: projectID)
+        let restored = try XCTUnwrap(storedProject)
+        XCTAssertEqual(restored.panes.count, NativeWorkspaceStateStore.maximumPanesPerProject)
+        XCTAssertEqual(Set(restored.panes.map(\.id)).count, restored.panes.count)
+        XCTAssertEqual(restored.panes.first?.sizeWeight, 1)
+        XCTAssertFalse(restored.panes.contains { $0.id == "chat-invalid" })
+        XCTAssertNil(restored.focusedPaneID)
+    }
+
+    func testProjectWorkspaceStateDecodesSnapshotWrittenBeforePaneLayout() throws {
+        let projectID = "nproj_legacy-layout"
+        let legacyJSON = """
+        {
+          "projectID": "\(projectID)",
+          "arrangement": "rows",
+          "panes": [
+            {
+              "id": "term-one",
+              "surface": {
+                "kind": "terminal",
+                "id": "term-one",
+                "projectID": "\(projectID)"
+              },
+              "sizeWeight": 1,
+              "isMinimized": false
+            },
+            {
+              "id": "term-two",
+              "surface": {
+                "kind": "terminal",
+                "id": "term-two",
+                "projectID": "\(projectID)"
+              },
+              "sizeWeight": 1,
+              "isMinimized": false
+            }
+          ],
+          "focusedPaneID": "term-two",
+          "updatedAt": 42
+        }
+        """
+
+        let decoded = try JSONDecoder().decode(
+            NativeProjectWorkspaceState.self,
+            from: try XCTUnwrap(legacyJSON.data(using: .utf8))
+        )
+
+        XCTAssertEqual(decoded.layout.columns.count, 1)
+        XCTAssertEqual(decoded.layout.columns.first?.sessionIDs, ["term-one", "term-two"])
+        XCTAssertEqual(decoded.focusedPaneID, "term-two")
+    }
+
+    func testWorkspaceStoreRefusesToOverwriteNewerSchema() async throws {
+        let stateURL = fileURL.deletingLastPathComponent()
+            .appendingPathComponent("workspace-state-v1.json")
+        try FileManager.default.createDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let futureData = try XCTUnwrap(
+            "{\"schemaVersion\":999,\"future\":true}".data(using: .utf8)
+        )
+        try futureData.write(to: stateURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: stateURL.path
+        )
+
+        let workspaceStore = NativeWorkspaceStateStore(fileURL: stateURL)
+        do {
+            try await workspaceStore.saveRestorationState(NativeWorkspaceRestorationState())
+            XCTFail("Expected a newer schema to be preserved")
+        } catch {
+            XCTAssertEqual(
+                error as? NativeWorkspaceStateStore.StoreError,
+                .unsupportedSchema(found: 999)
+            )
+        }
+        XCTAssertEqual(try Data(contentsOf: stateURL), futureData)
+    }
+
+    func testAgentChatDraftRoundTripsAcrossStoreInstancesAndEmptyTextClearsIt() async throws {
+        let stateURL = fileURL.deletingLastPathComponent()
+            .appendingPathComponent("workspace-state-v1.json")
+        let workspaceStore = NativeWorkspaceStateStore(fileURL: stateURL)
+        let key = NativeWorkspaceStateStore.agentChatStableKey(
+            agentID: "claude-code",
+            workspacePath: "/tmp/draft-project/./"
+        )
+
+        try await workspaceStore.saveDraft(
+            "Unsent follow-up",
+            stableKey: key,
+            projectID: "nproj_draft",
+            agentID: "claude-code",
+            workspacePath: "/tmp/draft-project",
+            updatedAt: 10
+        )
+
+        let reopened = NativeWorkspaceStateStore(fileURL: stateURL)
+        let restoredText = try await reopened.draft(for: key)
+        XCTAssertEqual(restoredText, "Unsent follow-up")
+        let allDrafts = try await reopened.allDrafts()
+        let draft = try XCTUnwrap(allDrafts.first)
+        XCTAssertEqual(draft.workspacePath, "/tmp/draft-project")
+        XCTAssertNotEqual(draft.id, key)
+
+        try await reopened.saveDraft(
+            "",
+            stableKey: key,
+            projectID: "nproj_draft",
+            agentID: "claude-code",
+            workspacePath: "/tmp/draft-project"
+        )
+        let clearedText = try await reopened.draft(for: key)
+        XCTAssertNil(clearedText)
+    }
+
+    func testAgentChatDraftRejectsOversizeWithoutLosingPreviousText() async throws {
+        let workspaceStore = NativeWorkspaceStateStore(
+            fileURL: fileURL.deletingLastPathComponent()
+                .appendingPathComponent("workspace-state-v1.json")
+        )
+        let key = "claude-code|/tmp/draft-limit"
+        try await workspaceStore.saveDraft(
+            "keep me",
+            stableKey: key,
+            projectID: "nproj_limit",
+            agentID: "claude-code",
+            workspacePath: "/tmp/draft-limit"
+        )
+
+        do {
+            try await workspaceStore.saveDraft(
+                String(repeating: "x", count: NativeWorkspaceStateStore.maximumDraftBytes + 1),
+                stableKey: key,
+                projectID: "nproj_limit",
+                agentID: "claude-code",
+                workspacePath: "/tmp/draft-limit"
+            )
+            XCTFail("Expected an oversized draft to be rejected")
+        } catch {
+            XCTAssertEqual(
+                error as? NativeWorkspaceStateStore.StoreError,
+                .draftTooLarge(maxBytes: NativeWorkspaceStateStore.maximumDraftBytes)
+            )
+        }
+        let preservedText = try await workspaceStore.draft(for: key)
+        XCTAssertEqual(preservedText, "keep me")
+    }
+
+    func testAgentChatDraftArchiveEvictsOldestEntriesAtBound() async throws {
+        let workspaceStore = NativeWorkspaceStateStore(
+            fileURL: fileURL.deletingLastPathComponent()
+                .appendingPathComponent("workspace-state-v1.json")
+        )
+        for index in 0...NativeWorkspaceStateStore.maximumDrafts {
+            try await workspaceStore.saveDraft(
+                "draft \(index)",
+                stableKey: "agent|/tmp/project-\(index)",
+                projectID: "nproj_\(index)",
+                agentID: "agent",
+                workspacePath: "/tmp/project-\(index)",
+                updatedAt: Int64(index)
+            )
+        }
+
+        let drafts = try await workspaceStore.allDrafts()
+        let oldestDraft = try await workspaceStore.draft(for: "agent|/tmp/project-0")
+        let newestDraft = try await workspaceStore.draft(
+            for: "agent|/tmp/project-\(NativeWorkspaceStateStore.maximumDrafts)"
+        )
+        XCTAssertEqual(drafts.count, NativeWorkspaceStateStore.maximumDrafts)
+        XCTAssertNil(oldestDraft)
+        XCTAssertEqual(
+            newestDraft,
+            "draft \(NativeWorkspaceStateStore.maximumDrafts)"
+        )
+    }
 }

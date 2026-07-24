@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct RootShellView: View {
     @EnvironmentObject private var model: AppModel
@@ -20,6 +21,7 @@ struct RootShellView: View {
     @State private var workspaceRailDividerHovered = false
     @State private var filePreviewDividerHovered = false
     @State private var hoveredTerminalPaneID: String?
+    @State private var paneResizeTranslations: [String: CGFloat] = [:]
     /// A Close Mesh request whose worktrees still hold uncommitted changes.
     @State private var meshCloseConfirm: (id: String, dirty: Int)?
 
@@ -81,13 +83,13 @@ struct RootShellView: View {
         }
         .sheet(item: Binding(get: { renameTarget.map(RenameID.init) }, set: { renameTarget = $0?.id })) { target in
             RenameSheet(text: $renameText) { newTitle in
-                model.renameSession(target.id, to: newTitle)
+                model.renameSurface(target.id, to: newTitle)
                 renameTarget = nil
             } cancel: {
                 renameTarget = nil
             }
             .onAppear {
-                renameText = model.editableSessionTitle(for: target.id)
+                renameText = model.editableSurfaceTitle(for: target.id)
             }
         }
         .sheet(item: Binding(get: { renameProjectTarget.map(RenameID.init) }, set: { renameProjectTarget = $0?.id })) { target in
@@ -211,47 +213,48 @@ struct RootShellView: View {
                     let chats = model.chats(in: project.id)
                     let meshes = model.meshes(in: project.id)
                     Section(isExpanded: expansionBinding(project.id)) {
-                        if !chats.isEmpty {
-                            ProjectSurfaceHeader(title: "Chats", systemImage: "bubble.left.and.text.bubble.right")
-                            ForEach(chats) { chat in
+                        ForEach(chats) { chat in
+                            HStack(spacing: 3) {
                                 Button {
                                     model.selectChat(chat.id)
                                 } label: {
-                                    ChatRow(chat: chat)
+                                    ChatRow(chat: chat, isVisible: model.isSurfaceVisible(chat.id))
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .contentShape(Rectangle())
                                 }
-                                    .buttonStyle(.plain)
-                                    .accessibilityAddTraits(model.selectedChatID == chat.id ? .isSelected : [])
-                                    .listRowInsets(.init(top: 0, leading: 14, bottom: 0, trailing: 5))
-                                    .contextMenu {
-                                        Button("Close Chat", role: .destructive) { model.closeChat(chat.id) }
-                                    }
+                                .buttonStyle(.plain)
+                                surfaceVisibilityButton(chat.id)
+                            }
+                            .accessibilityAddTraits(model.focusedPaneID == chat.id ? .isSelected : [])
+                            .listRowInsets(.init(top: 0, leading: 16, bottom: 0, trailing: 10))
+                            .contextMenu {
+                                Button("Open Beside") { Task { await model.openSurfaceBeside(chat.id) } }
+                                Button("Rename…") { renameTarget = chat.id }
+                                Button("Close Chat", role: .destructive) { model.closeChat(chat.id) }
                             }
                         }
-                        if !meshes.isEmpty {
-                            ProjectSurfaceHeader(title: "Mesh", systemImage: "circle.hexagongrid.fill")
-                            ForEach(meshes) { mesh in
+                        ForEach(meshes) { mesh in
+                            HStack(spacing: 3) {
                                 Button {
                                     model.selectMesh(mesh.id)
                                 } label: {
-                                    MeshRow(mesh: mesh)
+                                    MeshRow(mesh: mesh, isVisible: model.isSurfaceVisible(mesh.id))
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .contentShape(Rectangle())
                                 }
-                                    .buttonStyle(.plain)
-                                    .accessibilityAddTraits(model.selectedMeshID == mesh.id ? .isSelected : [])
-                                    .listRowInsets(.init(top: 0, leading: 14, bottom: 0, trailing: 5))
-                                    .contextMenu {
-                                        Button("Close Mesh", role: .destructive) { requestCloseMesh(mesh) }
-                                    }
+                                .buttonStyle(.plain)
+                                surfaceVisibilityButton(mesh.id)
+                            }
+                            .accessibilityAddTraits(model.focusedPaneID == mesh.id ? .isSelected : [])
+                            .listRowInsets(.init(top: 0, leading: 16, bottom: 0, trailing: 10))
+                            .contextMenu {
+                                Button("Open Beside") { Task { await model.openSurfaceBeside(mesh.id) } }
+                                Button("Rename…") { renameTarget = mesh.id }
+                                Button("Close Mesh", role: .destructive) { requestCloseMesh(mesh) }
                             }
                         }
-                        if !project.sessions.isEmpty {
-                            ProjectSurfaceHeader(title: "Sessions", systemImage: "terminal")
-                            ForEach(project.sessions) { session in
-                                sessionRow(session)
-                            }
+                        ForEach(project.sessions) { session in
+                            sessionRow(session)
                         }
                         if project.sessions.isEmpty, chats.isEmpty, meshes.isEmpty {
                             Text("No activity yet")
@@ -262,16 +265,16 @@ struct RootShellView: View {
                             Button {
                                 model.activateProject(id: project.id)
                             } label: {
-                                HStack(spacing: 8) {
+                                HStack(spacing: 7) {
                                     if let tint = ProjectTint.color(project.colorHex) {
                                         Circle().fill(tint).frame(width: 10, height: 10)
                                     } else {
                                         Image(systemName: "folder.fill")
-                                            .font(.system(size: 15, weight: .semibold))
+                                            .font(.system(size: 12, weight: .semibold))
                                             .foregroundStyle(activeProjectID == project.id ? Color.accentColor : .secondary)
                                     }
                                     Text(project.name)
-                                        .font(.system(size: 14, weight: .semibold))
+                                        .font(.system(size: 13, weight: .semibold))
                                         .foregroundStyle(.primary)
                                     if project.workingCount > 0 {
                                         Text("\(project.workingCount)")
@@ -298,8 +301,8 @@ struct RootShellView: View {
                             .fixedSize()
                             .help("New session in \(project.name)")
                         }
-                        .padding(.horizontal, 5)
-                        .frame(minHeight: 38)
+                        .padding(.horizontal, 11)
+                        .frame(minHeight: 34)
                         .background(
                             activeProjectID == project.id
                                 ? AnyShapeStyle(Color.accentColor.opacity(0.13))
@@ -317,7 +320,7 @@ struct RootShellView: View {
                 SidebarBackdropView(appearance: settings.sidebarAppearance)
                     .ignoresSafeArea()
             }
-            .navigationSplitViewColumnWidth(min: 146, ideal: 176, max: 220)
+            .navigationSplitViewColumnWidth(min: 132, ideal: 164, max: 205)
             .safeAreaInset(edge: .top, spacing: 0) {
                 projectSidebarHeader
             }
@@ -382,11 +385,11 @@ struct RootShellView: View {
     private var projectSidebarHeader: some View {
         HStack(spacing: 8) {
             Text("Projects")
-                .font(.subheadline.weight(.semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.primary.opacity(0.82))
             Spacer()
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 18)
         .padding(.top, NativeWorkspaceChrome.sidebarTrafficLightClearance)
         .frame(height: 36 + NativeWorkspaceChrome.sidebarTrafficLightClearance, alignment: .bottom)
         .background(.clear)
@@ -487,6 +490,7 @@ struct RootShellView: View {
 
     @ViewBuilder
     private func sessionRow(_ session: BrokerTerminalRecord) -> some View {
+        let visible = model.isSurfaceVisible(session.id)
         SessionRow(
             session: session,
             title: model.sessionTitle(for: session),
@@ -494,28 +498,22 @@ struct RootShellView: View {
             agent: model.agentProfile(for: session.id),
             branch: model.branch(for: session.id),
             meta: model.meta(for: session.id),
-            isVisible: session.id == model.selectedSessionID
-                || model.splitDocuments[session.id] != nil,
-            canOpenSplit: session.id != model.selectedSessionID
-                && model.splitDocuments[session.id] == nil
-                && model.splitOrder.count < AppModel.maxSplitPanes,
-            isOpenInSplit: model.splitDocuments[session.id] != nil,
+            isVisible: visible,
+            canOpenSplit: !visible,
+            isOpenInSplit: visible,
             toggleSplit: {
-                if model.splitDocuments[session.id] != nil {
-                    Task { await model.closeSplit(session.id) }
+                if visible {
+                    Task { await model.minimizeSurface(session.id) }
                 } else {
-                    Task { await model.openInSplit(session.id) }
+                    Task { await model.openSurfaceBeside(session.id) }
                 }
             },
             select: {
-                guard session.id != model.selectedSessionID
-                    || model.selectedChatID != nil
-                    || model.selectedMeshID != nil
-                    || model.browserCardURL != nil else { return }
-                Task { await model.select(session.id) }
+                guard model.focusedPaneID != session.id || model.browserCardURL != nil else { return }
+                Task { await model.focusSurface(session.id) }
             }
         )
-        .listRowInsets(.init(top: 0, leading: 14, bottom: 0, trailing: 5))
+        .listRowInsets(.init(top: 0, leading: 16, bottom: 0, trailing: 10))
         .contextMenu {
             Button("Open in New Window") {
                 KaisolaMacAppDelegate.popOut(sessionID: session.id)
@@ -526,16 +524,14 @@ struct RootShellView: View {
                 Label(model.isPinned(session.id) ? "Unpin" : "Pin",
                       systemImage: model.isPinned(session.id) ? "pin.slash" : "pin")
             }
-            if session.id != model.selectedSessionID,
-               model.splitDocuments[session.id] == nil,
-               model.splitOrder.count < AppModel.maxSplitPanes {
+            if !visible {
                 Button("Open in Split") {
-                    Task { await model.openInSplit(session.id) }
+                    Task { await model.openSurfaceBeside(session.id) }
                 }
             }
-            if model.splitDocuments[session.id] != nil {
-                Button("Close Split") {
-                    Task { await model.closeSplit(session.id) }
+            if visible {
+                Button("Minimize Pane") {
+                    Task { await model.minimizeSurface(session.id) }
                 }
             }
             Button("Rename…") { renameTarget = session.id }
@@ -550,6 +546,27 @@ struct RootShellView: View {
                 }
             }
         }
+    }
+
+    private func surfaceVisibilityButton(_ id: String) -> some View {
+        let visible = model.isSurfaceVisible(id)
+        return Button {
+            Task {
+                if visible {
+                    await model.minimizeSurface(id)
+                } else {
+                    await model.openSurfaceBeside(id)
+                }
+            }
+        } label: {
+            Image(systemName: visible ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(visible ? Color.accentColor : Color.secondary)
+                .frame(width: 20, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help(visible ? "Minimize this session card" : "Open beside the current session")
     }
 
     @ViewBuilder
@@ -687,24 +704,11 @@ struct RootShellView: View {
     }
 
     private var detailContent: some View {
-        let alternateSurfaceVisible = model.browserCardURL != nil
-            || model.selectedMeshID != nil
-            || model.selectedChatID != nil
-        return ZStack {
-            terminalContent
-                .background { WorkspaceBackdropView(mode: settings.workspaceBackdrop) }
-                .opacity(alternateSurfaceVisible ? 0 : 1)
-                .allowsHitTesting(!alternateSurfaceVisible)
-                .accessibilityHidden(alternateSurfaceVisible)
-
+        Group {
             if let browserURL = model.browserCardURL {
                 BrowserCardView(url: browserURL) { model.browserCardURL = nil }
-            } else if let mesh = model.meshes.first(where: { $0.id == model.selectedMeshID }) {
-                MeshView(mesh: mesh)
-                    .id(mesh.id)
-            } else if let chat = model.chats.first(where: { $0.id == model.selectedChatID }) {
-                AcpChatView(conversation: chat.conversation)
-                    .id(chat.id)
+            } else {
+                unifiedSessionPaneGrid
                     .background { WorkspaceBackdropView(mode: settings.workspaceBackdrop) }
             }
         }
@@ -837,6 +841,273 @@ struct RootShellView: View {
             }
             .buttonStyle(.bordered)
         }
+    }
+
+    // MARK: - Unified movable session dock
+
+    private var unifiedSessionPaneGrid: some View {
+        let layout = model.paneLayout(for: activeProjectID)
+        return Group {
+            if let maximized = model.maximizedPaneID, layout.contains(maximized) {
+                unifiedSessionCard(maximized)
+            } else if layout.isEmpty {
+                emptyWorkspaceState
+            } else {
+                GeometryReader { geometry in
+                    let dividerSpace = CGFloat(max(0, layout.columns.count - 1)) * 9
+                    let available = max(1, geometry.size.width - dividerSpace)
+                    let totalWeight = max(0.01, layout.columns.reduce(0) { $0 + $1.weight })
+                    HStack(spacing: 0) {
+                        ForEach(Array(layout.columns.enumerated()), id: \.element.id) { index, column in
+                            unifiedSessionColumn(column, projectID: activeProjectID)
+                                .frame(width: available * CGFloat(column.weight / totalWeight))
+                            if index < layout.columns.count - 1, let projectID = activeProjectID {
+                                paneColumnDivider(
+                                    projectID: projectID,
+                                    boundary: index,
+                                    available: available,
+                                    totalWeight: totalWeight
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func unifiedSessionColumn(
+        _ column: SessionPaneLayout.Column,
+        projectID: String?
+    ) -> some View {
+        GeometryReader { geometry in
+            let dividerSpace = CGFloat(max(0, column.sessionIDs.count - 1)) * 9
+            let available = max(1, geometry.size.height - dividerSpace)
+            let totalWeight = max(0.01, column.rowWeights.reduce(0, +))
+            VStack(spacing: 0) {
+                ForEach(Array(column.sessionIDs.enumerated()), id: \.element) { index, id in
+                    unifiedSessionCard(id)
+                        .frame(height: available * CGFloat(column.rowWeights[index] / totalWeight))
+                    if index < column.sessionIDs.count - 1, let projectID {
+                        paneRowDivider(
+                            projectID: projectID,
+                            columnID: column.id,
+                            boundary: index,
+                            available: available,
+                            totalWeight: totalWeight
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func paneColumnDivider(
+        projectID: String,
+        boundary: Int,
+        available: CGFloat,
+        totalWeight: Double
+    ) -> some View {
+        let key = "column|\(projectID)|\(boundary)"
+        return PaneResizeHandle(axis: .horizontal)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let previous = paneResizeTranslations[key] ?? 0
+                        let incremental = value.translation.width - previous
+                        paneResizeTranslations[key] = value.translation.width
+                        model.resizePaneColumns(
+                            projectID: projectID,
+                            boundary: boundary,
+                            delta: Double(incremental / max(1, available)) * totalWeight,
+                            minimumWeight: Double(180 / max(1, available)) * totalWeight
+                        )
+                    }
+                    .onEnded { _ in
+                        paneResizeTranslations[key] = nil
+                        model.finishPaneResize(projectID: projectID)
+                    }
+            )
+    }
+
+    private func paneRowDivider(
+        projectID: String,
+        columnID: String,
+        boundary: Int,
+        available: CGFloat,
+        totalWeight: Double
+    ) -> some View {
+        let key = "row|\(columnID)|\(boundary)"
+        return PaneResizeHandle(axis: .vertical)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let previous = paneResizeTranslations[key] ?? 0
+                        let incremental = value.translation.height - previous
+                        paneResizeTranslations[key] = value.translation.height
+                        model.resizePaneRows(
+                            projectID: projectID,
+                            columnID: columnID,
+                            boundary: boundary,
+                            delta: Double(incremental / max(1, available)) * totalWeight,
+                            minimumWeight: Double(150 / max(1, available)) * totalWeight
+                        )
+                    }
+                    .onEnded { _ in
+                        paneResizeTranslations[key] = nil
+                        model.finishPaneResize(projectID: projectID)
+                    }
+            )
+    }
+
+    private func unifiedSessionCard(_ id: String) -> some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                unifiedSessionHeader(id)
+                unifiedSessionContent(id)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .stroke(
+                        model.focusedPaneID == id
+                            ? Color.accentColor.opacity(0.38)
+                            : Color(nsColor: .separatorColor).opacity(0.55),
+                        lineWidth: model.focusedPaneID == id ? 1 : 0.65
+                    )
+            }
+            .shadow(color: .black.opacity(0.035), radius: 5, y: 2)
+            .padding(4)
+            .onDrop(
+                of: [UTType.utf8PlainText],
+                delegate: SessionPaneDropDelegate(
+                    targetID: id,
+                    targetSize: geometry.size,
+                    move: { sourceID, targetID, edge in
+                        model.placeSurface(sourceID, relativeTo: targetID, edge: edge)
+                    }
+                )
+            )
+        }
+        .frame(minWidth: 220, minHeight: 150)
+    }
+
+    private func unifiedSessionHeader(_ id: String) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: surfaceSymbol(id))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(surfaceTint(id))
+                .frame(width: 16)
+            Text(surfaceTitle(id))
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+            if surfaceWorking(id) {
+                ProgressView().controlSize(.mini).scaleEffect(0.55)
+            } else {
+                Circle()
+                    .fill(surfaceLive(id) ? Color.green : Color.secondary.opacity(0.45))
+                    .frame(width: 5, height: 5)
+            }
+            Spacer(minLength: 4)
+            Button { model.toggleMaximizeSurface(id) } label: {
+                Image(systemName: model.maximizedPaneID == id
+                    ? "arrow.down.right.and.arrow.up.left"
+                    : "arrow.up.left.and.arrow.down.right")
+                    .frame(width: 21, height: 20)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help(model.maximizedPaneID == id ? "Restore pane" : "Maximize pane")
+            if model.sessions.contains(where: { $0.id == id }) {
+                popOutTerminalButton(id)
+            }
+            Button { Task { await model.minimizeSurface(id) } } label: {
+                Image(systemName: "minus")
+                    .frame(width: 21, height: 20)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Minimize this session; keep it running")
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .frame(height: 30)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.62))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Color(nsColor: .separatorColor).opacity(0.38)).frame(height: 0.5)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { Task { await model.focusSurface(id) } }
+        .onDrag {
+            NSItemProvider(object: id as NSString)
+        }
+        .contextMenu {
+            Button("Rename…") { renameTarget = id }
+            Button("Minimize") { Task { await model.minimizeSurface(id) } }
+        }
+    }
+
+    @ViewBuilder
+    private func unifiedSessionContent(_ id: String) -> some View {
+        if model.sessions.contains(where: { $0.id == id }) {
+            Group {
+                if id == model.terminalDocument.sessionID {
+                    primaryPane
+                } else {
+                    splitPane(id)
+                }
+            }
+            .padding(.leading, TerminalPaneGrid.contentLeadingInset)
+            .padding(.top, TerminalPaneGrid.contentTopInset)
+            .padding(.trailing, TerminalPaneGrid.contentTrailingInset)
+            .padding(.bottom, TerminalPaneGrid.contentBottomInset)
+        } else if let chat = model.chats.first(where: { $0.id == id }) {
+            AcpChatView(conversation: chat.conversation, presentation: .embedded)
+                .id(chat.id)
+        } else if let mesh = model.meshes.first(where: { $0.id == id }) {
+            MeshView(mesh: mesh)
+                .id(mesh.id)
+        } else {
+            ContentUnavailableView("Session unavailable", systemImage: "rectangle.slash")
+        }
+    }
+
+    private func surfaceTitle(_ id: String) -> String {
+        if let terminal = model.sessions.first(where: { $0.id == id }) {
+            return model.sessionTitle(for: terminal)
+        }
+        if let chat = model.chats.first(where: { $0.id == id }) { return chat.conversation.title }
+        if let mesh = model.meshes.first(where: { $0.id == id }) { return mesh.title }
+        return "Session"
+    }
+
+    private func surfaceSymbol(_ id: String) -> String {
+        if model.sessions.contains(where: { $0.id == id }) {
+            return model.agentProfile(for: id)?.symbol ?? "terminal"
+        }
+        if model.chats.contains(where: { $0.id == id }) { return "bubble.left.and.text.bubble.right" }
+        return "circle.hexagongrid.fill"
+    }
+
+    private func surfaceTint(_ id: String) -> Color {
+        model.meshes.contains(where: { $0.id == id }) ? .purple : .accentColor
+    }
+
+    private func surfaceWorking(_ id: String) -> Bool {
+        if let terminal = model.sessions.first(where: { $0.id == id }), case .working = terminal.agentActivity {
+            return !terminal.exited
+        }
+        if let chat = model.chats.first(where: { $0.id == id }) { return chat.conversation.isRunning }
+        if let mesh = model.meshes.first(where: { $0.id == id }) { return mesh.stage != "Idle" }
+        return false
+    }
+
+    private func surfaceLive(_ id: String) -> Bool {
+        if let terminal = model.sessions.first(where: { $0.id == id }) { return !terminal.exited }
+        if let chat = model.chats.first(where: { $0.id == id }) { return chat.conversation.isConnected }
+        return model.meshes.contains(where: { $0.id == id })
     }
 
     @ViewBuilder
@@ -1167,6 +1438,66 @@ struct RootShellView: View {
     }
 }
 
+private struct PaneResizeHandle: View {
+    let axis: Axis
+    @State private var hovered = false
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.clear)
+            Capsule()
+                .fill(hovered ? Color.accentColor.opacity(0.62) : Color.primary.opacity(0.13))
+                .frame(
+                    width: axis == .horizontal ? 2 : 34,
+                    height: axis == .horizontal ? 34 : 2
+                )
+        }
+        .frame(
+            width: axis == .horizontal ? 9 : nil,
+            height: axis == .vertical ? 9 : nil
+        )
+        .contentShape(Rectangle())
+        .onHover { value in
+            hovered = value
+            (axis == .horizontal ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).set()
+        }
+        .animation(.easeOut(duration: 0.1), value: hovered)
+    }
+}
+
+private struct SessionPaneDropDelegate: DropDelegate {
+    let targetID: String
+    let targetSize: CGSize
+    let move: @MainActor @Sendable (String, String, SessionPaneLayout.Edge) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [UTType.utf8PlainText])
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let provider = info.itemProviders(for: [UTType.utf8PlainText]).first else { return false }
+        let edge = nearestEdge(at: info.location)
+        provider.loadDataRepresentation(forTypeIdentifier: UTType.utf8PlainText.identifier) { data, _ in
+            guard let data, let sourceID = String(data: data, encoding: .utf8), !sourceID.isEmpty else { return }
+            Task { @MainActor in move(sourceID, targetID, edge) }
+        }
+        return true
+    }
+
+    private func nearestEdge(at point: CGPoint) -> SessionPaneLayout.Edge {
+        let left = point.x
+        let right = max(0, targetSize.width - point.x)
+        let top = point.y
+        let bottom = max(0, targetSize.height - point.y)
+        let minimum = min(left, right, top, bottom)
+        if minimum == left { return .left }
+        if minimum == right { return .right }
+        if minimum == top { return .top }
+        return .bottom
+    }
+}
+
 /// Settings lives inside the workspace as a sheet so discoverability no longer
 /// depends on knowing the macOS menu shortcut. The traditional Command-comma
 /// settings window remains available too.
@@ -1458,19 +1789,25 @@ private struct SessionStrip: View {
 
 private struct ChatRow: View {
     @ObservedObject var conversation: AcpConversation
+    let isVisible: Bool
 
-    init(chat: AcpChatHandle) {
+    init(chat: AcpChatHandle, isVisible: Bool) {
         self.conversation = chat.conversation
+        self.isVisible = isVisible
     }
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 7) {
             Image(systemName: "bubble.left.and.text.bubble.right")
-                .foregroundStyle(conversation.isConnected ? Color.accentColor : Color.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(conversation.title).lineLimit(1)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(isVisible || conversation.isConnected ? Color.accentColor : Color.secondary)
+                .frame(width: 18, height: 18)
+                .background(isVisible ? Color.accentColor.opacity(0.12) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(conversation.title).font(.system(size: 12)).lineLimit(1)
                 Text(conversation.isRunning ? "Working…" : conversation.isConnected ? "Chat" : "Starting…")
-                    .font(.caption)
+                    .font(.system(size: 10))
                     .foregroundStyle(conversation.isRunning ? Color.accentColor : .secondary)
             }
             if conversation.isRunning {
@@ -1478,41 +1815,32 @@ private struct ChatRow: View {
                 ProgressView().controlSize(.mini).scaleEffect(0.6)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 1)
         .accessibilityElement(children: .combine)
     }
 }
 
 private struct MeshRow: View {
     @ObservedObject var mesh: MeshSession
+    let isVisible: Bool
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 7) {
             Image(systemName: "circle.hexagongrid.fill")
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.purple)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(mesh.title).lineLimit(1)
+                .frame(width: 18, height: 18)
+                .background(isVisible ? Color.purple.opacity(0.12) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(mesh.title).font(.system(size: 12)).lineLimit(1)
                 Text(mesh.stage == "Idle" ? "Ready" : mesh.stage)
-                    .font(.caption)
+                    .font(.system(size: 10))
                     .foregroundStyle(mesh.stage == "Idle" ? Color.secondary : Color.purple)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 1)
         .accessibilityElement(children: .combine)
-    }
-}
-
-private struct ProjectSurfaceHeader: View {
-    let title: String
-    let systemImage: String
-
-    var body: some View {
-        Label(title, systemImage: systemImage)
-            .font(.caption2.weight(.semibold))
-            .textCase(.uppercase)
-            .foregroundStyle(.tertiary)
-            .padding(.top, 4)
-            .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -1574,9 +1902,9 @@ private struct SessionRow: View {
     let select: () -> Void
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 5) {
             Button(action: select) {
-                HStack(spacing: 9) {
+                HStack(spacing: 7) {
                     ZStack(alignment: .bottomTrailing) {
                         Image(systemName: rowSymbol)
                             .foregroundStyle(iconColor)
@@ -1587,16 +1915,18 @@ private struct SessionRow: View {
                                 .offset(x: 4, y: 4)
                         }
                     }
-                    .frame(width: 22, height: 22)
+                    .font(.system(size: 11, weight: .medium))
+                    .frame(width: 18, height: 18)
                     .background(
                         isVisible ? Color.accentColor.opacity(0.13) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
                     )
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 1) {
                         Text(title)
+                            .font(.system(size: 12))
                             .lineLimit(1)
                         Text(sessionDetail)
-                            .font(.caption)
+                            .font(.system(size: 10))
                             .foregroundStyle(statusColor)
                     }
                     Spacer(minLength: 4)
@@ -1611,7 +1941,7 @@ private struct SessionRow: View {
             if canOpenSplit || isOpenInSplit {
                 Button(action: toggleSplit) {
                     Image(systemName: isOpenInSplit ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
-                        .font(.caption)
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(isOpenInSplit ? Color.accentColor : .secondary)
                 }
                 .buttonStyle(.borderless)
@@ -1619,7 +1949,7 @@ private struct SessionRow: View {
                 .accessibilityLabel(isOpenInSplit ? "Close \(title) pane" : "Open \(title) in another pane")
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 1)
     }
 
     private var rowSymbol: String {
@@ -1689,10 +2019,10 @@ private struct ConnectionFooter: View {
     ) as? String ?? "Dev"
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 4) {
             accountMenu
                 .help(state.detail ?? state.title)
-            Spacer(minLength: 4)
+            Spacer(minLength: 2)
             attentionButton
             shelfButton(
                 filesVisible ? "sidebar.trailing" : "sidebar.right",
@@ -1708,6 +2038,13 @@ private struct ConnectionFooter: View {
                 action: toggleFilePreview
             )
 
+            shelfButton(
+                "gearshape.fill",
+                help: "Settings",
+                tint: Color(red: 0.44, green: 0.50, blue: 0.20),
+                action: showSettings
+            )
+
             if newMesh != nil || newStagedMesh != nil || newIdeaMesh != nil {
                 Menu {
                     if let newMesh { Button("New Mesh (all agents)", action: newMesh) }
@@ -1717,7 +2054,7 @@ private struct ConnectionFooter: View {
                     Image(systemName: "circle.hexagongrid.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.purple)
-                        .frame(width: 27, height: 24)
+                        .frame(width: 22, height: 24)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
@@ -1728,7 +2065,7 @@ private struct ConnectionFooter: View {
         }
         .font(.callout)
         .controlSize(.small)
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 7)
         .frame(height: 40)
         .background(.ultraThinMaterial)
         .overlay(alignment: .top) {
@@ -1740,15 +2077,17 @@ private struct ConnectionFooter: View {
         _ symbol: String,
         help: String,
         active: Bool = false,
+        tint: Color? = nil,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        let color = tint ?? (active ? Color.accentColor : Color.secondary)
+        return Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(active ? Color.accentColor : Color.secondary)
-                .frame(width: 25, height: 24)
+                .foregroundStyle(color)
+                .frame(width: 22, height: 24)
                 .background(
-                    active ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.045),
+                    (active || tint != nil) ? color.opacity(0.13) : Color.primary.opacity(0.045),
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                 )
                 .overlay {
@@ -1794,18 +2133,12 @@ private struct ConnectionFooter: View {
                 Text("Usage: \(usage.totalPeakTokens / 1000)k tokens · \(Int((usage.contextPressure * 100).rounded()))% context")
             }
         } label: {
-            HStack(spacing: 7) {
-                ZStack(alignment: .bottomTrailing) {
-                    Image(systemName: "person.crop.circle.fill")
-                        .font(.system(size: 19))
-                        .foregroundStyle(.secondary)
-                    Circle()
-                        .fill(state.isConnected ? Color.green : Color.orange)
-                        .frame(width: 6, height: 6)
-                        .overlay(Circle().stroke(.background, lineWidth: 1.25))
-                }
-                Text("Kaisola · v\(Self.appVersion)")
-                    .font(.caption.weight(.semibold))
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(state.isConnected ? Color.green : Color.orange)
+                    .frame(width: 6, height: 6)
+                Text("v\(Self.appVersion)")
+                    .font(.system(size: 10.5, weight: .semibold))
                     .lineLimit(1)
             }
             .contentShape(Rectangle())

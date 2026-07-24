@@ -1,5 +1,41 @@
 import Foundation
 
+/// Subprocess output capture that cannot deadlock when several Mesh columns
+/// launch git concurrently. Anonymous pipe descriptors can be inherited by a
+/// sibling child, preventing EOF forever; private regular files have no such
+/// lifetime coupling and also absorb verbose failures without back-pressure.
+enum GitProcessCapture {
+    static func run(_ process: Process) throws -> (out: Data, err: Data) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kaisola-process-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let outputURL = directory.appendingPathComponent("stdout")
+        let errorURL = directory.appendingPathComponent("stderr")
+        guard FileManager.default.createFile(atPath: outputURL.path, contents: nil),
+              FileManager.default.createFile(atPath: errorURL.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        let output = try FileHandle(forWritingTo: outputURL)
+        let errors = try FileHandle(forWritingTo: errorURL)
+        defer {
+            try? output.close()
+            try? errors.close()
+        }
+        process.standardOutput = output
+        process.standardError = errors
+        try process.run()
+        process.waitUntilExit()
+        try? output.synchronize()
+        try? errors.synchronize()
+        return (
+            (try? Data(contentsOf: outputURL)) ?? Data(),
+            (try? Data(contentsOf: errorURL)) ?? Data()
+        )
+    }
+}
+
 /// A read-safe git status/stage/commit service over `git` as a child process.
 /// Mirrors the porcelain-v2 parsing validated by scripts/native-git-service.cjs
 /// (Codex). Never runs destructive commands (no reset --hard, clean, checkout,
@@ -206,18 +242,14 @@ struct GitService: Sendable {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = arguments
         process.currentDirectoryURL = repoRoot
-        let out = Pipe(); let err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        do { try process.run() } catch { throw GitError.commandFailed(error.localizedDescription) }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        let errData = err.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        let capture: (out: Data, err: Data)
+        do { capture = try GitProcessCapture.run(process) }
+        catch { throw GitError.commandFailed(error.localizedDescription) }
         if process.terminationStatus != 0 {
-            let message = String(data: errData, encoding: .utf8) ?? "git failed"
+            let message = String(data: capture.err, encoding: .utf8) ?? "git failed"
             if message.contains("not a git repository") { throw GitError.notARepository }
             throw GitError.commandFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        return String(data: data, encoding: .utf8) ?? ""
+        return String(data: capture.out, encoding: .utf8) ?? ""
     }
 }

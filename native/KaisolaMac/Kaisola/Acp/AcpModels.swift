@@ -25,7 +25,7 @@ enum AcpTurnItem: Equatable, Sendable, Identifiable {
     }
 }
 
-struct AcpToolCall: Equatable, Sendable, Identifiable {
+struct AcpToolCall: Codable, Equatable, Sendable, Identifiable {
     let id: String
     var title: String
     var kind: String
@@ -36,7 +36,7 @@ struct AcpToolCall: Equatable, Sendable, Identifiable {
     /// File paths the tool touched (ACP `locations`), for a compact affected-files line.
     var locations: [String] = []
 
-    enum Status: String, Equatable, Sendable {
+    enum Status: String, Codable, Equatable, Sendable {
         case pending
         case inProgress = "in_progress"
         case completed
@@ -47,7 +47,7 @@ struct AcpToolCall: Equatable, Sendable, Identifiable {
 /// A single artifact inside a tool call. Mirrors ACP `ToolCallContent`:
 /// a file diff, a generic text/output content block, or a reference to an
 /// agent-spawned terminal (rendered live from `AcpTerminalHost`).
-enum AcpToolContent: Equatable, Sendable, Identifiable {
+enum AcpToolContent: Codable, Equatable, Sendable, Identifiable {
     case diff(path: String, oldText: String?, newText: String)
     case text(String)
     case terminal(id: String)
@@ -61,7 +61,7 @@ enum AcpToolContent: Equatable, Sendable, Identifiable {
     }
 }
 
-struct AcpPlanEntry: Equatable, Sendable, Identifiable {
+struct AcpPlanEntry: Codable, Equatable, Sendable, Identifiable {
     let id: String
     let content: String
     let priority: String
@@ -146,6 +146,8 @@ struct AcpConfigOption: Equatable, Sendable, Identifiable {
 /// Capabilities the agent advertised at `initialize`.
 struct AcpAgentCapabilities: Equatable, Sendable {
     var loadSession = false
+    var resumeSession = false
+    var closeSession = false
     var promptQueueing = false
     var mcpHTTP = false
     var mcpSSE = false
