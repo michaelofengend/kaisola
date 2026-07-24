@@ -906,6 +906,7 @@ struct MarkdownEditingStyle: Sendable {
         case italic
         case inlineCode
         case link
+        case centered
         case syntax
     }
 
@@ -970,6 +971,11 @@ struct MarkdownEditingStyle: Sendable {
         collect(#"(?is)(<(?:em|i)\b[^>]*>)(.*?)(</(?:em|i)\s*>)"#, role: { _ in .italic }, contentGroup: 2, syntaxGroups: [1, 3])
         collect(#"(?is)(<code\b[^>]*>)(.*?)(</code\s*>)"#, role: { _ in .inlineCode }, contentGroup: 2, syntaxGroups: [1, 3])
         collect(#"(?is)(<a\b[^>]*>)(.*?)(</a\s*>)"#, role: { _ in .link }, contentGroup: 2, syntaxGroups: [1, 3])
+        collect(
+            #"(?is)(<(?:h[1-6]|p)\b[^>]*\balign\s*=\s*[\"']?center[\"']?[^>]*>)(.*?)(</(?:h[1-6]|p)\s*>)"#,
+            role: { _ in .centered },
+            contentGroup: 2
+        )
         collect(#"(?is)<[^>]+>"#, role: { _ in .syntax })
         collect(#"(?m)^(#{1,6})(?:[ \t]+)(.+)$"#, role: { match in
             .heading(min(6, match.range(at: 1).length))
@@ -1033,7 +1039,7 @@ private struct MarkdownRenderedEditor: NSViewRepresentable {
         )
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainerInset = NSSize(width: 28, height: 24)
+        textView.textContainerInset = NSSize(width: 18, height: 20)
         textView.backgroundColor = .textBackgroundColor
         textView.font = .systemFont(ofSize: 15)
         let paragraph = NSMutableParagraphStyle()
@@ -1214,6 +1220,7 @@ private struct MarkdownRenderedEditor: NSViewRepresentable {
                 .backgroundColor,
                 .underlineStyle,
                 .obliqueness,
+                .paragraphStyle,
             ] {
                 layoutManager.removeTemporaryAttribute(key, forCharacterRange: fullRange)
             }
@@ -1245,6 +1252,12 @@ private struct MarkdownRenderedEditor: NSViewRepresentable {
                 case .link:
                     layoutManager.addTemporaryAttribute(.foregroundColor, value: NSColor.linkColor, forCharacterRange: span.range)
                     layoutManager.addTemporaryAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, forCharacterRange: span.range)
+                case .centered:
+                    let paragraph = NSMutableParagraphStyle()
+                    paragraph.alignment = .center
+                    paragraph.lineSpacing = 3
+                    paragraph.paragraphSpacing = 5
+                    layoutManager.addTemporaryAttribute(.paragraphStyle, value: paragraph, forCharacterRange: span.range)
                 case .syntax:
                     // Default mode reads like a document: syntax occupies an
                     // effectively zero-width run while the source stays exact
@@ -1253,6 +1266,13 @@ private struct MarkdownRenderedEditor: NSViewRepresentable {
                     layoutManager.addTemporaryAttribute(.font, value: NSFont.systemFont(ofSize: 0.1), forCharacterRange: span.range)
                     layoutManager.addTemporaryAttribute(.foregroundColor, value: NSColor.clear, forCharacterRange: span.range)
                 }
+            }
+            // Temporary font attributes affect glyph metrics only after the
+            // layout pass is invalidated. Without this, invisible delimiters
+            // can still wrap visible text at narrow panel widths.
+            layoutManager.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
+            if let container = textView.textContainer {
+                layoutManager.ensureLayout(for: container)
             }
         }
     }

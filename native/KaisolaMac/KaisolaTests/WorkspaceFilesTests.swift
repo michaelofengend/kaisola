@@ -265,6 +265,7 @@ final class WorkspaceFilesTests: XCTestCase {
         XCTAssertTrue(spans.contains { $0.role == .heading(1) })
         XCTAssertTrue(spans.contains { $0.role == .bold })
         XCTAssertTrue(spans.contains { $0.role == .link })
+        XCTAssertTrue(spans.contains { $0.role == .centered })
         XCTAssertGreaterThanOrEqual(spans.filter { $0.role == .syntax }.count, 6)
         XCTAssertEqual(source, #"<h1 align="center">Kaisola</h1> <strong>One workspace.</strong> <a href="https://kaisola.com">Website</a>"#)
     }

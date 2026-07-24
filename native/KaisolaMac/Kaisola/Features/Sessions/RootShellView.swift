@@ -1576,8 +1576,8 @@ enum NativeDetailPaneSizing {
     }
 
     static let dividerWidth: CGFloat = 11
-    static let minimumContentWidth: CGFloat = 150
-    private static let compactPreviewFloor: CGFloat = 260
+    static let minimumContentWidth: CGFloat = 220
+    private static let compactPreviewFloor: CGFloat = 210
     private static let compactRailFloor: CGFloat = 150
 
     static func resolve(
@@ -1594,14 +1594,17 @@ enum NativeDetailPaneSizing {
         )
         var excess = max(0, preview + rail - panelBudget)
 
-        if preferredPreview != nil {
-            let reduction = min(excess, max(0, preview - compactPreviewFloor))
-            preview -= reduction
-            excess -= reduction
-        }
+        // Files is the utility rail, so it yields width before the active
+        // document. This keeps rendered Markdown legible while preserving a
+        // useful terminal minimum when all three surfaces are open.
         if preferredRail != nil {
             let reduction = min(excess, max(0, rail - compactRailFloor))
             rail -= reduction
+            excess -= reduction
+        }
+        if preferredPreview != nil {
+            let reduction = min(excess, max(0, preview - compactPreviewFloor))
+            preview -= reduction
             excess -= reduction
         }
         // An already-narrow split-view sidebar can leave less than the compact
