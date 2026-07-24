@@ -264,7 +264,14 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         Task { @MainActor in
             // Let SwiftUI settle, SwiftTerm receive real geometry, and the
             // lazy file tree finish its first background enumeration.
-            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            // WKWebView launches a separate content process on a cold hosted
+            // runner. Give that one visual surface enough time to reach its
+            // delegate-confirmed ready/error state; normal app launches do not
+            // pay this fixture-only delay.
+            let delay: UInt64 = visualSurface == "preview-html"
+                ? 4_000_000_000
+                : 1_800_000_000
+            try? await Task.sleep(nanoseconds: delay)
             window.displayIfNeeded()
             guard let view = window.contentView else {
                 print("KAISOLA_NATIVE_VISUAL_CAPTURE=FAIL no-content-view")

@@ -546,6 +546,12 @@ enum HTMLPreviewReadiness {
     }
 }
 
+private enum HTMLPreviewLoadState: Equatable {
+    case loading
+    case ready
+    case failed(String)
+}
+
 /// Renders a local `.html`/`.htm` file in an ephemeral WKWebView. Project-local
 /// assets work by default, while project JavaScript requires an explicit opt-in
 /// from the preview menu. Top-level navigation remains confined to the project.
@@ -560,6 +566,7 @@ struct HtmlFilePreview: View {
 
     @State private var reloadToken = 0
     @State private var allowsJavaScript = false
+    @State private var loadState: HTMLPreviewLoadState = .loading
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -568,9 +575,36 @@ struct HtmlFilePreview: View {
                 readAccessRoot: readAccessRoot,
                 allowsJavaScript: allowsJavaScript,
                 reloadToken: reloadToken &+ contentRevision,
-                zoom: zoom
+                zoom: zoom,
+                loadState: $loadState
             )
             .id("\(fileURL.path)|js:\(allowsJavaScript)")
+
+            if !HTMLPreviewReadiness.requiresJavaScriptPrompt(source) {
+                switch loadState {
+                case .loading:
+                    ProgressView("Rendering HTML…")
+                        .controlSize(.small)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(.regularMaterial, in: Capsule())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case let .failed(message):
+                    ContentUnavailableView {
+                        Label("Could not render HTML", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(message)
+                    } actions: {
+                        Button("Open in Browser") { NSWorkspace.shared.open(fileURL) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.regularMaterial)
+                case .ready:
+                    EmptyView()
+                }
+            }
 
             if !allowsJavaScript,
                HTMLPreviewReadiness.requiresJavaScriptPrompt(source) {
@@ -632,9 +666,10 @@ private struct ConfinedFileWebView: NSViewRepresentable {
     let allowsJavaScript: Bool
     let reloadToken: Int
     let zoom: CGFloat
+    @Binding var loadState: HTMLPreviewLoadState
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(loadState: $loadState)
     }
 
     func makeNSView(context: Context) -> WKWebView {
@@ -658,6 +693,7 @@ private struct ConfinedFileWebView: NSViewRepresentable {
         coordinator.directory = directory
         coordinator.loadedURL = fileURL
         coordinator.reloadToken = reloadToken
+        loadState = .loading
         webView.loadFileURL(fileURL, allowingReadAccessTo: directory)
         return webView
     }
@@ -672,11 +708,13 @@ private struct ConfinedFileWebView: NSViewRepresentable {
             let directory = effectiveReadAccessRoot
             coordinator.directory = directory
             coordinator.loadedURL = fileURL
+            loadState = .loading
             webView.loadFileURL(fileURL, allowingReadAccessTo: directory)
         }
         // Header reload button was pressed.
         if coordinator.reloadToken != reloadToken {
             coordinator.reloadToken = reloadToken
+            loadState = .loading
             webView.reload()
         }
     }
@@ -689,9 +727,52 @@ private struct ConfinedFileWebView: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
+        @Binding var loadState: HTMLPreviewLoadState
         var directory: URL?
         var loadedURL: URL?
         var reloadToken = 0
+
+        init(loadState: Binding<HTMLPreviewLoadState>) {
+            _loadState = loadState
+        }
+
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation?) {
+            loadState = .loading
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation?) {
+            loadState = .ready
+            if ProcessInfo.processInfo.environment["KAISOLA_NATIVE_VISUAL_FIXTURE"] == "1" {
+                print("KAISOLA_NATIVE_HTML_PREVIEW=ready")
+            }
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            didFailProvisionalNavigation navigation: WKNavigation?,
+            withError error: Error
+        ) {
+            fail(error)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation?, withError error: Error) {
+            fail(error)
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            fail(NSError(
+                domain: "Kaisola.HTMLPreview",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "The HTML renderer stopped unexpectedly."]
+            ))
+        }
+
+        private func fail(_ error: Error) {
+            loadState = .failed(error.localizedDescription)
+            if ProcessInfo.processInfo.environment["KAISOLA_NATIVE_VISUAL_FIXTURE"] == "1" {
+                print("KAISOLA_NATIVE_HTML_PREVIEW=failed \(error.localizedDescription)")
+            }
+        }
 
         // The closure attributes must match the optional requirement exactly
         // (`@MainActor @Sendable`); otherwise Swift treats this as an unrelated
