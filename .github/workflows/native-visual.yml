@@ -22,6 +22,12 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
+      - name: Resolve native app version
+        run: >-
+          node -e
+          "require('fs').appendFileSync(process.env.GITHUB_ENV,
+          'KAISOLA_VISUAL_VERSION=' + require('./package.json').version + '\\n')"
+
       - name: Build native visual fixture
         run: >-
           xcodebuild
@@ -30,6 +36,8 @@ jobs:
           -configuration Debug
           -destination 'platform=macOS'
           -derivedDataPath "$RUNNER_TEMP/kaisola-native-visual"
+          MARKETING_VERSION="$KAISOLA_VISUAL_VERSION"
+          CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER"
           CODE_SIGNING_ALLOWED=NO
           build
 
@@ -55,7 +63,7 @@ jobs:
           done
 
       - name: Upload native visual inspection set
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-visual-${{ github.sha }}
           path: ${{ runner.temp }}/kaisola-native-screenshots/*.png
