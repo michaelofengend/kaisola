@@ -36,13 +36,31 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
     private var runInTerminalObserver: NSObjectProtocol?
     private var checkForUpdatesObserver: NSObjectProtocol?
     private let runtimeSmoke = ProcessInfo.processInfo.environment["KAISOLA_NATIVE_RUNTIME_SMOKE"] == "1"
+    /// Hosted visual QA runs the real SwiftUI/AppKit window with deterministic
+    /// state, captures it from inside the process, and exits. It never connects
+    /// to a broker or takes over the user's local desktop.
+    private let visualFixture = ProcessInfo.processInfo.environment["KAISOLA_NATIVE_VISUAL_FIXTURE"] == "1"
+    private let visualSurface = ProcessInfo.processInfo.environment["KAISOLA_NATIVE_VISUAL_SURFACE"] ?? "terminal"
+    private let visualWorkspace = ProcessInfo.processInfo.environment["KAISOLA_NATIVE_VISUAL_WORKSPACE"]
+    private let visualCapturePath = ProcessInfo.processInfo.environment["KAISOLA_NATIVE_VISUAL_CAPTURE_PATH"]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Preview-owned state stays separate from every historical Electron
         // profile. Broker discovery is explicitly read-only and lives elsewhere.
         try? NativePreviewPaths.prepareApplicationSupport()
+        if visualFixture {
+            settings.navigationLayout = visualSurface == "topbar" ? .topBar : .leftTree
+            settings.appearance = .light
+            settings.sidebarAppearance = .glass
+            settings.workspaceBackdrop = .glass
+            settings.workspaceRailVisible = visualSurface != "topbar"
+            settings.workspaceRailWidth = 232
+            OnboardingState.markSeen()
+        }
         settings.applyAppearance()
-        NotificationBridge.shared.requestAuthorizationIfNeeded()
+        if !visualFixture {
+            NotificationBridge.shared.requestAuthorizationIfNeeded()
+        }
         installMainMenu()
         // Custom agents added/removed in Settings rebuild the static AppKit
         // menus (SwiftUI surfaces re-read the registry on their own).
@@ -88,12 +106,30 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
     @discardableResult
     private func makeWindow() -> NSWindow {
         let model = AppModel()
+        if visualFixture {
+            let workspace = URL(
+                fileURLWithPath: visualWorkspace ?? FileManager.default.currentDirectoryPath,
+                isDirectory: true
+            )
+            model.loadVisualFixture(workspace: workspace)
+            if visualSurface == "preview" {
+                let readme = workspace.appendingPathComponent("README.md", isDirectory: false)
+                if FileManager.default.fileExists(atPath: readme.path) {
+                    model.openFilePreview(readme)
+                }
+            }
+        }
         let content = RootShellView()
             .environmentObject(model)
             .environmentObject(settings)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1_080, height: 700),
+            contentRect: NSRect(
+                x: 0,
+                y: 0,
+                width: visualFixture ? 1_360 : 1_080,
+                height: visualFixture ? 860 : 700
+            ),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -120,10 +156,47 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
         // The release pipeline's real-bundle smoke loads AppKit, SwiftUI,
         // notifications, settings, and every linked framework, but deliberately
         // skips broker discovery so it cannot leave a CI helper behind.
-        if !runtimeSmoke {
+        if !runtimeSmoke && !visualFixture {
             Task { await model.reload() }
         }
+        if visualFixture, let visualCapturePath {
+            scheduleVisualCapture(of: window, path: visualCapturePath)
+        }
         return window
+    }
+
+    private func scheduleVisualCapture(of window: NSWindow, path: String) {
+        Task { @MainActor in
+            // Let SwiftUI settle, SwiftTerm receive real geometry, and the
+            // lazy file tree finish its first background enumeration.
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            window.displayIfNeeded()
+            guard let view = window.contentView,
+                  let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+                print("KAISOLA_NATIVE_VISUAL_CAPTURE=FAIL no-content-view")
+                NSApp.terminate(nil)
+                return
+            }
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            guard let data = bitmap.representation(using: .png, properties: [:]) else {
+                print("KAISOLA_NATIVE_VISUAL_CAPTURE=FAIL png-encoding")
+                NSApp.terminate(nil)
+                return
+            }
+            do {
+                let url = URL(fileURLWithPath: path, isDirectory: false)
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true,
+                    attributes: nil
+                )
+                try data.write(to: url, options: .atomic)
+                print("KAISOLA_NATIVE_VISUAL_CAPTURE=PASS \(url.path)")
+            } catch {
+                print("KAISOLA_NATIVE_VISUAL_CAPTURE=FAIL \(error.localizedDescription)")
+            }
+            NSApp.terminate(nil)
+        }
     }
 
     /// The AppModel for the frontmost window (menu-command target).

@@ -86,6 +86,34 @@ final class AppModelReconnectTests: XCTestCase {
         await fixture.model.disconnect()
     }
 
+    func testSelectionPublishesBeforeBlockedBrokerUnsubscribe() async throws {
+        let fixture = try Fixture(failingConnectAttempts: [])
+        defer { fixture.cleanUp() }
+        await fixture.model.reload()
+        await fixture.client.setUnsubscribeBlocked(true)
+
+        let switchTask = Task { await fixture.model.select(ReconnectBrokerClient.secondTerminalID) }
+        await waitUntil {
+            fixture.model.selectedSessionID == ReconnectBrokerClient.secondTerminalID
+                && fixture.model.terminalDocument.sessionID == ReconnectBrokerClient.secondTerminalID
+        }
+
+        // The new retained/loading surface is already visible even though the
+        // old broker subscription is deliberately unable to finish closing.
+        let subscriptionsWhileBlocked = await fixture.client.subscriptionIDs()
+        XCTAssertEqual(subscriptionsWhileBlocked, [ReconnectBrokerClient.firstTerminalID])
+
+        await fixture.client.setUnsubscribeBlocked(false)
+        await switchTask.value
+        XCTAssertEqual(fixture.model.terminalDocument.output, "world")
+        let completedSubscriptions = await fixture.client.subscriptionIDs()
+        XCTAssertEqual(completedSubscriptions, [
+            ReconnectBrokerClient.firstTerminalID,
+            ReconnectBrokerClient.secondTerminalID,
+        ])
+        await fixture.model.disconnect()
+    }
+
     private func waitUntil(
         iterations: Int = 500,
         condition: @escaping @MainActor () async -> Bool
@@ -116,6 +144,7 @@ private final class Fixture {
         model = AppModel(
             brokerPreparer: LocatedBrokerInfoPreparer(locator: FixedBrokerLocator(info: Self.brokerInfo)),
             client: client,
+            sessionStore: NativeSessionStore(fileURL: root.appendingPathComponent("native-sessions.json")),
             cursorStore: TerminalCursorStore(fileURL: root.appendingPathComponent("cursors.json")),
             reconnectBackoff: BrokerReconnectBackoff(
                 baseNanoseconds: 1,
@@ -151,9 +180,14 @@ private struct FixedBrokerLocator: BrokerInfoLocating {
 }
 
 private actor ReconnectBrokerClient: ObserveOnlyBrokerServing {
+    static let firstTerminalID = "terminal:codex-1"
+    static let secondTerminalID = "terminal:codex-2"
+
     private let failingConnectAttempts: Set<Int>
     private var connectCount = 0
     private var cursors: [TerminalCursor?] = []
+    private var subscribedTerminalIDs: [String] = []
+    private var unsubscribeBlocked = false
     private var disconnectHandler: (@Sendable (any Error) -> Void)?
 
     init(failingConnectAttempts: Set<Int>) {
@@ -204,17 +238,26 @@ private actor ReconnectBrokerClient: ObserveOnlyBrokerServing {
                 "protocol": .integer(Int64(BrokerWire.protocolVersion)),
                 "securityEpoch": .integer(Int64(BrokerWire.securityEpoch)),
             ]),
-            diagnostics: .array([.object([
-                "id": .string("terminal:codex-1"),
-                "owner": .string("instance|42|project.one"),
-                "pid": .integer(123),
-                "streamEpoch": .string("epoch"),
-                "endOffset": .integer(5),
-            ])]),
-            live: .array([.object([
-                "id": .string("terminal:codex-1"),
-                "pid": .integer(123),
-            ])]),
+            diagnostics: .array([
+                .object([
+                    "id": .string(Self.firstTerminalID),
+                    "owner": .string("instance|42|project.one"),
+                    "pid": .integer(123),
+                    "streamEpoch": .string("epoch"),
+                    "endOffset": .integer(5),
+                ]),
+                .object([
+                    "id": .string(Self.secondTerminalID),
+                    "owner": .string("instance|42|project.one"),
+                    "pid": .integer(124),
+                    "streamEpoch": .string("epoch-2"),
+                    "endOffset": .integer(5),
+                ]),
+            ]),
+            live: .array([
+                .object(["id": .string(Self.firstTerminalID), "pid": .integer(123)]),
+                .object(["id": .string(Self.secondTerminalID), "pid": .integer(124)]),
+            ]),
             expectedHello: expectedHello
         )
     }
@@ -225,11 +268,14 @@ private actor ReconnectBrokerClient: ObserveOnlyBrokerServing {
         cursor: TerminalCursor?
     ) async throws -> TerminalSubscriptionResult {
         cursors.append(cursor)
+        subscribedTerminalIDs.append(terminal.id)
         if let cursor { return .current(cursor) }
+        let output = terminal.id == Self.secondTerminalID ? "world" : "hello"
+        let epoch = terminal.id == Self.secondTerminalID ? "epoch-2" : "epoch"
         return .snapshot(
             try TerminalSnapshot(value: .object([
-                "streamEpoch": .string("epoch"),
-                "output": .string("hello"),
+                "streamEpoch": .string(epoch),
+                "output": .string(output),
                 "startOffset": .integer(0),
                 "endOffset": .integer(5),
             ])),
@@ -237,7 +283,9 @@ private actor ReconnectBrokerClient: ObserveOnlyBrokerServing {
         )
     }
 
-    func unsubscribe(from terminal: BrokerTerminalRecord, ownerID: String) async throws {}
+    func unsubscribe(from terminal: BrokerTerminalRecord, ownerID: String) async throws {
+        while unsubscribeBlocked { await Task.yield() }
+    }
     func disconnect() async {}
 
     func simulateDisconnect() {
@@ -246,4 +294,6 @@ private actor ReconnectBrokerClient: ObserveOnlyBrokerServing {
 
     func connectionAttempts() -> Int { connectCount }
     func subscriptionCursors() -> [TerminalCursor?] { cursors }
+    func subscriptionIDs() -> [String] { subscribedTerminalIDs }
+    func setUnsubscribeBlocked(_ blocked: Bool) { unsubscribeBlocked = blocked }
 }

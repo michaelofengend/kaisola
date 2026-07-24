@@ -67,7 +67,17 @@ final class AppModel: ObservableObject {
     @Published private(set) var selectedProjectID: String?
     /// A file opened from the workspace rail / palette; non-nil replaces the
     /// detail pane with the preview/editor until closed.
-    @Published var previewedFileURL: URL?
+    @Published var previewedFileURL: URL? {
+        didSet {
+            if let previewedFileURL {
+                lastPreviewedFileURL = previewedFileURL
+            }
+        }
+    }
+    /// The last file opened in the native preview. Keeping this separate from
+    /// `previewedFileURL` lets the bottom shelf hide/show the preview without
+    /// throwing away the user's place in the file tree.
+    @Published private(set) var lastPreviewedFileURL: URL?
     /// Line target for the previewed file (from a terminal :LINE citation);
     /// retained for a future editor scroll.
     @Published var previewedFileLine: Int?
@@ -259,8 +269,6 @@ final class AppModel: ObservableObject {
         } == project.id
         guard !selectedChatBelongsHere, !selectedMeshBelongsHere, !selectedTerminalBelongsHere else { return }
 
-        selectedChatID = nil
-        selectedMeshID = nil
         if let terminal = project.sessions.first(where: { !$0.exited }) ?? project.sessions.first {
             Task { await select(terminal.id) }
         } else if let chat = chats(in: project.id).first {
@@ -286,6 +294,42 @@ final class AppModel: ObservableObject {
     func setProjectColor(id: String, colorHex: String?) {
         sessionStore.setProjectColor(id: id, colorHex: colorHex)
         refreshPersistedNavigationState()
+    }
+
+    func openFilePreview(_ url: URL, line: Int? = nil) {
+        previewedFileLine = line
+        previewedFileURL = url
+        browserCardURL = nil
+    }
+
+    func closeFilePreview() {
+        previewedFileURL = nil
+        previewedFileLine = nil
+    }
+
+    /// Returns whether a prior file could be restored. The caller opens the
+    /// Files rail when there is no prior selection, making the control useful
+    /// from a completely fresh workspace too.
+    @discardableResult
+    func toggleFilePreview() -> Bool {
+        if previewedFileURL != nil {
+            closeFilePreview()
+            return true
+        }
+        guard let lastPreviewedFileURL,
+              FileManager.default.fileExists(atPath: lastPreviewedFileURL.path),
+              let root = currentProjectDirectory,
+              Self.isWithinWorkspace(lastPreviewedFileURL, workspace: root) else {
+            return false
+        }
+        openFilePreview(lastPreviewedFileURL)
+        return true
+    }
+
+    private static func isWithinWorkspace(_ url: URL, workspace: URL) -> Bool {
+        let root = workspace.standardizedFileURL.resolvingSymlinksInPath().path
+        let candidate = url.standardizedFileURL.resolvingSymlinksInPath().path
+        return candidate == root || candidate.hasPrefix(root + "/")
     }
 
     func moveProject(id: String, delta: Int) {
@@ -561,10 +605,91 @@ final class AppModel: ObservableObject {
         if chats.contains(where: { $0.id == targetID }) {
             selectChat(targetID)
         } else {
-            selectChat(nil)
-            selectedSessionID = targetID
             Task { await select(targetID) }
         }
+    }
+
+    /// Deterministic, broker-free state for the hosted visual-inspection job.
+    /// It is reachable only through the explicit app launch environment used
+    /// by `.github/workflows/native-visual.yml`; normal app launches never call
+    /// it and still derive every session from the real broker.
+    func loadVisualFixture(workspace: URL) {
+        let root = workspace.standardizedFileURL
+        let project = sessionStore.openProject(directory: root.path)
+        sessionStore.setProjectColor(id: project.id, colorHex: "7C5CFC")
+        let secondaryURL = root.appendingPathComponent("native/KaisolaMac", isDirectory: true)
+        if FileManager.default.fileExists(atPath: secondaryURL.path) {
+            let secondary = sessionStore.openProject(directory: secondaryURL.path)
+            sessionStore.setProjectColor(id: secondary.id, colorHex: "4BA3C7")
+        }
+
+        let now = Int64(Date().timeIntervalSince1970 * 1_000)
+        let fixtures = [
+            NativeOwnedSession(
+                id: "visual-terminal",
+                projectID: project.id,
+                cwd: root.path,
+                title: root.lastPathComponent,
+                createdAt: now
+            ),
+            NativeOwnedSession(
+                id: "visual-codex",
+                projectID: project.id,
+                cwd: root.path,
+                title: "Codex · \(root.lastPathComponent)",
+                createdAt: now + 1,
+                agentID: "codex"
+            ),
+        ]
+        fixtures.forEach(sessionStore.upsert)
+        refreshPersistedNavigationState(publish: false)
+
+        sessions = [
+            BrokerTerminalRecord(
+                id: fixtures[0].id,
+                projectID: project.id,
+                pid: 4_201,
+                exited: false,
+                streamEpoch: "visual-shell",
+                endOffset: 0,
+                agentActivity: .idle
+            ),
+            BrokerTerminalRecord(
+                id: fixtures[1].id,
+                projectID: project.id,
+                pid: 4_202,
+                exited: false,
+                streamEpoch: "visual-codex",
+                endOffset: 0,
+                agentActivity: .working
+            ),
+        ]
+        ownedTerminalIDs = Set(fixtures.map(\.id))
+        controlAvailable = true
+        connectionState = .connected(version: "visual fixture", pid: 4_200, serverEnforcedObserver: true)
+        selectedProjectID = project.id
+        selectedProjectName = project.name
+        selectedSession = sessions[0]
+        selectedSessionID = sessions[0].id
+
+        let output = """
+        Last login: Thu Jul 23 17:42:08 on ttys001
+        michael@kaisola Kaisola % git status --short
+         M native/KaisolaMac/Kaisola/Features/Sessions/RootShellView.swift
+        michael@kaisola Kaisola %
+        """
+        let byteCount = Int64(output.utf8.count)
+        let document = TerminalDocument(
+            sessionID: sessions[0].id,
+            output: output,
+            cursor: TerminalCursor(streamEpoch: "visual-shell", offset: byteCount),
+            truncated: false,
+            exited: false,
+            errorMessage: nil
+        )
+        terminalDocument = document
+        terminalSurfaceDocuments = [sessions[0].id: document]
+        terminalSurfaceOrder = [sessions[0].id]
     }
 
     func reload() async {
@@ -610,44 +735,59 @@ final class AppModel: ObservableObject {
         // boundary. Streaming output continues to publish only through
         // `terminalDocument`; copying every packet into the retained deck
         // causes needless whole-shell invalidations.
-        if let currentSessionID = terminalDocument.sessionID {
-            terminalSurfaceDocuments[currentSessionID] = terminalDocument
+        let previousSession = selectedSession
+        let previousDocument = terminalDocument
+        if let currentSessionID = previousDocument.sessionID {
+            terminalSurfaceDocuments[currentSessionID] = previousDocument
         }
-        guard let id, let next = sessions.first(where: { $0.id == id }) else {
-            await persistCurrentCursor()
-            guard selectionGeneration == terminalSelectionGeneration else { return }
-            if let current = selectedSession, connectionState.isConnected {
-                try? await client.unsubscribe(from: current, ownerID: observerOwnerID)
+
+        let next = id.flatMap { requested in sessions.first(where: { $0.id == requested }) }
+
+        // Publish the complete visible selection before the first suspension.
+        // Cursor persistence and broker unsubscribe can take hundreds of
+        // milliseconds; waiting for them here made the old terminal briefly
+        // reappear whenever a chat/Mesh/CLI tab was selected.
+        if let next {
+            let retainedDocument = terminalSurfaceDocuments[next.id]
+                ?? (previousDocument.sessionID == next.id
+                    ? previousDocument
+                    : .loading(sessionID: next.id))
+            selectedSession = next
+            selectedSessionID = next.id
+            if let project = projects.first(where: { $0.id == next.projectID }) {
+                selectedProjectID = project.id
+                selectedProjectName = project.name
             }
-            guard selectionGeneration == terminalSelectionGeneration else { return }
+            selectedChatID = nil
+            selectedMeshID = nil
+            browserCardURL = nil
+            sessionStore.recordSelectedSession(next.id)
+            AttentionCenter.shared.clear(targetID: next.id)
+            publishPrimaryDocument(retainedDocument, touch: true)
+        } else {
             selectedSession = nil
             selectedSessionID = nil
+            selectedChatID = nil
+            selectedMeshID = nil
+            browserCardURL = nil
             terminalDocument = .empty
-            return
         }
 
-        if let current = selectedSession, current.id != next.id {
-            await persistCurrentCursor()
-            guard selectionGeneration == terminalSelectionGeneration else { return }
-            if connectionState.isConnected {
-                try? await client.unsubscribe(from: current, ownerID: observerOwnerID)
-            }
+        cursorSaveTask?.cancel()
+        cursorSaveTask = nil
+        await persist(previousDocument, for: previousSession)
+        guard selectionGeneration == terminalSelectionGeneration else { return }
+
+        if let previousSession,
+           previousSession.id != next?.id,
+           connectionState.isConnected {
+            try? await client.unsubscribe(from: previousSession, ownerID: observerOwnerID)
             guard selectionGeneration == terminalSelectionGeneration else { return }
         }
 
+        guard let next else { return }
         let retainedDocument = terminalSurfaceDocuments[next.id]
-            ?? (terminalDocument.sessionID == next.id ? terminalDocument : .loading(sessionID: next.id))
-        selectedSession = next
-        selectedSessionID = next.id
-        if let project = projects.first(where: { $0.id == next.projectID }) {
-            selectedProjectID = project.id
-            selectedProjectName = project.name
-        }
-        selectedChatID = nil
-        selectedMeshID = nil
-        sessionStore.recordSelectedSession(next.id)
-        AttentionCenter.shared.clear(targetID: next.id)
-        publishPrimaryDocument(retainedDocument, touch: true)
+            ?? .loading(sessionID: next.id)
         guard connectionState.isConnected else {
             return
         }
@@ -1483,10 +1623,14 @@ final class AppModel: ObservableObject {
     private func persistCurrentCursor() async {
         cursorSaveTask?.cancel()
         cursorSaveTask = nil
-        guard let session = selectedSession,
+        await persist(terminalDocument, for: selectedSession)
+    }
+
+    private func persist(_ document: TerminalDocument, for session: BrokerTerminalRecord?) async {
+        guard let session,
               let scope = cursorScope(for: session),
-              terminalDocument.sessionID == session.id,
-              let cursor = terminalDocument.cursor else { return }
+              document.sessionID == session.id,
+              let cursor = document.cursor else { return }
         try? await cursorStore.save(cursor, for: scope)
     }
 

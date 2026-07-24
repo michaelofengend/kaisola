@@ -6,12 +6,9 @@ import UniformTypeIdentifiers
 /// of floating in a global bucket. Clicking a tab makes it the active project;
 /// **dragging** a tab with
 /// the pointer reorders it live (the reorder-on-hover pattern), replacing the
-/// former Move Left / Move Right menu items.
-///
-/// A drop-in replacement for the former `ProjectTabStrip`: identical inputs
-/// (plus `reorder`) and byte-for-byte identical chip visuals — tint dot,
-/// working-count badge, selected capsule, and "+" button all keep
-/// the same fonts, paddings, and 40 pt strip height.
+/// former Move Left / Move Right menu items. Tabs use a softly bordered,
+/// continuous-corner treatment shared with session/file surfaces rather than
+/// floating text chips.
 struct ProjectTabStripView: View {
     let projects: [AppModel.ProjectGroup]
     @Binding var selected: String?
@@ -53,7 +50,14 @@ struct ProjectTabStripView: View {
                     )
                 }
                 Button(action: openFolder) {
-                    Image(systemName: "plus").font(.caption)
+                    Image(systemName: "plus")
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 27, height: 27)
+                        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .stroke(Color.primary.opacity(0.08), lineWidth: 0.8)
+                        }
                 }
                 .buttonStyle(.plain)
                 .help("Open a folder as a project (⌘O)")
@@ -65,9 +69,7 @@ struct ProjectTabStripView: View {
         .frame(height: 40)
     }
 
-    /// The chip contents — a pixel-for-pixel copy of the former `ProjectTabStrip`
-    /// button label. Kept separate only so the enclosing `Button` can carry the
-    /// drag and drop modifiers.
+    /// Kept separate so the enclosing `Button` can carry drag/drop modifiers.
     @ViewBuilder
     private func chipLabel(_ project: AppModel.ProjectGroup) -> some View {
         HStack(spacing: 5) {
@@ -85,11 +87,21 @@ struct ProjectTabStripView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 5)
-        .background(
-            selected == project.id ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.clear),
-            in: Capsule()
-        )
+        .padding(.vertical, 6)
+        .background {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(selected == project.id ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.035))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(
+                            selected == project.id
+                                ? Color.accentColor.opacity(0.30)
+                                : Color.primary.opacity(0.075),
+                            lineWidth: 0.8
+                        )
+                }
+                .shadow(color: .black.opacity(selected == project.id ? 0.06 : 0.025), radius: 2, y: 1)
+        }
     }
 }
 

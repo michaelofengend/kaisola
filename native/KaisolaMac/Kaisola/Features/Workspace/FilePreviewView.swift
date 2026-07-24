@@ -652,10 +652,15 @@ struct WorkspaceRailView: View {
             HStack(spacing: 7) {
                 Image(systemName: "folder.fill")
                     .foregroundStyle(Color.accentColor)
-                Text(root.lastPathComponent)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Files")
+                        .font(.caption.weight(.semibold))
+                    Text(root.lastPathComponent)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 Spacer(minLength: 4)
                 Button(action: refresh) { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.borderless)
@@ -665,8 +670,16 @@ struct WorkspaceRailView: View {
                     .help("Close Files (Command-B)")
                     .accessibilityLabel("Close file browser")
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 9)
             .frame(height: 32)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(Color.primary.opacity(0.09), lineWidth: 0.8)
+            }
+            .padding(.horizontal, 7)
+            .padding(.top, 7)
+            .padding(.bottom, 5)
 
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
@@ -677,7 +690,7 @@ struct WorkspaceRailView: View {
             }
             .padding(.horizontal, 8)
             .frame(height: 27)
-            .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 7))
+            .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             .padding(.horizontal, 8)
             .padding(.bottom, 7)
 

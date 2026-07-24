@@ -1,0 +1,63 @@
+name: native-visual
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/native-visual.yml'
+      - 'native/KaisolaMac/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-visual-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Build native visual fixture
+        run: >-
+          xcodebuild
+          -project native/KaisolaMac/KaisolaMac.xcodeproj
+          -scheme KaisolaMacPreview
+          -configuration Debug
+          -destination 'platform=macOS'
+          -derivedDataPath "$RUNNER_TEMP/kaisola-native-visual"
+          CODE_SIGNING_ALLOWED=NO
+          build
+
+      - name: Capture terminal, preview, and top-tab states
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/kaisola-native-visual/Build/Products/Debug/KaisolaMacPreview.app"
+          binary="$app/Contents/MacOS/KaisolaMacPreview"
+          output="$RUNNER_TEMP/kaisola-native-screenshots"
+          mkdir -p "$output"
+
+          for surface in terminal preview topbar; do
+            capture="$output/$surface.png"
+            env \
+              KAISOLA_NATIVE_VISUAL_FIXTURE=1 \
+              KAISOLA_NATIVE_VISUAL_SURFACE="$surface" \
+              KAISOLA_NATIVE_VISUAL_WORKSPACE="$GITHUB_WORKSPACE" \
+              KAISOLA_NATIVE_VISUAL_CAPTURE_PATH="$capture" \
+              "$binary"
+            test -s "$capture"
+            sips -g pixelWidth -g pixelHeight "$capture"
+          done
+
+      - name: Upload native visual inspection set
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-visual-${{ github.sha }}
+          path: ${{ runner.temp }}/kaisola-native-screenshots/*.png
+          if-no-files-found: error
+          retention-days: 14
