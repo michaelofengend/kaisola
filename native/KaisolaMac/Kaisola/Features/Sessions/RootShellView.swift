@@ -32,23 +32,6 @@ struct RootShellView: View {
         }
     }
 
-    private var sidebarSelection: Binding<String?> {
-        Binding(
-            get: { model.selectedChatID ?? model.selectedMeshID ?? model.selectedSessionID },
-            set: { id in
-                if let id, id.hasPrefix("chat-") { model.selectChat(id) }
-                else if let id, id.hasPrefix("mesh-") { model.selectMesh(id) }
-                else if id != model.selectedSessionID
-                    || model.selectedChatID != nil
-                    || model.selectedMeshID != nil
-                    || model.browserCardURL != nil
-                    || model.previewedFileURL != nil {
-                    Task { await model.select(id) }
-                }
-            }
-        )
-    }
-
     var body: some View {
         chromeDecorated
             .onReceive(NotificationCenter.default.publisher(for: .kaisolaOpenFileLink)) { note in
@@ -216,7 +199,10 @@ struct RootShellView: View {
     /// Nested project→session tree in a left sidebar (the default).
     private var leftTreeLayout: some View {
         NavigationSplitView {
-            List(selection: sidebarSelection) {
+            // A selection-bound macOS sidebar paints a full-width blue block.
+            // Navigation is explicit here so visible surfaces are communicated
+            // by their blue icons instead of a heavy row treatment.
+            List {
                 ForEach(model.projects) { project in
                     let chats = model.chats(in: project.id)
                     let meshes = model.meshes(in: project.id)
@@ -224,8 +210,15 @@ struct RootShellView: View {
                         if !chats.isEmpty {
                             ProjectSurfaceHeader(title: "Chats", systemImage: "bubble.left.and.text.bubble.right")
                             ForEach(chats) { chat in
-                                ChatRow(chat: chat)
-                                    .tag(Optional(chat.id))
+                                Button {
+                                    model.selectChat(chat.id)
+                                } label: {
+                                    ChatRow(chat: chat)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())
+                                }
+                                    .buttonStyle(.plain)
+                                    .accessibilityAddTraits(model.selectedChatID == chat.id ? .isSelected : [])
                                     .listRowInsets(.init(top: 1, leading: 20, bottom: 1, trailing: 7))
                                     .contextMenu {
                                         Button("Close Chat", role: .destructive) { model.closeChat(chat.id) }
@@ -235,8 +228,15 @@ struct RootShellView: View {
                         if !meshes.isEmpty {
                             ProjectSurfaceHeader(title: "Mesh", systemImage: "circle.hexagongrid.fill")
                             ForEach(meshes) { mesh in
-                                MeshRow(mesh: mesh)
-                                    .tag(Optional(mesh.id))
+                                Button {
+                                    model.selectMesh(mesh.id)
+                                } label: {
+                                    MeshRow(mesh: mesh)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())
+                                }
+                                    .buttonStyle(.plain)
+                                    .accessibilityAddTraits(model.selectedMeshID == mesh.id ? .isSelected : [])
                                     .listRowInsets(.init(top: 1, leading: 20, bottom: 1, trailing: 7))
                                     .contextMenu {
                                         Button("Close Mesh", role: .destructive) { requestCloseMesh(mesh) }
@@ -515,9 +515,15 @@ struct RootShellView: View {
                 } else {
                     Task { await model.openInSplit(session.id) }
                 }
+            },
+            select: {
+                guard session.id != model.selectedSessionID
+                    || model.selectedChatID != nil
+                    || model.selectedMeshID != nil
+                    || model.browserCardURL != nil else { return }
+                Task { await model.select(session.id) }
             }
         )
-        .tag(Optional(session.id))
         .listRowInsets(.init(top: 1, leading: 20, bottom: 1, trailing: 7))
         .contextMenu {
             Button("Open in New Window") {
@@ -851,65 +857,88 @@ struct RootShellView: View {
     private func terminalPane(_ id: String) -> some View {
         let isPrimary = id == model.terminalDocument.sessionID
         return VStack(spacing: 0) {
-            if paneIDs.count > 1 {
-                HStack(spacing: 7) {
-                    Image(systemName: model.agentProfile(for: id)?.symbol ?? "terminal")
-                        .foregroundStyle(Color.accentColor)
-                    Text(model.sessionTitle(for: id))
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                    if model.isOwned(id) {
-                        Text("LIVE")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.green)
-                    } else {
-                        Text("VIEW")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 4)
+            HStack(spacing: 7) {
+                Image(systemName: model.agentProfile(for: id)?.symbol ?? "terminal")
+                    .foregroundStyle(Color.accentColor)
+                Text(model.sessionTitle(for: id))
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                if model.isOwned(id) {
+                    Text("LIVE")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.green)
+                } else {
+                    Text("VIEW")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                Button {
+                    minimizeTerminalPane(id)
+                } label: {
+                    Image(systemName: "minus")
+                }
+                .buttonStyle(.borderless)
+                .help("Minimize this pane; keep the session running")
+                .accessibilityLabel("Minimize \(model.sessionTitle(for: id)) pane")
+                Button {
+                    KaisolaMacAppDelegate.popOut(sessionID: id)
+                } label: {
+                    Image(systemName: "macwindow.badge.plus")
+                }
+                .buttonStyle(.borderless)
+                .help("Open this session in a new window")
+                if !isPrimary {
                     Button {
-                        KaisolaMacAppDelegate.popOut(sessionID: id)
+                        Task { await model.promoteSplit(id) }
                     } label: {
-                        Image(systemName: "macwindow.badge.plus")
+                        Image(systemName: "arrow.up.left")
                     }
                     .buttonStyle(.borderless)
-                    .help("Open this session in a new window")
-                    if !isPrimary {
-                        Button {
-                            Task { await model.promoteSplit(id) }
-                        } label: {
-                            Image(systemName: "arrow.up.left")
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Make this the primary session")
-                        Button {
-                            Task { await model.closeSplit(id) }
-                        } label: {
-                            Image(systemName: "xmark")
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Close pane; keep the session running")
-                        .accessibilityLabel("Close \(model.sessionTitle(for: id)) pane")
-                    }
+                    .help("Make this the primary session")
                 }
-                .padding(.horizontal, 9)
-                .frame(height: 28)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .stroke(Color.primary.opacity(0.09), lineWidth: 0.8)
-                }
-                .padding(.horizontal, 7)
-                .padding(.vertical, 5)
             }
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background(.thinMaterial)
+            Divider().opacity(0.7)
             if isPrimary {
                 primaryPane
             } else {
                 splitPane(id)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 0.8)
+        }
+        .padding(6)
         .frame(minWidth: 240, idealWidth: 480, maxWidth: .infinity, minHeight: 160, maxHeight: .infinity)
+    }
+
+    /// Minimizing is purely a view operation: the broker-backed session keeps
+    /// running. A minimized primary yields to the first visible split, or to
+    /// the project's empty canvas when it was the only pane.
+    private func minimizeTerminalPane(_ id: String) {
+        Task {
+            switch TerminalPaneGrid.minimizeAction(
+                targetID: id,
+                primaryID: model.terminalDocument.sessionID,
+                splitOrder: model.splitOrder
+            ) {
+            case .closeSplit(let splitID):
+                await model.closeSplit(splitID)
+            case .promote(let splitID):
+                await model.promoteSplit(splitID)
+            case .clearPrimary:
+                await model.select(nil)
+            case .none:
+                break
+            }
+        }
     }
 
     private var primaryPane: some View {
@@ -1027,6 +1056,24 @@ enum TerminalPaneGrid {
             Array(ids[midpoint...]),
         ]
     }
+
+    static func minimizeAction(
+        targetID: String,
+        primaryID: String?,
+        splitOrder: [String]
+    ) -> TerminalPaneMinimizeAction {
+        if splitOrder.contains(targetID) { return .closeSplit(targetID) }
+        guard targetID == primaryID else { return .none }
+        if let replacement = splitOrder.first { return .promote(replacement) }
+        return .clearPrimary
+    }
+}
+
+enum TerminalPaneMinimizeAction: Equatable {
+    case closeSplit(String)
+    case promote(String)
+    case clearPrimary
+    case none
 }
 
 /// Every live surface for the active project, in the top-bar layout. Chats and
@@ -1291,36 +1338,43 @@ private struct SessionRow: View {
     let canOpenSplit: Bool
     let isOpenInSplit: Bool
     let toggleSplit: () -> Void
+    let select: () -> Void
 
     var body: some View {
         HStack(spacing: 9) {
-            HStack(spacing: 9) {
-                ZStack(alignment: .bottomTrailing) {
-                    Image(systemName: rowSymbol)
-                        .foregroundStyle(iconColor)
-                    if case .working = session.agentActivity, !session.exited {
-                        ProgressView()
-                            .controlSize(.mini)
-                            .scaleEffect(0.6)
-                            .offset(x: 4, y: 4)
+            Button(action: select) {
+                HStack(spacing: 9) {
+                    ZStack(alignment: .bottomTrailing) {
+                        Image(systemName: rowSymbol)
+                            .foregroundStyle(iconColor)
+                        if case .working = session.agentActivity, !session.exited {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .scaleEffect(0.6)
+                                .offset(x: 4, y: 4)
+                        }
                     }
+                    .frame(width: 22, height: 22)
+                    .background(
+                        isVisible ? Color.accentColor.opacity(0.13) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    )
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .lineLimit(1)
+                        Text(sessionDetail)
+                            .font(.caption)
+                            .foregroundStyle(statusColor)
+                    }
+                    Spacer(minLength: 4)
                 }
-                .frame(width: 22, height: 22)
-                .background(
-                    isVisible ? Color.accentColor.opacity(0.13) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                )
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .lineLimit(1)
-                    Text(sessionDetail)
-                        .font(.caption)
-                        .foregroundStyle(statusColor)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .accessibilityElement(children: .combine)
             .accessibilityValue(sessionDetail)
-            Spacer(minLength: 4)
+            .accessibilityAddTraits(isVisible ? .isSelected : [])
             if canOpenSplit || isOpenInSplit {
                 Button(action: toggleSplit) {
                     Image(systemName: isOpenInSplit ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")

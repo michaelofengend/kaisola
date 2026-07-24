@@ -111,7 +111,10 @@ final class KaisolaMacAppDelegate: NSObject, NSApplicationDelegate, NSWindowDele
                 fileURLWithPath: visualWorkspace ?? FileManager.default.currentDirectoryPath,
                 isDirectory: true
             )
-            model.loadVisualFixture(workspace: workspace)
+            model.loadVisualFixture(
+                workspace: workspace,
+                includeSplit: visualSurface == "terminal"
+            )
             if visualSurface == "preview" {
                 let readme = workspace.appendingPathComponent("README.md", isDirectory: false)
                 if FileManager.default.fileExists(atPath: readme.path) {

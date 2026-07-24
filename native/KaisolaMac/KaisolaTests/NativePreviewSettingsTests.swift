@@ -61,6 +61,25 @@ final class NativePreviewSettingsTests: XCTestCase {
         XCTAssertEqual(TerminalPaneGrid.columns(for: ["a", "b", "c", "d"]), [["a", "b"], ["c", "d"]])
     }
 
+    func testTerminalPaneMinimizeKeepsSessionsRunningAndChoosesAVisibleReplacement() {
+        XCTAssertEqual(
+            TerminalPaneGrid.minimizeAction(targetID: "b", primaryID: "a", splitOrder: ["b", "c"]),
+            .closeSplit("b")
+        )
+        XCTAssertEqual(
+            TerminalPaneGrid.minimizeAction(targetID: "a", primaryID: "a", splitOrder: ["b", "c"]),
+            .promote("b")
+        )
+        XCTAssertEqual(
+            TerminalPaneGrid.minimizeAction(targetID: "a", primaryID: "a", splitOrder: []),
+            .clearPrimary
+        )
+        XCTAssertEqual(
+            TerminalPaneGrid.minimizeAction(targetID: "missing", primaryID: "a", splitOrder: ["b"]),
+            .none
+        )
+    }
+
     func testAppearanceMapsToColorSchemeAndNSAppearance() {
         XCTAssertNil(AppearanceMode.system.colorScheme)
         XCTAssertEqual(AppearanceMode.light.colorScheme, .light)

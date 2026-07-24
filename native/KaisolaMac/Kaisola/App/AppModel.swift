@@ -616,7 +616,7 @@ final class AppModel: ObservableObject {
     /// It is reachable only through the explicit app launch environment used
     /// by `.github/workflows/native-visual.yml`; normal app launches never call
     /// it and still derive every session from the real broker.
-    func loadVisualFixture(workspace: URL) {
+    func loadVisualFixture(workspace: URL, includeSplit: Bool = false) {
         let root = workspace.standardizedFileURL
         let project = sessionStore.openProject(directory: root.path)
         sessionStore.setProjectColor(id: project.id, colorHex: "7C5CFC")
@@ -693,6 +693,29 @@ final class AppModel: ObservableObject {
         terminalDocument = document
         terminalSurfaceDocuments = [sessions[0].id: document]
         terminalSurfaceOrder = [sessions[0].id]
+        splitDocuments.removeAll()
+        splitOrder.removeAll()
+
+        if includeSplit {
+            let splitOutput = [
+                "Last login: Thu Jul 23 17:42:10 on ttys002",
+                "michael@kaisola Kaisola % npm test",
+                "422 tests passed",
+                "michael@kaisola Kaisola % ",
+            ].joined(separator: "\r\n")
+            splitDocuments[sessions[1].id] = TerminalDocument(
+                sessionID: sessions[1].id,
+                output: splitOutput,
+                cursor: TerminalCursor(
+                    streamEpoch: "visual-codex",
+                    offset: Int64(splitOutput.utf8.count)
+                ),
+                truncated: false,
+                exited: false,
+                errorMessage: nil
+            )
+            splitOrder = [sessions[1].id]
+        }
     }
 
     func loadVisualMeshFixture(workspace: URL) {
