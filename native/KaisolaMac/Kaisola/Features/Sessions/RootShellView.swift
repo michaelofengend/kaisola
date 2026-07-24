@@ -934,12 +934,17 @@ struct RootShellView: View {
             }
         }
         .padding(3)
-        .background(.ultraThinMaterial, in: Capsule())
+        .background {
+            if isHovered {
+                Capsule().fill(.ultraThinMaterial)
+            }
+        }
         .overlay {
             Capsule()
                 .stroke(Color(nsColor: .separatorColor).opacity(0.38), lineWidth: 0.5)
+                .opacity(isHovered ? 1 : 0)
         }
-        .opacity(isHovered ? 1 : 0.58)
+        .opacity(isHovered ? 1 : 0.46)
         .padding(8)
         .animation(.easeOut(duration: 0.12), value: isHovered)
     }
